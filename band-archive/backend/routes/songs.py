@@ -148,6 +148,13 @@ def delete_song(id):
     return jsonify({"message": "Song deleted"}), 200
 
 
+import re
+
+def _safe_filename(filename):
+    # Preserve Korean characters, letters, numbers, dots, underscores, and hyphens.
+    # Replace other characters with underscore.
+    return re.sub(r'[^a-zA-Z0-9가-힣._-]', '_', filename)
+
 @songs_bp.route('/songs/<int:id>/upload', methods=['POST'])
 def upload_sheet_music(id):
     song = _get_song_or_404(id)
@@ -162,7 +169,8 @@ def upload_sheet_music(id):
     if not allowed_file(file.filename):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    filename = secure_filename(file.filename)
+    # Use _safe_filename to preserve Korean characters
+    filename = _safe_filename(file.filename)
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     filename = f"{id}_{timestamp}_{filename}"
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
@@ -201,7 +209,8 @@ def add_media(id):
     if not allowed_file(file.filename):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    filename = secure_filename(file.filename)
+    # Use _safe_filename to preserve Korean characters
+    filename = _safe_filename(file.filename)
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
     filename = f"{id}_{timestamp}_{filename}"
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
