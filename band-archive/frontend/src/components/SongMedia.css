@@ -89,6 +89,13 @@
   border: 1px dashed var(--border-color);
 }
 
+.upload-instruction {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-top: 10px;
+  font-style: italic;
+}
+
 .media-info {
     flex: 1;
     display: flex;
