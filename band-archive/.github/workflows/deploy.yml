@@ -43,8 +43,7 @@ jobs:
         run: npm run build
         env:
           GITHUB_PAGES: true
-          # 프로덕션 API URL 설정 (Secrets에서 가져옴)
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_API_URL: https://band-archive-api.fly.dev
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

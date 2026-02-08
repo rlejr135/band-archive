@@ -16,7 +16,13 @@ from config import DevelopmentConfig
 load_dotenv()
 
 
-def create_app(config_class=DevelopmentConfig):
+def create_app(config_class=None):
+    if config_class is None:
+        config_name = os.getenv('FLASK_CONFIG', 'config.DevelopmentConfig')
+        module_name, class_name = config_name.rsplit('.', 1)
+        import importlib
+        module = importlib.import_module(module_name)
+        config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
     CORS(app)
