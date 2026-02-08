@@ -1,10 +1,11 @@
 import os
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, send_from_directory, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Song
+from models import Song, Media
 from errors import ValidationError, NotFoundError
 from validators import (
     validate_status,
@@ -23,6 +24,17 @@ def _get_song_or_404(id):
     if not song:
         raise NotFoundError()
     return song
+
+
+def _detect_file_type(filename):
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    if ext in ('mp4', 'webm', 'mov', 'avi', 'mkv'):
+        return 'video'
+    if ext in ('mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'):
+        return 'audio'
+    if ext in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
+        return 'image'
+    return 'document'
 
 
 @songs_bp.route('/')
@@ -151,12 +163,74 @@ def upload_sheet_music(id):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     filename = secure_filename(file.filename)
-    filename = f"{id}_{filename}"
-    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    filename = f"{id}_{timestamp}_{filename}"
+    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+    file.save(file_path)
+
+    media = Media(
+        song_id=id,
+        filename=filename,
+        file_type=_detect_file_type(filename),
+        file_size=os.path.getsize(file_path),
+    )
+    db.session.add(media)
 
     song.sheet_music = filename
     db.session.commit()
     return jsonify(song.to_dict()), 200
+
+
+@songs_bp.route('/songs/<int:id>/media', methods=['GET'])
+def get_media_list(id):
+    song = _get_song_or_404(id)
+    return jsonify([media.to_dict() for media in song.media_files])
+
+
+@songs_bp.route('/songs/<int:id>/media', methods=['POST'])
+def add_media(id):
+    song = _get_song_or_404(id)
+
+    if 'file' not in request.files:
+        raise ValidationError("No file provided")
+
+    file = request.files['file']
+    if file.filename == '':
+        raise ValidationError("No file selected")
+
+    if not allowed_file(file.filename):
+        raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+
+    filename = secure_filename(file.filename)
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+    filename = f"{id}_{timestamp}_{filename}"
+    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+    file.save(file_path)
+
+    media = Media(
+        song_id=id,
+        filename=filename,
+        file_type=_detect_file_type(filename),
+        file_size=os.path.getsize(file_path),
+    )
+    db.session.add(media)
+    db.session.commit()
+    return jsonify(media.to_dict()), 201
+
+
+@songs_bp.route('/media/<int:media_id>', methods=['DELETE'])
+def delete_media(media_id):
+    media = db.session.get(Media, media_id)
+    if not media:
+        raise NotFoundError("Media not found")
+
+    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], media.filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    db.session.delete(media)
+    db.session.commit()
+    return jsonify({"message": "Media deleted"}), 200
 
 
 @songs_bp.route('/uploads/<filename>')
