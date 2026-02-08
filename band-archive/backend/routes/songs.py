@@ -235,4 +235,8 @@ def delete_media(media_id):
 
 @songs_bp.route('/uploads/<filename>')
 def uploaded_file(filename):
-    return send_from_directory(current_app.config['UPLOAD_FOLDER'], filename)
+    response = send_from_directory(current_app.config['UPLOAD_FOLDER'], filename)
+    # Explicitly set MIME type for .m4a files for browser compatibility
+    if filename.lower().endswith('.m4a'):
+        response.headers['Content-Type'] = 'audio/mp4'
+    return response
