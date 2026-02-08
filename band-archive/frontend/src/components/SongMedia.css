@@ -108,9 +108,70 @@
     margin-top: 2px;
 }
 
+
 .detail-actions {
     margin-top: 30px;
     border-top: 1px solid var(--border-color);
     padding-top: 20px;
     text-align: right;
+}
+
+/* Renaming Styles */
+.media-name {
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.media-name:hover {
+    color: var(--primary-color);
+}
+
+.rename-hint {
+    font-size: 0.8rem;
+    opacity: 0.5;
+    margin-left: 5px;
+    visibility: hidden;
+}
+
+.media-name:hover .rename-hint {
+    visibility: visible;
+}
+
+.rename-input-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.rename-input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 2px solid var(--primary-color);
+    border-radius: 4px;
+    background-color: var(--background-color);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+}
+
+.save-btn, .cancel-btn {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: transform 0.1s;
+}
+
+.save-btn:active, .cancel-btn:active {
+    transform: scale(0.95);
+}
+
+.save-btn {
+    background-color: var(--primary-color);
+    color: #1e272e;
+}
+
+.cancel-btn {
+    background-color: #ff4757; /* using a danger color directly or var(--danger-color) if available */
+    color: white;
 }

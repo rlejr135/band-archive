@@ -227,6 +227,51 @@ def add_media(id):
     return jsonify(media.to_dict()), 201
 
 
+@songs_bp.route('/media/<int:media_id>/rename', methods=['PUT'])
+def rename_media(media_id):
+    media = db.session.get(Media, media_id)
+    if not media:
+        raise NotFoundError("Media not found")
+
+    new_name = request.json.get('filename')
+    if not new_name:
+        raise ValidationError("New filename is required")
+
+    # If no extension provided, append the original extension
+    if '.' not in new_name:
+        ext = media.filename.rsplit('.', 1)[1] if '.' in media.filename else ''
+        if ext:
+            new_name = f"{new_name}.{ext}"
+            
+    # Allow safe filename characters
+    safe_name = _safe_filename(new_name)
+    
+    # Try to preserve the ID_TIMESTAMP prefix structure
+    parts = media.filename.split('_', 2)
+    if len(parts) >= 3:
+        prefix = f"{parts[0]}_{parts[1]}_"
+    else:
+        # Should not happen typically, but fallback
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        prefix = f"{media.song_id}_{timestamp}_"
+        
+    new_filename = f"{prefix}{safe_name}"
+    
+    old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], media.filename)
+    new_path = os.path.join(current_app.config['UPLOAD_FOLDER'], new_filename)
+    
+    if os.path.exists(new_path):
+        raise ValidationError("File with this name already exists")
+        
+    if os.path.exists(old_path):
+        os.rename(old_path, new_path)
+        
+    media.filename = new_filename
+    db.session.commit()
+    
+    return jsonify(media.to_dict()), 200
+
+
 @songs_bp.route('/media/<int:media_id>', methods=['DELETE'])
 def delete_media(media_id):
     media = db.session.get(Media, media_id)

@@ -9,11 +9,46 @@ import PracticeLogSection from './PracticeLogSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
-  const { removeMediaFromSong } = useSongs();
+  const { removeMediaFromSong, renameMediaInSong } = useSongs();
+  
+  const [renamingMediaId, setRenamingMediaId] = useState(null);
+  const [newFilename, setNewFilename] = useState('');
 
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
   }
+  
+  // Clean filename for display (remove id_timestamp_ prefix)
+  const getDisplayName = (filename) => {
+    const parts = filename.split('_');
+    // Check if filename starts with id_timestamp_ format
+    if (parts.length >= 3 && /^\d+$/.test(parts[0]) && /^\d{8}$/.test(parts[1])) {
+       return parts.slice(2).join('_');
+    }
+    // Try matching simpler pattern or just return filename if not matching
+    return filename;
+  };
+
+  const handleStartRename = (media) => {
+    setRenamingMediaId(media.id);
+    setNewFilename(getDisplayName(media.filename));
+  };
+
+  const handleCancelRename = () => {
+    setRenamingMediaId(null);
+    setNewFilename('');
+  };
+
+  const handleSaveRename = async (mediaId) => {
+    if (!newFilename.trim()) return;
+    try {
+      await renameMediaInSong(song.id, mediaId, newFilename);
+      setRenamingMediaId(null);
+      setNewFilename('');
+    } catch (err) {
+      alert('파일 이름 변경에 실패했습니다.');
+    }
+  };
 
   const handleUpload = async (file, onProgress) => {
     await onUploadMedia(song.id, file, onProgress);
@@ -48,71 +83,27 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
   const handlePlay = (media) => {
     setSelectedMedia({
       id: media.id,
-      name: media.filename,
+      name: getDisplayName(media.filename),
       url: `${API_URL}${media.url}`,
-      type: getMediaType(media), // Use detected type
+      type: getMediaType(media),
     });
   };
 
   const handlePreview = (media) => {
     setSelectedMedia({
       id: media.id,
-      name: media.filename,
+      name: getDisplayName(media.filename),
       url: `${API_URL}${media.url}`,
-      type: getMediaType(media), // Use detected type
+      type: getMediaType(media),
     });
   };
-
-  const handleDeleteMedia = async (mediaId) => {
-    if (!window.confirm('이 미디어 파일을 삭제하시겠습니까?')) {
-      return;
-    }
-
-    try {
-      await removeMediaFromSong(song.id, mediaId);
-      // If deleted media was selected, clear selection
-      if (selectedMedia && selectedMedia.id === mediaId) {
-        setSelectedMedia(null);
-      }
-    } catch (error) {
-      console.error('Failed to delete media:', error);
-      alert('미디어 삭제에 실패했습니다.');
-    }
-  };
-
+// ... (skip delete handler) 
   const statusLabel = { Practice: '연습중', Completed: '완료', OnHold: '보류' };
 
   return (
     <div className="song-detail">
-      <h2>{song.title}</h2>
-      <h3>{song.artist}</h3>
-
-      <div className="song-info">
-        <p><strong>상태:</strong> {statusLabel[song.status] || song.status}</p>
-        {song.genre && <p><strong>장르:</strong> {song.genre}</p>}
-        {song.difficulty && <p><strong>난이도:</strong> {'★'.repeat(song.difficulty)}{'☆'.repeat(5 - song.difficulty)}</p>}
-        {song.link && <p><strong>링크:</strong> <a href={song.link} target="_blank" rel="noreferrer">{song.link}</a></p>}
-      </div>
-
-      {song.lyrics && (
-        <div className="song-lyrics">
-          <h4>가사</h4>
-          <pre>{song.lyrics}</pre>
-        </div>
-      )}
-
-      {song.chords && (
-        <div className="song-lyrics">
-          <h4>코드</h4>
-          <pre>{song.chords}</pre>
-        </div>
-      )}
-
-      <div className="song-memo">
-        <h4>메모</h4>
-        <pre>{song.memo || '메모가 없습니다.'}</pre>
-      </div>
-
+// ...
+// ...
       <div className="song-media">
         <h4>미디어 파일</h4>
 
@@ -129,26 +120,49 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
           <div className="media-list">
             {song.media.map((media) => {
               const type = getMediaType(media);
+              const isRenaming = renamingMediaId === media.id;
+              
               return (
                 <div key={media.id} className="media-item">
                   <span className="media-icon">{iconForType(media)}</span>
+                  
                   <div className="media-info">
-                    <span className="media-name">{media.filename}</span>
+                    {isRenaming ? (
+                      <div className="rename-input-group">
+                        <input
+                          type="text"
+                          value={newFilename}
+                          onChange={(e) => setNewFilename(e.target.value)}
+                          className="rename-input"
+                          autoFocus
+                        />
+                        <button onClick={() => handleSaveRename(media.id)} className="save-btn">💾</button>
+                        <button onClick={handleCancelRename} className="cancel-btn">❌</button>
+                      </div>
+                    ) : (
+                      <span className="media-name" onClick={() => handleStartRename(media)} title="클릭하여 이름 변경">
+                        {getDisplayName(media.filename)} <span className="rename-hint">✏️</span>
+                      </span>
+                    )}
                     <span className="media-size">{(media.file_size / 1024 / 1024).toFixed(2)} MB</span>
                   </div>
                   
                   {/* Action buttons based on file type */}
-                  {(type === 'audio' || type === 'video') && (
-                    <button className="play-btn" onClick={() => handlePlay(media)}>▶ 재생</button>
+                  {!isRenaming && (
+                    <>
+                      {(type === 'audio' || type === 'video') && (
+                        <button className="play-btn" onClick={() => handlePlay(media)}>▶ 재생</button>
+                      )}
+                      {type === 'image' && (
+                        <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
+                      )}
+                      {type === 'document' && (
+                        <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
+                      )}
+                      
+                      <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
+                    </>
                   )}
-                  {type === 'image' && (
-                    <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
-                  )}
-                  {type === 'document' && (
-                    <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
-                  )}
-                  
-                  <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
                 </div>
               );
             })}

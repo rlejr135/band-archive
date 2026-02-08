@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchSongs, getSong, createSong, updateSong, deleteSong, uploadMedia, deleteMedia } from '../services/api';
+import { fetchSongs, getSong, createSong, updateSong, deleteSong, uploadMedia, deleteMedia, renameMedia } from '../services/api';
 
 const SongContext = createContext();
 
@@ -93,6 +93,26 @@ export const SongProvider = ({ children }) => {
     }
   };
 
+  const renameMediaInSong = async (songId, mediaId, newName) => {
+    try {
+      await renameMedia(mediaId, newName);
+      // Refresh the song data from backend after rename
+      const updatedSong = await getSong(songId);
+      const updatedSongs = songs.map(song =>
+        song.id === songId ? updatedSong : song
+      );
+      setSongs(updatedSongs);
+
+      // Update current song if it's the one being updated
+      if (currentSong && currentSong.id === songId) {
+        setCurrentSong(updatedSong);
+      }
+    } catch (error) {
+      console.error('Failed to rename media:', error);
+      throw error;
+    }
+  };
+
   const selectSong = (song) => {
     setCurrentSong(song);
     setIsEditing(false);
@@ -128,7 +148,8 @@ export const SongProvider = ({ children }) => {
         startCreate,
         cancelEdit,
         addMediaToSong,
-        removeMediaFromSong
+        removeMediaFromSong,
+        renameMediaInSong
     }}>
       {children}
     </SongContext.Provider>

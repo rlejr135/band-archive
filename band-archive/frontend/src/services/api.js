@@ -92,6 +92,19 @@ export const deleteMedia = async (mediaId) => {
   return await response.json();
 };
 
+// Rename media
+export const renameMedia = async (mediaId, newFilename) => {
+  const response = await fetch(`${API_URL}/media/${mediaId}/rename`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ filename: newFilename }),
+  });
+  if (!response.ok) throw new Error('Failed to rename media');
+  return await response.json();
+};
+
 // Dashboard stats
 export const fetchDashboardStats = async () => {
   const response = await fetch(`${API_URL}/dashboard/stats`);
