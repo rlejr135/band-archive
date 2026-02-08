@@ -15,6 +15,17 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
     await onUploadMedia(song.id, file, onProgress);
   };
 
+  const handlePlayMedia = () => {
+    if (song.sheet_music) {
+      const fileUrl = `http://localhost:5000/uploads/${song.sheet_music}`;
+      setSelectedMedia({ 
+        name: song.sheet_music, 
+        url: fileUrl,
+        type: song.sheet_music.match(/\.(mp4|webm|ogg|mov|avi|mkv)$/i) ? 'video' : 'audio'
+      });
+    }
+  };
+
   return (
     <div className="song-detail">
       <h2>{song.title}</h2>
@@ -41,14 +52,10 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
           <div className="media-list">
             <div 
               className="media-item"
-              onClick={() => setSelectedMedia({ 
-                name: song.sheet_music, 
-                sheet_music: song.sheet_music,
-                type: song.sheet_music.match(/\.(mp4|webm|ogg|mov)$/i) ? 'video' : 'audio'
-              })}
+              onClick={handlePlayMedia}
             >
               <span className="media-icon">
-                {song.sheet_music.match(/\.(mp4|webm|ogg|mov)$/i) ? '🎬' : '🎵'}
+                {song.sheet_music.match(/\.(mp4|webm|ogg|mov|avi|mkv)$/i) ? '🎬' : '🎵'}
               </span>
               <div className="media-info">
                 <span className="media-name">{song.sheet_music}</span>

@@ -45,6 +45,17 @@
   border-radius: 8px;
 }
 
+.audio-player audio {
+  width: 100%;
+  margin-bottom: 15px;
+}
+
+.audio-controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .play-control {
   background-color: var(--primary-color);
   color: #1e272e;

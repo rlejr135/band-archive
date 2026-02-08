@@ -1,6 +1,15 @@
 from errors import ValidationError
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf'}
+ALLOWED_EXTENSIONS = {
+    # Images
+    'png', 'jpg', 'jpeg', 'gif', 'webp',
+    # Documents
+    'pdf',
+    # Audio
+    'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac',
+    # Video
+    'mp4', 'webm', 'mov', 'avi', 'mkv'
+}
 VALID_STATUSES = {'Practice', 'Completed', 'OnHold'}
 
 

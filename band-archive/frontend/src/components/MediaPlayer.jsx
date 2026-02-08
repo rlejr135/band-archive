@@ -7,11 +7,11 @@ const MediaPlayer = ({ file }) => {
 
   if (!file) return null;
 
-  const isVideo = file.type === 'video' || file.name?.match(/\.(mp4|webm|ogg|mov)$/i);
-  const isAudio = file.type === 'audio' || file.name?.match(/\.(mp3|wav|ogg|m4a)$/i);
+  const isVideo = file.type === 'video' || file.name?.match(/\.(mp4|webm|ogg|mov|avi|mkv)$/i);
+  const isAudio = file.type === 'audio' || file.name?.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i);
   
-  // Use sheet_music URL from backend if available
-  const mediaUrl = file.url || (file.sheet_music ? `http://localhost:5000/uploads/${file.sheet_music}` : null);
+  // Use the URL from the file object
+  const mediaUrl = file.url;
 
   const togglePlay = () => {
     if (mediaRef.current) {
@@ -50,15 +50,18 @@ const MediaPlayer = ({ file }) => {
             <audio 
               ref={mediaRef}
               src={mediaUrl}
+              controls
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
             >
               Your browser does not support the audio tag.
             </audio>
             
-            <button className="play-control" onClick={togglePlay}>
-              {isPlaying ? '⏸️ 일시정지' : '▶️ 재생'}
-            </button>
+            <div className="audio-controls">
+              <button className="play-control" onClick={togglePlay}>
+                {isPlaying ? '⏸️ 일시정지' : '▶️ 재생'}
+              </button>
+            </div>
           </div>
         )}
 
