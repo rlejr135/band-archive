@@ -8,6 +8,13 @@ primary_region = 'nrt'
 
 [build]
 
+[env]
+  FLASK_CONFIG = 'config.ProductionConfig'
+
+[mounts]
+  source = 'data'
+  destination = '/data'
+
 [http_service]
   internal_port = 8080
   force_https = true
