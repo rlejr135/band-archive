@@ -78,9 +78,18 @@ export const uploadMedia = async (songId, file, onProgress) => {
       reject(new Error('Upload failed'));
     });
 
-    xhr.open('POST', `${API_URL}/songs/${songId}/upload`);
+    xhr.open('POST', `${API_URL}/songs/${songId}/media`);
     xhr.send(formData);
   });
+};
+
+// Delete media
+export const deleteMedia = async (mediaId) => {
+  const response = await fetch(`${API_URL}/media/${mediaId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error('Failed to delete media');
+  return await response.json();
 };
 
 // Dashboard stats

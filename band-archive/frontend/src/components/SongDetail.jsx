@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { API_URL } from '../services/api';
+import { useSongs } from '../context/SongContext';
 import './SongDetail.css';
 import './SongMedia.css';
 import FileUpload from './FileUpload';
@@ -8,6 +9,7 @@ import PracticeLogSection from './PracticeLogSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
+  const { removeMediaFromSong } = useSongs();
 
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
@@ -17,14 +19,46 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
     await onUploadMedia(song.id, file, onProgress);
   };
 
-  const handlePlayMedia = () => {
-    if (song.sheet_music) {
-      const fileUrl = `${API_URL}/uploads/${song.sheet_music}`;
-      setSelectedMedia({
-        name: song.sheet_music,
-        url: fileUrl,
-        type: song.sheet_music.match(/\.(mp4|webm|ogg|mov|avi|mkv)$/i) ? 'video' : 'audio'
-      });
+  const iconForType = (fileType) => {
+    switch (fileType) {
+      case 'video': return '🎬';
+      case 'audio': return '🎵';
+      case 'image': return '🖼️';
+      case 'document': return '📄';
+      default: return '📁';
+    }
+  };
+
+  const handlePlay = (media) => {
+    setSelectedMedia({
+      name: media.filename,
+      url: `${API_URL}${media.url}`,
+      type: media.file_type,
+    });
+  };
+
+  const handlePreview = (media) => {
+    setSelectedMedia({
+      name: media.filename,
+      url: `${API_URL}${media.url}`,
+      type: media.file_type,
+    });
+  };
+
+  const handleDeleteMedia = async (mediaId) => {
+    if (!window.confirm('이 미디어 파일을 삭제하시겠습니까?')) {
+      return;
+    }
+
+    try {
+      await removeMediaFromSong(song.id, mediaId);
+      // If deleted media was selected, clear selection
+      if (selectedMedia && selectedMedia.url.includes(mediaId)) {
+        setSelectedMedia(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete media:', error);
+      alert('미디어 삭제에 실패했습니다.');
     }
   };
 
@@ -73,24 +107,32 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
         )}
 
         {/* Media List */}
-        {song.sheet_music && (
+        {song.media?.length > 0 ? (
           <div className="media-list">
-            <div
-              className="media-item"
-              onClick={handlePlayMedia}
-            >
-              <span className="media-icon">
-                {song.sheet_music.match(/\.(mp4|webm|ogg|mov|avi|mkv)$/i) ? '🎬' : '🎵'}
-              </span>
-              <div className="media-info">
-                <span className="media-name">{song.sheet_music}</span>
+            {song.media.map((media) => (
+              <div key={media.id} className="media-item">
+                <span className="media-icon">{iconForType(media.file_type)}</span>
+                <div className="media-info">
+                  <span className="media-name">{media.filename}</span>
+                  <span className="media-size">{(media.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                </div>
+                
+                {/* Action buttons based on file type */}
+                {(media.file_type === 'audio' || media.file_type === 'video') && (
+                  <button className="play-btn" onClick={() => handlePlay(media)}>▶ 재생</button>
+                )}
+                {media.file_type === 'image' && (
+                  <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
+                )}
+                {media.file_type === 'document' && (
+                  <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
+                )}
+                
+                <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
               </div>
-              <button className="play-btn">▶ 재생</button>
-            </div>
+            ))}
           </div>
-        )}
-
-        {!song.sheet_music && (
+        ) : (
           <div className="empty-media">
             <p>등록된 미디어 파일이 없습니다.</p>
             <p className="upload-instruction">위의 영역에 파일을 드래그하여 업로드하세요</p>

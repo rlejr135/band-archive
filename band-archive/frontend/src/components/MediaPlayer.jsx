@@ -7,8 +7,10 @@ const MediaPlayer = ({ file }) => {
 
   if (!file) return null;
 
-  const isVideo = file.type === 'video' || file.name?.match(/\.(mp4|webm|ogg|mov|avi|mkv)$/i);
-  const isAudio = file.type === 'audio' || file.name?.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i);
+  const isVideo = file.type === 'video';
+  const isAudio = file.type === 'audio';
+  const isImage = file.type === 'image';
+  const isDocument = file.type === 'document';
   
   // Use the URL from the file object
   const mediaUrl = file.url;
@@ -27,7 +29,12 @@ const MediaPlayer = ({ file }) => {
   return (
     <div className="media-player">
       <div className="player-header">
-        <span className="player-icon">{isVideo ? '🎬' : '🎵'}</span>
+        <span className="player-icon">
+          {isVideo && '🎬'}
+          {isAudio && '🎵'}
+          {isImage && '🖼️'}
+          {isDocument && '📄'}
+        </span>
         <span className="player-title">{file.name}</span>
       </div>
       
@@ -62,6 +69,20 @@ const MediaPlayer = ({ file }) => {
                 {isPlaying ? '⏸️ 일시정지' : '▶️ 재생'}
               </button>
             </div>
+          </div>
+        )}
+
+        {isImage && mediaUrl && (
+          <div className="image-preview">
+            <img src={mediaUrl} alt={file.name} className="preview-image" />
+          </div>
+        )}
+
+        {isDocument && mediaUrl && (
+          <div className="document-preview">
+            <a href={mediaUrl} target="_blank" rel="noreferrer" className="document-link">
+              📄 {file.name} 다운로드
+            </a>
           </div>
         )}
 

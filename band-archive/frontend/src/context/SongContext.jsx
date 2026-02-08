@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchSongs, getSong, createSong, updateSong, deleteSong, uploadMedia } from '../services/api';
+import { fetchSongs, getSong, createSong, updateSong, deleteSong, uploadMedia, deleteMedia } from '../services/api';
 
 const SongContext = createContext();
 
@@ -73,6 +73,26 @@ export const SongProvider = ({ children }) => {
       }
   };
 
+  const removeMediaFromSong = async (songId, mediaId) => {
+    try {
+      await deleteMedia(mediaId);
+      // Refresh the song data from backend after deletion
+      const updatedSong = await getSong(songId);
+      const updatedSongs = songs.map(song =>
+        song.id === songId ? updatedSong : song
+      );
+      setSongs(updatedSongs);
+
+      // Update current song if it's the one being updated
+      if (currentSong && currentSong.id === songId) {
+        setCurrentSong(updatedSong);
+      }
+    } catch (error) {
+      console.error('Failed to delete media:', error);
+      throw error;
+    }
+  };
+
   const selectSong = (song) => {
     setCurrentSong(song);
     setIsEditing(false);
@@ -107,7 +127,8 @@ export const SongProvider = ({ children }) => {
         startEdit,
         startCreate,
         cancelEdit,
-        addMediaToSong
+        addMediaToSong,
+        removeMediaFromSong
     }}>
       {children}
     </SongContext.Provider>
