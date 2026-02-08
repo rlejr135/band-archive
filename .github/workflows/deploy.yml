@@ -34,7 +34,7 @@ jobs:
         working-directory: band-archive/frontend
         env:
           GITHUB_PAGES: true
-          VITE_API_URL: https://band-archive-api.fly.dev
+          VITE_API_URL: https://band-archive.fly.dev
         run: npm run build
 
       - name: Setup Pages
