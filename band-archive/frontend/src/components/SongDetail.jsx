@@ -7,7 +7,7 @@ import FileUpload from './FileUpload';
 import MediaPlayer from './MediaPlayer';
 import PracticeLogSection from './PracticeLogSection';
 
-const SongDetail = ({ song, onEdit, onUploadMedia }) => {
+const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
   const { removeMediaFromSong, renameMediaInSong } = useSongs();
   
@@ -54,6 +54,18 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
     await onUploadMedia(song.id, file, onProgress);
   };
 
+  const handleDeleteMedia = async (mediaId) => {
+      if (!window.confirm('정말 이 파일을 삭제하시겠습니까?')) return;
+      try {
+        await removeMediaFromSong(song.id, mediaId);
+        if (selectedMedia && selectedMedia.id === mediaId) {
+          setSelectedMedia(null);
+        }
+      } catch (err) {
+        alert('파일 삭제에 실패했습니다.');
+      }
+  };
+
   // Robust file type detection
   const getMediaType = (media) => {
     // Priority 1: Backend file_type if valid
@@ -97,13 +109,51 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
       type: getMediaType(media),
     });
   };
-// ... (skip delete handler) 
+
   const statusLabel = { Practice: '연습중', Completed: '완료', OnHold: '보류' };
 
   return (
     <div className="song-detail">
-// ...
-// ...
+      {onBack && (
+        <button className="mobile-back-btn" onClick={onBack}>
+          ← 목록으로
+        </button>
+      )}
+
+      <h2>{song.title}</h2>
+      <h3>{song.artist}</h3>
+      
+      <div className="song-info">
+        <p><strong>상태:</strong> <span className={`status-badge ${song.status?.toLowerCase()}`}>{statusLabel[song.status] || song.status}</span></p>
+        <p><strong>장르:</strong> {song.genre || '-'}</p>
+        <p><strong>난이도:</strong> {'⭐'.repeat(song.difficulty)}</p>
+        {song.link && (
+          <p><strong>링크:</strong> <a href={song.link} target="_blank" rel="noreferrer">{song.link}</a></p>
+        )}
+      </div>
+
+      {(song.lyrics || song.chords || song.memo) && (
+        <div className="song-content">
+          {song.lyrics && (
+            <div className="song-lyrics">
+              <h4>가사</h4>
+              <pre>{song.lyrics}</pre>
+            </div>
+          )}
+          {song.chords && (
+            <div className="song-lyrics">
+              <h4>코드</h4>
+              <pre>{song.chords}</pre>
+            </div>
+          )}
+          {song.memo && (
+            <div className="song-memo">
+              <h4>메모</h4>
+              <pre>{song.memo}</pre>
+            </div>
+          )}
+        </div>
+      )}
       <div className="song-media">
         <h4>미디어 파일</h4>
 

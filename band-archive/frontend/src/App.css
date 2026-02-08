@@ -145,16 +145,35 @@
 @media (max-width: 768px) {
   .app-main {
     flex-direction: column;
+    padding: 10px;
   }
   
+  /* Default Mobile State: Show Sidebar (List), Hide Content */
   .sidebar {
     width: 100%;
-    height: 40%; 
-    flex: none;
+    height: 100%;
+    flex: 1;
+    display: flex;
   }
   
   .content-area {
-    height: 60%;
-    flex: none;
+    display: none;
+  }
+
+  /* When a song is selected or editing: Show Content, Hide Sidebar */
+  .app-main.has-selected-song .sidebar {
+    display: none;
+  }
+  
+  .app-main.has-selected-song .content-area {
+    display: block;
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    padding: 15px;
+  }
+
+  .empty-state {
+    display: none; /* Hide empty state on mobile if no song selected (sidebar shows instead) */
   }
 }

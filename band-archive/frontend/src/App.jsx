@@ -88,7 +88,7 @@ const MainContent = () => {
         </div>
       </header>
 
-      <main className="app-main">
+      <main className={`app-main ${currentSong || isEditing ? 'has-selected-song' : ''}`}>
         {currentView === 'dashboard' ? (
           <Dashboard onSelectSong={handleDashboardSongSelect} onViewSongs={() => setCurrentView('songs')} />
         ) : currentView === 'suggestions' ? (
@@ -126,6 +126,7 @@ const MainContent = () => {
                   song={currentSong}
                   onEdit={startEdit}
                   onUploadMedia={addMediaToSong}
+                  onBack={() => selectSong(null)}
                 />
               ) : (
                 <div className="empty-state">
