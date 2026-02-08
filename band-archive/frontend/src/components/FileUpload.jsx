@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import './FileUpload.css';
 
-const FileUpload = ({ onUpload, accept = "audio/*,video/*", multiple = true }) => {
+const FileUpload = ({ onUpload, accept = "audio/*,video/*", multiple = false }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
 

@@ -12,19 +12,21 @@ import logo from './assets/logo.png';
 
 // Main Content Component to use context
 const MainContent = () => {
-  const { 
-    songs, 
-    loading, 
-    currentSong, 
-    isEditing, 
-    selectSong, 
-    startCreate, 
-    addSong, 
-    editSong, 
-    removeSong, 
+  const {
+    songs,
+    loading,
+    error,
+    currentSong,
+    isEditing,
+    selectSong,
+    startCreate,
+    addSong,
+    editSong,
+    removeSong,
     cancelEdit,
     startEdit,
-    addMediaToSong
+    addMediaToSong,
+    loadSongs
   } = useSongs();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -50,8 +52,9 @@ const MainContent = () => {
     cancelEdit();
   };
 
-  const handleDashboardSongSelect = (song) => {
+  const handleDashboardSongSelect = (songRef) => {
     setCurrentView('songs');
+    const song = songs.find(s => s.id === songRef.id) || songRef;
     selectSong(song);
   };
 
@@ -83,13 +86,18 @@ const MainContent = () => {
 
       <main className="app-main">
         {currentView === 'dashboard' ? (
-          <Dashboard onSelectSong={handleDashboardSongSelect} />
+          <Dashboard onSelectSong={handleDashboardSongSelect} onViewSongs={() => setCurrentView('songs')} />
         ) : (
           <>
             <aside className="sidebar">
               <SearchBar onSearch={handleSearch} />
               {loading ? (
                 <div className="loading">로딩 중...</div>
+              ) : error ? (
+                <div className="loading">
+                  <p>{error}</p>
+                  <button className="secondary-btn" onClick={loadSongs}>다시 시도</button>
+                </div>
               ) : (
                 <SongList 
                   songs={filteredSongs} 

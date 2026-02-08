@@ -17,11 +17,22 @@
 
 .song-info {
   display: flex;
+  flex-wrap: wrap;
   gap: 20px;
   margin-bottom: 30px;
   padding: 15px;
-  background-color: var(--background-color); /* Light gray bg */
+  background-color: var(--background-color);
   border-radius: 8px;
+}
+
+.song-info a {
+  color: var(--secondary-color);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.song-info a:hover {
+  text-decoration: underline;
 }
 
 .song-info p {

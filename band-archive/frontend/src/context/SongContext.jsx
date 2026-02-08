@@ -8,18 +8,26 @@ export const useSongs = () => useContext(SongContext);
 export const SongProvider = ({ children }) => {
   const [songs, setSongs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [currentSong, setCurrentSong] = useState(null);
-  const [isEditing, setIsEditing] = useState(false); // Mode: 'list', 'detail', 'create', 'edit'
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     loadSongs();
   }, []);
 
   const loadSongs = async () => {
-    setLoading(true);
-    const data = await fetchSongs();
-    setSongs(data);
-    setLoading(false);
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await fetchSongs();
+      setSongs(data);
+    } catch (err) {
+      console.error('Failed to load songs:', err);
+      setError('곡 목록을 불러오는 데 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const addSong = async (songData) => {
@@ -31,6 +39,9 @@ export const SongProvider = ({ children }) => {
   const editSong = async (id, songData) => {
       const updated = await updateSong(id, songData);
       setSongs(songs.map(s => s.id === id ? updated : s));
+      if (currentSong && currentSong.id === id) {
+        setCurrentSong(updated);
+      }
       return updated;
   }
 
@@ -47,11 +58,11 @@ export const SongProvider = ({ children }) => {
         await uploadMedia(songId, file, onProgress);
         // Refresh the song data from backend after upload
         const updatedSong = await getSong(songId);
-        const updatedSongs = songs.map(song => 
+        const updatedSongs = songs.map(song =>
           song.id === songId ? updatedSong : song
         );
         setSongs(updatedSongs);
-        
+
         // Update current song if it's the one being updated
         if (currentSong && currentSong.id === songId) {
           setCurrentSong(updatedSong);
@@ -71,7 +82,7 @@ export const SongProvider = ({ children }) => {
       setCurrentSong(song);
       setIsEditing(true);
   }
-  
+
   const startCreate = () => {
       setCurrentSong(null);
       setIsEditing(true);
@@ -79,17 +90,16 @@ export const SongProvider = ({ children }) => {
 
   const cancelEdit = () => {
       setIsEditing(false);
-      // If we were creating a new song, go back to list (currentSong is null)
-      // If we were editing, go back to detail (currentSong is set)
   }
 
   return (
-    <SongContext.Provider value={{ 
-        songs, 
-        loading, 
-        loadSongs, 
-        addSong, 
-        editSong, 
+    <SongContext.Provider value={{
+        songs,
+        loading,
+        error,
+        loadSongs,
+        addSong,
+        editSong,
         removeSong,
         currentSong,
         selectSong,

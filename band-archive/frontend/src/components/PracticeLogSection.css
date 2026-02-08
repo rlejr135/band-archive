@@ -1,0 +1,187 @@
+.practice-log-section {
+  margin-top: 30px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 20px;
+}
+
+.practice-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.practice-log-header h4 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: var(--text-primary);
+  border-left: 4px solid var(--accent-color);
+  padding-left: 10px;
+}
+
+.add-log-btn {
+  background-color: var(--primary-color);
+  color: #1e272e;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-log-btn:hover {
+  background-color: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+/* Form */
+.practice-log-form {
+  background-color: var(--background-color);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border-color);
+}
+
+.practice-log-form .form-group {
+  margin-bottom: 15px;
+}
+
+.practice-log-form .form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.practice-log-form .form-group textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  background-color: var(--surface-color);
+  color: var(--text-primary);
+  box-sizing: border-box;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.practice-log-form .form-group textarea:focus {
+  border-color: var(--primary-color);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.2);
+}
+
+.practice-log-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* List */
+.practice-log-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.practice-log-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 15px;
+  margin-bottom: 10px;
+  background-color: var(--background-color);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s;
+}
+
+.practice-log-item:hover {
+  border-color: var(--primary-color);
+}
+
+.practice-log-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.practice-log-date {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.log-text {
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.log-feedback {
+  margin: 0 0 8px 0;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-style: italic;
+}
+
+.log-recording {
+  font-size: 0.9rem;
+  margin-top: 8px;
+}
+
+.log-recording a {
+  color: var(--secondary-color);
+  text-decoration: none;
+}
+
+.log-recording a:hover {
+  text-decoration: underline;
+}
+
+/* Actions */
+.practice-log-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+
+.upload-recording-btn,
+.log-edit-btn,
+.log-delete-btn {
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.upload-recording-btn:hover,
+.log-edit-btn:hover {
+  background-color: var(--surface-color);
+  border-color: var(--primary-color);
+}
+
+.log-delete-btn:hover {
+  background-color: var(--surface-color);
+  border-color: var(--accent-color);
+}
+
+.empty-logs {
+  text-align: center;
+  padding: 30px;
+  background-color: var(--background-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-style: italic;
+  border: 1px dashed var(--border-color);
+}
