@@ -1,22 +1,28 @@
 .song-list {
   padding: 0;
   margin: 0;
-  list-style: none;
 }
 
-.song-list h2 {
-  margin-top: 0;
-  margin-bottom: 20px;
-  color: var(--primary-color);
-  font-size: 1.25rem;
+.song-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
   border-bottom: 2px solid var(--border-color);
   padding-bottom: 10px;
 }
 
-.song-list ul {
+.song-list h2 {
+  margin: 0;
+  color: var(--primary-color);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.song-list-ul {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 0 0 15px 0;
 }
 
 .song-item {
@@ -29,34 +35,80 @@
   border: 1px solid var(--border-color);
   border-radius: 8px;
   transition: all 0.2s ease;
-  cursor: pointer;
 }
 
 .song-item:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   border-color: var(--primary-color);
 }
 
-.song-item span {
-  font-weight: 500;
+.song-title-span {
+  flex: 1;
+  font-weight: 600;
   color: var(--text-primary);
-  flex: 1; /* Make it clickable area large */
+  cursor: pointer;
+  display: flex;
+  flex-direction: column; /* Mobile first stack, or row on desktop if needed */
+}
+
+.song-artist-span {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 0.85em;
+  margin-top: 2px;
 }
 
 .delete-btn {
   background-color: transparent;
-  color: #ff6b6b;
-  border: 1px solid #ff6b6b;
-  padding: 6px 12px;
-  border-radius: 6px;
+  color: var(--text-secondary);
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 1.2rem;
   transition: all 0.2s;
+  opacity: 0.6;
   margin-left: 10px;
+  line-height: 1;
 }
 
 .delete-btn:hover {
-  background-color: #ff6b6b;
-  color: white;
+  color: #ff6b6b;
+  opacity: 1;
+  background-color: rgba(255, 107, 107, 0.1);
+}
+
+.add-song-btn {
+  width: 100%;
+  padding: 12px;
+  background-color: transparent;
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.add-song-btn:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background-color: rgba(255, 211, 42, 0.05);
+}
+
+.empty-list {
+  text-align: center;
+  padding: 30px 10px;
+  color: var(--text-secondary);
+  font-style: italic;
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  margin-bottom: 15px;
+  border: 1px dashed var(--border-color);
 }

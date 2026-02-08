@@ -85,9 +85,6 @@ const MainContent = () => {
           >
             🗳️ 다음 곡 추천
           </button>
-          <button className="primary-btn" onClick={startCreate}>
-             + 새 곡 추가
-          </button>
         </div>
       </header>
 
@@ -112,6 +109,7 @@ const MainContent = () => {
                   songs={filteredSongs}
                   onSelectSong={selectSong}
                   onDeleteSong={removeSong}
+                  onAddSong={startCreate}
                 />
               )}
             </aside>

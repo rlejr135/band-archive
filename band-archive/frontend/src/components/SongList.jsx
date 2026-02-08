@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import PasswordModal from './PasswordModal';
 import './SongList.css';
 
-const SongList = ({ songs, onSelectSong, onDeleteSong }) => {
+const SongList = ({ songs, onSelectSong, onDeleteSong, onAddSong }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [songToDelete, setSongToDelete] = useState(null);
 
@@ -25,17 +25,28 @@ const SongList = ({ songs, onSelectSong, onDeleteSong }) => {
 
   return (
     <div className="song-list">
-      <h2>곡 목록</h2>
-      <ul>
-        {songs.map((song) => (
-          <li key={song.id} className="song-item">
-            <span onClick={() => onSelectSong(song)}>
-              {song.title} - {song.artist}
-            </span>
-            <button onClick={() => handleDeleteClick(song)} className="delete-btn">삭제</button>
-          </li>
-        ))}
-      </ul>
+      <div className="song-list-header">
+        <h2>곡 목록</h2>
+      </div>
+      
+      {songs.length > 0 ? (
+        <ul className="song-list-ul">
+          {songs.map((song) => (
+            <li key={song.id} className="song-item">
+              <span onClick={() => onSelectSong(song)} className="song-title-span">
+                {song.title} <span className="song-artist-span">- {song.artist}</span>
+              </span>
+              <button onClick={() => handleDeleteClick(song)} className="delete-btn" title="삭제">×</button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="empty-list">등록된 곡이 없습니다.</div>
+      )}
+
+      <button className="add-song-btn" onClick={onAddSong}>
+        + 새 곡 추가
+      </button>
 
       <PasswordModal
         isOpen={isModalOpen}
