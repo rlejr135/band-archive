@@ -1,35 +1,15 @@
-// Dynamically determine API URL for local network access
-const getApiUrl = () => {
-    // Priority 0: Runtime override via localStorage (useful for quick testing without redeploy)
-    const storedUrl = localStorage.getItem('api_url');
-    if (storedUrl) return storedUrl;
-
-    if (import.meta.env.VITE_API_URL) {
-        return import.meta.env.VITE_API_URL;
-    }
-    // If accessing via IP (e.g. mobile testing), use the same IP for backend
-    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        return `http://${window.location.hostname}:5000`;
-    }
-    return 'http://localhost:5000';
-};
-
-export const API_URL = getApiUrl();
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 // Fetch all songs
 export const fetchSongs = async () => {
-  const response = await fetch(`${API_URL}/songs`, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
+  const response = await fetch(`${API_URL}/songs`);
   if (!response.ok) throw new Error('Failed to fetch songs');
   return await response.json();
 };
 
 // Get single song
 export const getSong = async (id) => {
-  const response = await fetch(`${API_URL}/songs/${id}`, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
+  const response = await fetch(`${API_URL}/songs/${id}`);
   if (!response.ok) throw new Error('Failed to fetch song');
   return await response.json();
 };
@@ -38,7 +18,7 @@ export const getSong = async (id) => {
 export const createSong = async (songData) => {
   const response = await fetch(`${API_URL}/songs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(songData),
   });
   if (!response.ok) throw new Error('Failed to create song');
@@ -49,7 +29,7 @@ export const createSong = async (songData) => {
 export const updateSong = async (id, songData) => {
   const response = await fetch(`${API_URL}/songs/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(songData),
   });
   if (!response.ok) throw new Error('Failed to update song');
@@ -60,7 +40,6 @@ export const updateSong = async (id, songData) => {
 export const deleteSong = async (id) => {
   const response = await fetch(`${API_URL}/songs/${id}`, {
     method: 'DELETE',
-    headers: { 'ngrok-skip-browser-warning': 'true' },
   });
   if (!response.ok) throw new Error('Failed to delete song');
   return await response.json();
@@ -100,7 +79,6 @@ export const uploadMedia = async (songId, file, onProgress) => {
     });
 
     xhr.open('POST', `${API_URL}/songs/${songId}/media`);
-    xhr.setRequestHeader('ngrok-skip-browser-warning', 'true');
     xhr.send(formData);
   });
 };
@@ -109,7 +87,6 @@ export const uploadMedia = async (songId, file, onProgress) => {
 export const deleteMedia = async (mediaId) => {
   const response = await fetch(`${API_URL}/media/${mediaId}`, {
     method: 'DELETE',
-    headers: { 'ngrok-skip-browser-warning': 'true' },
   });
   if (!response.ok) throw new Error('Failed to delete media');
   return await response.json();
@@ -121,7 +98,6 @@ export const renameMedia = async (mediaId, newFilename) => {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
-      'ngrok-skip-browser-warning': 'true',
     },
     body: JSON.stringify({ filename: newFilename }),
   });
@@ -131,18 +107,14 @@ export const renameMedia = async (mediaId, newFilename) => {
 
 // Dashboard stats
 export const fetchDashboardStats = async () => {
-  const response = await fetch(`${API_URL}/dashboard/stats`, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
+  const response = await fetch(`${API_URL}/dashboard/stats`);
   if (!response.ok) throw new Error('Failed to fetch dashboard stats');
   return await response.json();
 };
 
 // Fetch practice logs for a song
 export const fetchPracticeLogs = async (songId) => {
-  const response = await fetch(`${API_URL}/songs/${songId}/practice-logs`, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
+  const response = await fetch(`${API_URL}/songs/${songId}/practice-logs`);
   if (!response.ok) throw new Error('Failed to fetch practice logs');
   return await response.json();
 };
@@ -151,7 +123,7 @@ export const fetchPracticeLogs = async (songId) => {
 export const createPracticeLog = async (songId, data) => {
   const response = await fetch(`${API_URL}/songs/${songId}/practice-logs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create practice log');
@@ -160,9 +132,7 @@ export const createPracticeLog = async (songId, data) => {
 
 // Get single practice log
 export const getPracticeLog = async (id) => {
-  const response = await fetch(`${API_URL}/practice-logs/${id}`, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
+  const response = await fetch(`${API_URL}/practice-logs/${id}`);
   if (!response.ok) throw new Error('Failed to fetch practice log');
   return await response.json();
 };
@@ -171,7 +141,7 @@ export const getPracticeLog = async (id) => {
 export const updatePracticeLog = async (id, data) => {
   const response = await fetch(`${API_URL}/practice-logs/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to update practice log');
@@ -182,7 +152,6 @@ export const updatePracticeLog = async (id, data) => {
 export const deletePracticeLog = async (id) => {
   const response = await fetch(`${API_URL}/practice-logs/${id}`, {
     method: 'DELETE',
-    headers: { 'ngrok-skip-browser-warning': 'true' },
   });
   if (!response.ok) throw new Error('Failed to delete practice log');
   return await response.json();
@@ -190,9 +159,7 @@ export const deletePracticeLog = async (id) => {
 
 // Fetch all song suggestions
 export const fetchSuggestions = async () => {
-  const response = await fetch(`${API_URL}/suggestions`, {
-    headers: { 'ngrok-skip-browser-warning': 'true' }
-  });
+  const response = await fetch(`${API_URL}/suggestions`);
   if (!response.ok) throw new Error('Failed to fetch suggestions');
   return await response.json();
 };
@@ -201,7 +168,7 @@ export const fetchSuggestions = async () => {
 export const createSuggestion = async (data) => {
   const response = await fetch(`${API_URL}/suggestions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error('Failed to create suggestion');
@@ -212,7 +179,7 @@ export const createSuggestion = async (data) => {
 export const deleteSuggestion = async (id, password) => {
   const response = await fetch(`${API_URL}/suggestions/${id}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password }),
   });
   if (!response.ok) throw new Error('Failed to delete suggestion');
@@ -223,7 +190,7 @@ export const deleteSuggestion = async (id, password) => {
 export const voteSuggestion = async (id, voteType) => {
   const response = await fetch(`${API_URL}/suggestions/${id}/vote`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ vote_type: voteType }),
   });
   if (!response.ok) throw new Error('Failed to vote');
@@ -263,7 +230,6 @@ export const uploadRecording = async (id, file, onProgress) => {
     });
 
     xhr.open('POST', `${API_URL}/practice-logs/${id}/upload`);
-    xhr.setRequestHeader('ngrok-skip-browser-warning', 'true');
     xhr.send(formData);
   });
 };
