@@ -88,14 +88,14 @@ const FileUpload = ({ onUpload, accept = "audio/*,video/*,image/*,.pdf", multipl
             {accept.includes('.pdf') && '문서 '}
             파일 업로드 가능
           </p>
-          <input
-            type="file"
-            accept={accept}
-            multiple={multiple}
-            onChange={handleFileInput}
-            className="file-input-hidden"
-          />
         </div>
+        <input
+          type="file"
+          accept={accept}
+          multiple={multiple}
+          onChange={handleFileInput}
+          className="file-input-hidden"
+        />
       </div>
 
       {hasActiveUploads && (
