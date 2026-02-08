@@ -25,7 +25,8 @@ def create_app(config_class=None):
         config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
-    CORS(app)
+    # Allow all origins, methods, and headers for development/testing
+    CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
     db.init_app(app)
     Migrate(app, db)
