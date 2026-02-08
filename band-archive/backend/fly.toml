@@ -1,18 +1,22 @@
-app = "band-archive-api"
-primary_region = "nrt"
+# fly.toml app configuration file generated for band-archive on 2026-02-08T23:50:25+09:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'band-archive'
+primary_region = 'nrt'
 
 [build]
-
-[env]
-  FLASK_CONFIG = "config.ProductionConfig"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
+  processes = ['app']
 
-[mounts]
-  source = "data"
-  destination = "/data"
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024

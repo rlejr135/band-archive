@@ -1,14 +1,18 @@
-FROM python:3.13-slim
+# syntax=docker/dockerfile:1
 
-WORKDIR /app
+ARG PYTHON_VERSION=3.14.2
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+FROM python:${PYTHON_VERSION}-slim
+
+LABEL fly_launch_runtime="flask"
+
+WORKDIR /code
+
+COPY requirements.txt requirements.txt
+RUN pip3 install -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /data/uploads
-
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:create_app()"]
+CMD [ "python3", "-m" , "flask", "run", "--host=0.0.0.0", "--port=8080"]
