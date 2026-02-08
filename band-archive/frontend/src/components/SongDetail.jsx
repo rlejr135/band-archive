@@ -31,6 +31,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
 
   const handlePlay = (media) => {
     setSelectedMedia({
+      id: media.id,
       name: media.filename,
       url: `${API_URL}${media.url}`,
       type: media.file_type,
@@ -39,6 +40,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
 
   const handlePreview = (media) => {
     setSelectedMedia({
+      id: media.id,
       name: media.filename,
       url: `${API_URL}${media.url}`,
       type: media.file_type,
@@ -53,7 +55,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
     try {
       await removeMediaFromSong(song.id, mediaId);
       // If deleted media was selected, clear selection
-      if (selectedMedia && selectedMedia.url.includes(mediaId)) {
+      if (selectedMedia && selectedMedia.id === mediaId) {
         setSelectedMedia(null);
       }
     } catch (error) {

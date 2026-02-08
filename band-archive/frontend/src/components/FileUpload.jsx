@@ -82,9 +82,11 @@ const FileUpload = ({ onUpload, accept = "audio/*,video/*,image/*,.pdf", multipl
             파일을 드래그하여 놓거나 클릭하여 선택하세요
           </p>
           <p className="upload-hint">
-            {accept.includes('audio') && '음원 파일 '}
-            {accept.includes('video') && '영상 파일 '}
-            업로드 가능
+            {accept.includes('audio') && '음원 '}
+            {accept.includes('video') && '영상 '}
+            {accept.includes('image') && '이미지 '}
+            {accept.includes('.pdf') && '문서 '}
+            파일 업로드 가능
           </p>
           <input
             type="file"
