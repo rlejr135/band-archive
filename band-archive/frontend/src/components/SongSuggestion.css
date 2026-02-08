@@ -203,15 +203,44 @@
 }
 
 /* Responsive */
-@media (max-width: 600px) {
-  .suggestion-card {
+@media (max-width: 768px) {
+  .song-suggestion {
+    padding: 12px;
+  }
+
+  .suggestion-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
   }
 
+  .suggestion-header .primary-btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  .suggestion-form {
+    padding: 14px;
+  }
+
+  .suggestion-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .suggestion-details h3 {
+    white-space: normal;
+  }
+
   .suggestion-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .vote-btn {
+    padding: 6px 10px;
+    font-size: 0.8rem;
   }
 }

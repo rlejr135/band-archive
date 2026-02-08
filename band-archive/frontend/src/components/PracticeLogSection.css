@@ -185,3 +185,29 @@
   font-style: italic;
   border: 1px dashed var(--border-color);
 }
+
+@media (max-width: 768px) {
+  .practice-log-item {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .practice-log-actions {
+    margin-left: 0;
+    align-self: flex-end;
+  }
+
+  .practice-log-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .practice-log-form-actions {
+    flex-direction: column;
+  }
+
+  .practice-log-form-actions button {
+    width: 100%;
+  }
+}

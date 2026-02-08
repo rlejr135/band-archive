@@ -175,3 +175,24 @@
     background-color: #ff4757; /* using a danger color directly or var(--danger-color) if available */
     color: white;
 }
+
+@media (max-width: 768px) {
+  .media-item {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .media-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .rename-input-group {
+    flex-wrap: wrap;
+  }
+
+  .media-name {
+    word-break: break-all;
+  }
+}

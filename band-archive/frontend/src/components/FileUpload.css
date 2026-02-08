@@ -117,3 +117,27 @@
   font-weight: 600;
   color: var(--primary-color);
 }
+
+@media (max-width: 768px) {
+  .drop-zone {
+    padding: 24px 16px;
+  }
+
+  .upload-icon {
+    font-size: 2rem;
+  }
+
+  .upload-text {
+    font-size: 0.95rem;
+  }
+
+  .progress-item {
+    gap: 10px;
+    padding: 8px;
+  }
+
+  .progress-filename {
+    max-width: 100px;
+    font-size: 0.8rem;
+  }
+}

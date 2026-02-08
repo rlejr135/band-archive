@@ -106,3 +106,23 @@
   background-color: #f1f2f6;
   color: var(--text-primary);
 }
+
+@media (max-width: 768px) {
+  .song-form {
+    max-width: 100%;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .form-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .form-actions button {
+    width: 100%;
+  }
+}

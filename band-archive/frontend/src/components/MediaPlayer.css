@@ -115,3 +115,22 @@
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(255, 211, 42, 0.3);
 }
+
+@media (max-width: 768px) {
+  .media-player {
+    padding: 10px;
+  }
+
+  .video-player {
+    max-height: 250px;
+  }
+
+  .audio-player {
+    padding: 12px;
+  }
+
+  .player-title {
+    font-size: 0.9rem;
+    word-break: break-all;
+  }
+}

@@ -24,3 +24,10 @@
 .search-bar input::placeholder {
   color: #b2bec3;
 }
+
+@media (max-width: 768px) {
+  .search-bar input {
+    padding: 10px 16px;
+    font-size: 0.9rem;
+  }
+}
