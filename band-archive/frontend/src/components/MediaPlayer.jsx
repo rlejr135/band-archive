@@ -7,10 +7,26 @@ const MediaPlayer = ({ file }) => {
 
   if (!file) return null;
 
-  const isVideo = file.type === 'video';
-  const isAudio = file.type === 'audio';
-  const isImage = file.type === 'image';
-  const isDocument = file.type === 'document';
+  // Robust media type detection logic
+  const getMediaType = (file) => {
+    // Priority 1: Use explicitly passed type if valid and not document
+    if (file.type && file.type !== 'document') return file.type;
+    
+    // Priority 2: Extension based detection
+    const ext = file.name?.split('.').pop().toLowerCase();
+    
+    if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) return 'audio';
+    if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) return 'video';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
+    
+    return 'document';
+  };
+
+  const mediaType = getMediaType(file);
+  const isVideo = mediaType === 'video';
+  const isAudio = mediaType === 'audio';
+  const isImage = mediaType === 'image';
+  const isDocument = mediaType === 'document';
   
   // Use the URL from the file object
   const mediaUrl = file.url;

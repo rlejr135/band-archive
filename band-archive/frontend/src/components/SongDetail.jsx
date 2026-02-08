@@ -19,8 +19,24 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
     await onUploadMedia(song.id, file, onProgress);
   };
 
-  const iconForType = (fileType) => {
-    switch (fileType) {
+  // Robust file type detection
+  const getMediaType = (media) => {
+    // Priority 1: Backend file_type if valid
+    if (media.file_type && media.file_type !== 'document') return media.file_type;
+    
+    // Priority 2: Extension based fallback
+    const ext = media.filename?.split('.').pop().toLowerCase();
+    
+    if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) return 'audio';
+    if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) return 'video';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
+    
+    return 'document';
+  };
+
+  const iconForType = (media) => {
+    const type = getMediaType(media);
+    switch (type) {
       case 'video': return '🎬';
       case 'audio': return '🎵';
       case 'image': return '🖼️';
@@ -34,7 +50,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
       id: media.id,
       name: media.filename,
       url: `${API_URL}${media.url}`,
-      type: media.file_type,
+      type: getMediaType(media), // Use detected type
     });
   };
 
@@ -43,7 +59,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
       id: media.id,
       name: media.filename,
       url: `${API_URL}${media.url}`,
-      type: media.file_type,
+      type: getMediaType(media), // Use detected type
     });
   };
 
@@ -111,28 +127,31 @@ const SongDetail = ({ song, onEdit, onUploadMedia }) => {
         {/* Media List */}
         {song.media?.length > 0 ? (
           <div className="media-list">
-            {song.media.map((media) => (
-              <div key={media.id} className="media-item">
-                <span className="media-icon">{iconForType(media.file_type)}</span>
-                <div className="media-info">
-                  <span className="media-name">{media.filename}</span>
-                  <span className="media-size">{(media.file_size / 1024 / 1024).toFixed(2)} MB</span>
+            {song.media.map((media) => {
+              const type = getMediaType(media);
+              return (
+                <div key={media.id} className="media-item">
+                  <span className="media-icon">{iconForType(media)}</span>
+                  <div className="media-info">
+                    <span className="media-name">{media.filename}</span>
+                    <span className="media-size">{(media.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                  </div>
+                  
+                  {/* Action buttons based on file type */}
+                  {(type === 'audio' || type === 'video') && (
+                    <button className="play-btn" onClick={() => handlePlay(media)}>▶ 재생</button>
+                  )}
+                  {type === 'image' && (
+                    <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
+                  )}
+                  {type === 'document' && (
+                    <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
+                  )}
+                  
+                  <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
                 </div>
-                
-                {/* Action buttons based on file type */}
-                {(media.file_type === 'audio' || media.file_type === 'video') && (
-                  <button className="play-btn" onClick={() => handlePlay(media)}>▶ 재생</button>
-                )}
-                {media.file_type === 'image' && (
-                  <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
-                )}
-                {media.file_type === 'document' && (
-                  <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
-                )}
-                
-                <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="empty-media">

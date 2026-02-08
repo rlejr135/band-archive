@@ -12,6 +12,7 @@ __pycache__/
 .env
 instance/
 .pytest_cache/
+uploads/
 
 # Frontend
 .DS_Store
@@ -24,3 +25,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+# Task spec files (agent 간 작업 지시서)
+BACKEND_TASK_*.md
+FRONTEND_TASK_*.md
