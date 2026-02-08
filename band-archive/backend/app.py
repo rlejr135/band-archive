@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from extensions import db
 from errors import register_error_handlers
 from routes.songs import songs_bp
+from routes.practice_logs import practice_logs_bp
+from routes.dashboard import dashboard_bp
 from config import DevelopmentConfig
 
 load_dotenv()
@@ -22,6 +24,8 @@ def create_app(config_class=DevelopmentConfig):
     Migrate(app, db)
     register_error_handlers(app)
     app.register_blueprint(songs_bp)
+    app.register_blueprint(practice_logs_bp)
+    app.register_blueprint(dashboard_bp)
 
     with app.app_context():
         db.create_all()
