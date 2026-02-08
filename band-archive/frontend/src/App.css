@@ -3,6 +3,7 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   max-width: 1400px;
   margin: 0 auto;
   background-color: var(--background-color);
@@ -16,12 +17,15 @@
   background-color: var(--surface-color);
   box-shadow: var(--shadow-sm);
   z-index: 10;
+  flex-shrink: 0;
 }
 
 .header-actions {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .nav-btn {
@@ -33,6 +37,7 @@
   cursor: pointer;
   font-weight: 600;
   transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .nav-btn:hover {
@@ -57,9 +62,10 @@
 .app-main {
   display: flex;
   flex: 1;
-  overflow: hidden; /* Prevent full page scroll, let children scroll */
+  overflow: hidden;
   gap: 20px;
   padding: 20px;
+  min-height: 0;
 }
 
 /* Sidebar (Song List) */
@@ -70,8 +76,9 @@
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  padding: 20px; /* Included in width if box-sizing: border-box was global but here distinct */
+  padding: 20px;
   overflow-y: auto;
+  flex-shrink: 0;
 }
 
 /* Content Area (Detail or Form) */
@@ -83,6 +90,7 @@
   padding: 30px;
   overflow-y: auto;
   position: relative;
+  min-width: 0;
 }
 
 /* Buttons */
@@ -91,7 +99,7 @@
   color: white;
   border: none;
   padding: 10px 20px;
-  border-radius: 8px; /* Slightly rounded */
+  border-radius: 8px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -143,19 +151,43 @@
 
 /* Responsive */
 @media (max-width: 768px) {
+  .app-header {
+    flex-direction: column;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .nav-btn {
+    padding: 6px 10px;
+    font-size: 0.85rem;
+  }
+
+  .primary-btn {
+    padding: 8px 14px;
+    font-size: 0.85rem;
+  }
+
   .app-main {
     flex-direction: column;
     padding: 10px;
+    gap: 10px;
   }
-  
+
   /* Default Mobile State: Show Sidebar (List), Hide Content */
   .sidebar {
     width: 100%;
     height: 100%;
     flex: 1;
     display: flex;
+    padding: 12px;
   }
-  
+
   .content-area {
     display: none;
   }
@@ -164,7 +196,7 @@
   .app-main.has-selected-song .sidebar {
     display: none;
   }
-  
+
   .app-main.has-selected-song .content-area {
     display: block;
     width: 100%;
@@ -174,6 +206,6 @@
   }
 
   .empty-state {
-    display: none; /* Hide empty state on mobile if no song selected (sidebar shows instead) */
+    display: none;
   }
 }

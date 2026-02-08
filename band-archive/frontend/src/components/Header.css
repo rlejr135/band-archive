@@ -3,6 +3,7 @@
   display: flex;
   align-items: center;
   gap: 15px;
+  flex-shrink: 0;
 }
 
 .band-logo {
@@ -43,4 +44,22 @@
 /* Update other styles for dark mode compatibility if needed */
 .song-list h2 {
     color: var(--primary-color);
+}
+
+@media (max-width: 768px) {
+  .logo-container {
+    gap: 10px;
+  }
+
+  .band-logo {
+    height: 36px;
+  }
+
+  .logo-container h1 {
+    font-size: 1.3rem;
+  }
+
+  .archive-text {
+    font-size: 0.9rem;
+  }
 }

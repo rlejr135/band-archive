@@ -116,4 +116,24 @@
   .mobile-back-btn {
     display: flex;
   }
+
+  .song-detail h2 {
+    font-size: 1.4rem;
+  }
+
+  .song-detail h3 {
+    font-size: 1rem;
+  }
+
+  .song-info {
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .song-lyrics pre, .song-memo pre {
+    padding: 12px;
+    font-size: 0.9rem;
+    max-height: 300px;
+  }
 }
