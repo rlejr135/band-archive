@@ -43,7 +43,7 @@ jobs:
         run: npm run build
         env:
           GITHUB_PAGES: true
-          VITE_API_URL: https://band-archive-api.fly.dev
+          VITE_API_URL: https://band-archive.fly.dev
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
