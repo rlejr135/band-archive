@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   fetchPracticeLogs,
   createPracticeLog,
@@ -16,13 +16,7 @@ const PracticeLogSection = ({ songId }) => {
   const [editingLog, setEditingLog] = useState(null);
   const [formData, setFormData] = useState({ content: '', feedback: '' });
 
-  useEffect(() => {
-    if (songId) {
-      loadLogs();
-    }
-  }, [songId]);
-
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       setLoading(true);
       const data = await fetchPracticeLogs(songId);
@@ -32,7 +26,13 @@ const PracticeLogSection = ({ songId }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [songId]);
+
+  useEffect(() => {
+    if (songId) {
+      loadLogs();
+    }
+  }, [songId, loadLogs]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -57,11 +57,16 @@ const PracticeLogSection = ({ songId }) => {
   };
 
   const handleDelete = async (id) => {
+    if (!window.confirm('정말 이 연습 일지를 삭제하시겠습니까?')) {
+      return;
+    }
+    
     try {
       await deletePracticeLog(id);
       setLogs(logs.filter(l => l.id !== id));
     } catch (error) {
       console.error('Failed to delete practice log:', error);
+      alert('삭제에 실패했습니다. 다시 시도해주세요.');
     }
   };
 
