@@ -65,6 +65,7 @@ class SongSuggestion(db.Model):
     title = db.Column(db.String(100), nullable=False)
     artist = db.Column(db.String(100), nullable=False)
     link = db.Column(db.String(500), nullable=False)
+    memo = db.Column(db.Text, nullable=True)
     thumbs_up = db.Column(db.Integer, default=0)
     thumbs_down = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -75,6 +76,7 @@ class SongSuggestion(db.Model):
             'title': self.title,
             'artist': self.artist,
             'link': self.link,
+            'memo': self.memo,
             'thumbs_up': self.thumbs_up,
             'thumbs_down': self.thumbs_down,
             'created_at': self.created_at.isoformat() if self.created_at else None,

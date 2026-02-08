@@ -5,6 +5,7 @@ import SongDetail from './components/SongDetail';
 import SongForm from './components/SongForm';
 import SearchBar from './components/SearchBar';
 import Dashboard from './components/Dashboard';
+import SongSuggestion from './components/SongSuggestion';
 import './App.css';
 import './components/Header.css';
 
@@ -72,11 +73,17 @@ const MainContent = () => {
           >
             📊 대시보드
           </button>
-          <button 
+          <button
             className={`nav-btn ${currentView === 'songs' ? 'active' : ''}`}
             onClick={() => setCurrentView('songs')}
           >
             🎵 곡 목록
+          </button>
+          <button
+            className={`nav-btn ${currentView === 'suggestions' ? 'active' : ''}`}
+            onClick={() => setCurrentView('suggestions')}
+          >
+            🗳️ 다음 곡 추천
           </button>
           <button className="primary-btn" onClick={startCreate}>
              + 새 곡 추가
@@ -87,6 +94,8 @@ const MainContent = () => {
       <main className="app-main">
         {currentView === 'dashboard' ? (
           <Dashboard onSelectSong={handleDashboardSongSelect} onViewSongs={() => setCurrentView('songs')} />
+        ) : currentView === 'suggestions' ? (
+          <SongSuggestion />
         ) : (
           <>
             <aside className="sidebar">
@@ -99,25 +108,25 @@ const MainContent = () => {
                   <button className="secondary-btn" onClick={loadSongs}>다시 시도</button>
                 </div>
               ) : (
-                <SongList 
-                  songs={filteredSongs} 
-                  onSelectSong={selectSong} 
-                  onDeleteSong={removeSong} 
+                <SongList
+                  songs={filteredSongs}
+                  onSelectSong={selectSong}
+                  onDeleteSong={removeSong}
                 />
               )}
             </aside>
 
             <section className="content-area">
               {isEditing ? (
-                <SongForm 
-                  song={currentSong} 
-                  onSave={handleSave} 
-                  onCancel={cancelEdit} 
+                <SongForm
+                  song={currentSong}
+                  onSave={handleSave}
+                  onCancel={cancelEdit}
                 />
               ) : currentSong ? (
-                <SongDetail 
-                  song={currentSong} 
-                  onEdit={startEdit} 
+                <SongDetail
+                  song={currentSong}
+                  onEdit={startEdit}
                   onUploadMedia={addMediaToSong}
                 />
               ) : (

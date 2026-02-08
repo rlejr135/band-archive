@@ -1,22 +1,37 @@
 import React, { useState } from 'react';
 import './PasswordModal.css';
 
-const PasswordModal = ({ isOpen, onClose, onConfirm, title = "비밀번호 확인" }) => {
+const PasswordModal = ({ isOpen, onClose, onConfirm, title = "비밀번호 확인", checkPassword }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isChecking, setIsChecking] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsChecking(true);
     
-    // 초기 비밀번호 확인
-    if (password === 'admin') {
-      onConfirm();
-      handleClose();
-    } else {
-      setError('비밀번호가 올바르지 않습니다.');
-      setPassword('');
+    try {
+      let isValid = false;
+      if (checkPassword) {
+        isValid = await checkPassword(password);
+      } else {
+        // Default check if no validator provided
+        isValid = (password === 'admin');
+      }
+
+      if (isValid) {
+        onConfirm(password);
+        handleClose();
+      } else {
+        setError('비밀번호가 올바르지 않습니다.');
+        setPassword('');
+      }
+    } catch (err) {
+      setError('오류가 발생했습니다.');
+    } finally {
+      setIsChecking(false);
     }
   };
 

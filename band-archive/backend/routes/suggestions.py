@@ -39,7 +39,8 @@ def create_suggestion():
     if not link:
         raise ValidationError("Link is required")
 
-    suggestion = SongSuggestion(title=title, artist=artist, link=link)
+    memo = data.get('memo', '').strip() or None
+    suggestion = SongSuggestion(title=title, artist=artist, link=link, memo=memo)
     db.session.add(suggestion)
     db.session.commit()
     return jsonify(suggestion.to_dict()), 201

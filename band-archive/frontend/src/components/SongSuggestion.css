@@ -1,0 +1,217 @@
+.song-suggestion {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.suggestion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.suggestion-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--primary-color);
+}
+
+/* Form */
+.suggestion-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background-color: var(--surface-color);
+  padding: 20px;
+  border-radius: var(--radius-md);
+  margin-bottom: 24px;
+  border: 1px solid var(--border-color);
+}
+
+.suggestion-form input,
+.suggestion-form textarea {
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--background-color);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+  resize: vertical;
+}
+
+.suggestion-form input:focus,
+.suggestion-form textarea:focus {
+  border-color: var(--primary-color);
+}
+
+.suggestion-form input::placeholder,
+.suggestion-form textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.suggestion-form .primary-btn {
+  align-self: flex-end;
+}
+
+/* Empty state */
+.suggestion-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+}
+
+/* List */
+.suggestion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Card */
+.suggestion-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--surface-color);
+  padding: 16px 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.suggestion-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.suggestion-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestion-rank {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  min-width: 30px;
+}
+
+.suggestion-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestion-details h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestion-artist {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.suggestion-memo {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  white-space: pre-wrap;
+  line-height: 1.4;
+}
+
+.suggestion-link {
+  font-size: 1.2rem;
+  text-decoration: none;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.suggestion-link:hover {
+  transform: scale(1.2);
+}
+
+/* Actions */
+.suggestion-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.vote-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  background-color: var(--background-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.vote-btn:hover.vote-up {
+  border-color: #2ecc71;
+  background-color: rgba(46, 204, 113, 0.1);
+  color: #2ecc71;
+}
+
+.vote-btn:hover.vote-down {
+  border-color: var(--accent-color);
+  background-color: rgba(255, 94, 87, 0.1);
+  color: var(--accent-color);
+}
+
+.vote-score {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  min-width: 30px;
+  text-align: center;
+}
+
+.delete-btn {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background-color: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.delete-btn:hover {
+  opacity: 1;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .suggestion-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .suggestion-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
