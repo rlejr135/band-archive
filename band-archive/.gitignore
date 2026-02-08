@@ -1,0 +1,26 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm/
+
+# Backend
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+instance/
+.pytest_cache/
+
+# Frontend
+.DS_Store
+coverage/
+.vscode/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*

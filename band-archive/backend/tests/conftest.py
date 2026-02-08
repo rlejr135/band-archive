@@ -1,26 +1,25 @@
 import os
 import sys
-import tempfile
+
 import pytest
 
 # Add backend directory to path so imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from extensions import db as _db
-from app import app as _app
+from app import create_app
+from config import TestingConfig
 
 
 @pytest.fixture
 def app(tmp_path):
-    _app.config['TESTING'] = True
-    _app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    _app.config['UPLOAD_FOLDER'] = str(tmp_path / 'uploads')
-    _app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
-    os.makedirs(_app.config['UPLOAD_FOLDER'], exist_ok=True)
+    test_app = create_app(TestingConfig)
+    test_app.config['UPLOAD_FOLDER'] = str(tmp_path / 'uploads')
+    os.makedirs(test_app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-    with _app.app_context():
+    with test_app.app_context():
         _db.create_all()
-        yield _app
+        yield test_app
         _db.session.remove()
         _db.drop_all()
 
