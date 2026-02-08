@@ -1,4 +1,4 @@
-export const API_URL = 'http://localhost:5000';
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 // Fetch all songs
 export const fetchSongs = async () => {
@@ -154,6 +154,46 @@ export const deletePracticeLog = async (id) => {
     method: 'DELETE',
   });
   if (!response.ok) throw new Error('Failed to delete practice log');
+  return await response.json();
+};
+
+// Fetch all song suggestions
+export const fetchSuggestions = async () => {
+  const response = await fetch(`${API_URL}/suggestions`);
+  if (!response.ok) throw new Error('Failed to fetch suggestions');
+  return await response.json();
+};
+
+// Create song suggestion
+export const createSuggestion = async (data) => {
+  const response = await fetch(`${API_URL}/suggestions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error('Failed to create suggestion');
+  return await response.json();
+};
+
+// Delete song suggestion
+export const deleteSuggestion = async (id, password) => {
+  const response = await fetch(`${API_URL}/suggestions/${id}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) throw new Error('Failed to delete suggestion');
+  return await response.json();
+};
+
+// Vote on song suggestion
+export const voteSuggestion = async (id, voteType) => {
+  const response = await fetch(`${API_URL}/suggestions/${id}/vote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vote_type: voteType }),
+  });
+  if (!response.ok) throw new Error('Failed to vote');
   return await response.json();
 };
 

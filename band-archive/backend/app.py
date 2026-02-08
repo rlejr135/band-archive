@@ -10,6 +10,7 @@ from errors import register_error_handlers
 from routes.songs import songs_bp
 from routes.practice_logs import practice_logs_bp
 from routes.dashboard import dashboard_bp
+from routes.suggestions import suggestions_bp
 from config import DevelopmentConfig
 
 load_dotenv()
@@ -26,6 +27,7 @@ def create_app(config_class=DevelopmentConfig):
     app.register_blueprint(songs_bp)
     app.register_blueprint(practice_logs_bp)
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(suggestions_bp)
 
     with app.app_context():
         db.create_all()

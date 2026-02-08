@@ -1,10 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="밴드 연습 기록 및 곡 관리 아카이브">
+    <meta name="theme-color" content="#ffd32a">
     <title>들뜬 Band Archive</title>
+    
+    <!-- GitHub Pages SPA 라우팅 복원 스크립트 -->
+    <script>
+      (function() {
+        var redirect = sessionStorage.getItem('redirect');
+        if (redirect) {
+          sessionStorage.removeItem('redirect');
+          // 리다이렉트된 경로로 history 업데이트
+          window.history.replaceState(null, null, redirect);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

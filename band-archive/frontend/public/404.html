@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Band Archive</title>
+  <script>
+    // GitHub Pages SPA 라우팅 처리
+    // 모든 경로를 index.html로 리다이렉트
+    const path = window.location.pathname;
+    const search = window.location.search;
+    const hash = window.location.hash;
+    
+    // 경로를 쿼리 파라미터로 변환하여 index.html로 이동
+    sessionStorage.setItem('redirect', path + search + hash);
+    window.location.replace('/band-archive/');
+  </script>
+</head>
+<body>
+  <p>리다이렉트 중...</p>
+</body>
+</html>

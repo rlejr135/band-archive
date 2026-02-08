@@ -18,6 +18,8 @@ uploads/
 .DS_Store
 coverage/
 .vscode/
+.env.local
+*.local
 
 # Logs
 npm-debug.log*
