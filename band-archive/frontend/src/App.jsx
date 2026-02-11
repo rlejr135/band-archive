@@ -7,6 +7,8 @@ import SongForm from './components/SongForm';
 import SearchBar from './components/SearchBar';
 import Dashboard from './components/Dashboard';
 import SongSuggestion from './components/SongSuggestion';
+import MemberDashboard from './components/MemberDashboard';
+import MemberDetail from './components/MemberDetail';
 import './App.css';
 import './components/Header.css';
 
@@ -134,6 +136,7 @@ const MainContent = () => {
       if (location.pathname === '/') return 'dashboard';
       if (location.pathname.startsWith('/songs')) return 'songs';
       if (location.pathname === '/suggestions') return 'suggestions';
+      if (location.pathname.startsWith('/members')) return 'members';
       return '';
   };
   
@@ -164,6 +167,12 @@ const MainContent = () => {
             🎵 곡 목록
           </button>
           <button
+            className={`nav-btn ${currentView === 'members' ? 'active' : ''}`}
+            onClick={() => navigate('/members')}
+          >
+            👥 멤버
+          </button>
+          <button
             className={`nav-btn ${currentView === 'suggestions' ? 'active' : ''}`}
             onClick={() => navigate('/suggestions')}
           >
@@ -178,8 +187,9 @@ const MainContent = () => {
             <Route path="/" element={<Dashboard onSelectSong={(song) => navigate(`/songs/${song.id}`)} onViewSongs={() => navigate('/songs')} />} />
             <Route path="/songs" element={<SongPage />} />
             <Route path="/songs/:id" element={<SongPage />} />
-            {/* '/songs/new' could be handled if we wanted deep link for creating */}
             <Route path="/suggestions" element={<SongSuggestion />} />
+            <Route path="/members" element={<MemberDashboard />} />
+            <Route path="/members/:id" element={<MemberDetail />} />
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
