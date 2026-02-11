@@ -84,6 +84,45 @@ class SongSuggestion(db.Model):
         }
 
 
+class Member(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    instrument = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'instrument': self.instrument,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class PersonalLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    filename = db.Column(db.String(200), nullable=False)
+    original_filename = db.Column(db.String(200), nullable=True)
+    file_type = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    member = db.relationship('Member', backref=db.backref('personal_logs', lazy=True, cascade='all, delete-orphan'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'member_id': self.member_id,
+            'member_name': self.member.name if self.member else None,
+            'title': self.title,
+            'filename': self.original_filename or self.filename,
+            'file_type': self.file_type,
+            'url': f'/uploads/personal_logs/{self.filename}',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class PracticeLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)

@@ -11,6 +11,8 @@ from routes.songs import songs_bp
 from routes.practice_logs import practice_logs_bp
 from routes.dashboard import dashboard_bp
 from routes.suggestions import suggestions_bp
+from routes.members import members_bp
+from routes.personal_logs import personal_logs_bp as member_personal_logs_bp
 from config import DevelopmentConfig
 
 load_dotenv()
@@ -39,6 +41,8 @@ def create_app(config_class=None):
     app.register_blueprint(practice_logs_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
+    app.register_blueprint(members_bp)
+    app.register_blueprint(member_personal_logs_bp)
 
     with app.app_context():
         db.create_all()
