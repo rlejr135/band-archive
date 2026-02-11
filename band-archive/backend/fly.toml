@@ -10,6 +10,7 @@ primary_region = 'nrt'
 
 [env]
   FLASK_CONFIG = 'config.ProductionConfig'
+  CORS_ALLOWED_ORIGINS = 'https://rlejr135.github.io'
 
 [mounts]
   source = 'data'
