@@ -12,7 +12,9 @@ from validators import (
     validate_difficulty,
     validate_required_string,
     validate_non_empty_string,
+    validate_string_length,
     allowed_file,
+    generate_secure_filename,
     ALLOWED_EXTENSIONS,
 )
 
@@ -77,7 +79,11 @@ def add_song():
         raise ValidationError("Request body is required")
 
     validate_required_string(data.get('title'), 'title')
+    validate_string_length(data.get('title'), 'title', 100)
     validate_required_string(data.get('artist'), 'artist')
+    validate_string_length(data.get('artist'), 'artist', 100)
+    validate_string_length(data.get('link'), 'link', 200)
+    validate_string_length(data.get('genre'), 'genre', 50)
 
     status = data.get('status', 'Practice')
     validate_status(status)
@@ -111,10 +117,12 @@ def update_song(id):
 
     if 'title' in data:
         validate_non_empty_string(data['title'], 'title')
+        validate_string_length(data['title'], 'title', 100)
         song.title = data['title']
 
     if 'artist' in data:
         validate_non_empty_string(data['artist'], 'artist')
+        validate_string_length(data['artist'], 'artist', 100)
         song.artist = data['artist']
 
     if 'status' in data:
@@ -130,10 +138,12 @@ def update_song(id):
     if 'chords' in data:
         song.chords = data['chords']
     if 'link' in data:
+        validate_string_length(data['link'], 'link', 200)
         song.link = data['link']
     if 'memo' in data:
         song.memo = data['memo']
     if 'genre' in data:
+        validate_string_length(data['genre'], 'genre', 50)
         song.genre = data['genre']
 
     db.session.commit()
@@ -169,16 +179,15 @@ def upload_sheet_music(id):
     if not allowed_file(file.filename):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    # Use _safe_filename to preserve Korean characters
-    filename = _safe_filename(file.filename)
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-    filename = f"{id}_{timestamp}_{filename}"
+    filename = generate_secure_filename(file.filename)
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
+    os.chmod(file_path, 0o644)
 
     media = Media(
         song_id=id,
         filename=filename,
+        original_filename=file.filename,
         file_type=_detect_file_type(filename),
         file_size=os.path.getsize(file_path),
     )
@@ -209,16 +218,15 @@ def add_media(id):
     if not allowed_file(file.filename):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    # Use _safe_filename to preserve Korean characters
-    filename = _safe_filename(file.filename)
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-    filename = f"{id}_{timestamp}_{filename}"
+    filename = generate_secure_filename(file.filename)
     file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
+    os.chmod(file_path, 0o644)
 
     media = Media(
         song_id=id,
         filename=filename,
+        original_filename=file.filename,
         file_type=_detect_file_type(filename),
         file_size=os.path.getsize(file_path),
     )
@@ -236,6 +244,9 @@ def rename_media(media_id):
     new_name = request.json.get('filename')
     if not new_name:
         raise ValidationError("New filename is required")
+
+    if not allowed_file(new_name) and '.' in new_name:
+        raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     # If no extension provided, append the original extension
     if '.' not in new_name:

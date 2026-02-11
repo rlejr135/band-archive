@@ -6,7 +6,7 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import Song, PracticeLog
 from errors import NotFoundError, ValidationError
-from validators import allowed_file, ALLOWED_EXTENSIONS
+from validators import allowed_file, generate_secure_filename, ALLOWED_EXTENSIONS
 
 practice_logs_bp = Blueprint('practice_logs', __name__)
 
@@ -95,9 +95,10 @@ def upload_recording(id):
     if not allowed_file(file.filename):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    filename = secure_filename(file.filename)
-    filename = f"practice_{id}_{filename}"
-    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
+    filename = generate_secure_filename(file.filename)
+    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+    file.save(file_path)
+    os.chmod(file_path, 0o644)
 
     log.recording = filename
     db.session.commit()

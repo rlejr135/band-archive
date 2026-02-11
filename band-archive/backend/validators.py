@@ -1,3 +1,5 @@
+import uuid
+
 from errors import ValidationError
 
 ALLOWED_EXTENSIONS = {
@@ -33,5 +35,17 @@ def validate_non_empty_string(value, field_name):
         raise ValidationError(f"{field_name} cannot be empty")
 
 
+def validate_string_length(value, field_name, max_length):
+    if value and len(value) > max_length:
+        raise ValidationError(f"{field_name} must be {max_length} characters or less")
+
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def generate_secure_filename(filename):
+    """Generate a randomized filename preserving the original extension."""
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    random_name = uuid.uuid4().hex
+    return f"{random_name}.{ext}" if ext else random_name

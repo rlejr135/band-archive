@@ -42,6 +42,7 @@ class Media(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)
     filename = db.Column(db.String(200), nullable=False)
+    original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -52,7 +53,7 @@ class Media(db.Model):
         return {
             'id': self.id,
             'song_id': self.song_id,
-            'filename': self.filename,
+            'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
             'url': f'/uploads/{self.filename}',

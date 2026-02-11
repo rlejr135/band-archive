@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import SongSuggestion
 from errors import NotFoundError, ValidationError
+from validators import validate_string_length
 
 suggestions_bp = Blueprint('suggestions', __name__)
 
@@ -34,10 +35,13 @@ def create_suggestion():
 
     if not title:
         raise ValidationError("Title is required")
+    validate_string_length(title, 'title', 100)
     if not artist:
         raise ValidationError("Artist is required")
+    validate_string_length(artist, 'artist', 100)
     if not link:
         raise ValidationError("Link is required")
+    validate_string_length(link, 'link', 500)
 
     memo = data.get('memo', '').strip() or None
     suggestion = SongSuggestion(title=title, artist=artist, link=link, memo=memo)
