@@ -92,7 +92,7 @@ export const uploadPersonalLog = async (memberId, file, title, onProgress) => {
 
 // Delete personal log
 export const deletePersonalLog = async (logId) => {
-  const response = await fetch(`${API_URL}/logs/${logId}`, {
+  const response = await fetch(`${API_URL}/personal-logs/${logId}`, {
     method: 'DELETE',
   });
   if (!response.ok) throw new Error('Failed to delete personal log');
