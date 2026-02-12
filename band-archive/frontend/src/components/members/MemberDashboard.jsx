@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchMembers, createMember } from '../services/memberApi';
+import { fetchMembers, createMember } from '../../services/memberApi';
 import './MemberDashboard.css';
 
 const MemberDashboard = () => {

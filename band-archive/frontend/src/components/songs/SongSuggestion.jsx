@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { fetchSuggestions, createSuggestion, deleteSuggestion, voteSuggestion } from '../services/api';
-import PasswordModal from './PasswordModal';
+import { fetchSuggestions, createSuggestion, deleteSuggestion, voteSuggestion } from '../../services/api';
+import PasswordModal from '../common/PasswordModal';
 import './SongSuggestion.css';
 
 const SongSuggestion = () => {

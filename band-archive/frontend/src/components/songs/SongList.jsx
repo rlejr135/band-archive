@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import PasswordModal from './PasswordModal';
+import PasswordModal from '../common/PasswordModal';
 import './SongList.css';
 
 const SongList = ({ songs, onSelectSong, onDeleteSong, onAddSong }) => {

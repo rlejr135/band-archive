@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchDashboardStats } from '../services/api';
+import { fetchDashboardStats } from '../../services/api';
 import './Dashboard.css';
 
 const Dashboard = ({ onSelectSong, onViewSongs }) => {

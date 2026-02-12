@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getMember, fetchMemberLogs, uploadPersonalLog, deletePersonalLog, deleteMember } from '../services/memberApi';
-import FileUpload from './FileUpload';
-import MediaPlayer from './MediaPlayer';
-import { API_URL } from '../services/api';
+import { getMember, fetchMemberLogs, uploadPersonalLog, deletePersonalLog, deleteMember } from '../../services/memberApi';
+import FileUpload from '../common/FileUpload';
+import MediaPlayer from '../common/MediaPlayer';
+import { API_URL } from '../../services/api';
 import './MemberDetail.css';
 
 const MemberDetail = () => {

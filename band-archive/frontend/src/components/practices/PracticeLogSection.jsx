@@ -6,7 +6,7 @@ import {
   deletePracticeLog,
   uploadRecording,
   API_URL,
-} from '../services/api';
+} from '../../services/api';
 import './PracticeLogSection.css';
 
 const PracticeLogSection = ({ songId }) => {

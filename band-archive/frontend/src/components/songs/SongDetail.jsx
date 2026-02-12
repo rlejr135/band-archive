@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { API_URL } from '../services/api';
-import { useSongs } from '../context/SongContext';
+import { API_URL } from '../../services/api';
+import { useSongs } from '../../context/SongContext';
 import './SongDetail.css';
 import './SongMedia.css';
-import FileUpload from './FileUpload';
-import MediaPlayer from './MediaPlayer';
-import PracticeLogSection from './PracticeLogSection';
+import FileUpload from '../common/FileUpload';
+import MediaPlayer from '../common/MediaPlayer';
+import PracticeLogSection from '../practices/PracticeLogSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);

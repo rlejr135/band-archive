@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import { SongProvider, useSongs } from './context/SongContext';
-import SongList from './components/SongList';
-import SongDetail from './components/SongDetail';
-import SongForm from './components/SongForm';
-import SearchBar from './components/SearchBar';
-import Dashboard from './components/Dashboard';
-import SongSuggestion from './components/SongSuggestion';
-import MemberDashboard from './components/MemberDashboard';
-import MemberDetail from './components/MemberDetail';
+import SongList from './components/songs/SongList';
+import SongDetail from './components/songs/SongDetail';
+import SongForm from './components/songs/SongForm';
+import SearchBar from './components/common/SearchBar';
+import Dashboard from './components/dashboard/Dashboard';
+import SongSuggestion from './components/songs/SongSuggestion';
+import MemberDashboard from './components/members/MemberDashboard';
+import MemberDetail from './components/members/MemberDetail';
 import './App.css';
-import './components/Header.css';
+import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
+// Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
+// Ah, previous App.jsx overwrote MainContent but didn't import Header component, it implemented Header inside MainContent.
+// But Header.css was imported. We moved Header.css to layout/Header.css.
 
 import logo from './assets/logo.png';
 
