@@ -140,15 +140,6 @@
     color: white;
 }
 
-.empty-logs {
-    text-align: center;
-    color: var(--text-secondary);
-    padding: 40px;
-    background: var(--surface-color);
-    border-radius: 12px;
-    font-style: italic;
-}
-
 @media (max-width: 600px) {
     .member-profile {
         flex-direction: column;

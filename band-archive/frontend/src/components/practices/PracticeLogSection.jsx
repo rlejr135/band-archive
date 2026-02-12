@@ -7,6 +7,7 @@ import {
   uploadRecording,
   API_URL,
 } from '../../services/api';
+import MediaPlayer from '../common/MediaPlayer';
 import './PracticeLogSection.css';
 
 const PracticeLogSection = ({ songId }) => {
@@ -15,6 +16,9 @@ const PracticeLogSection = ({ songId }) => {
   const [showForm, setShowForm] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
   const [formData, setFormData] = useState({ content: '', feedback: '' });
+  const [selectedRecording, setSelectedRecording] = useState(null);
+  const [uploadingLogId, setUploadingLogId] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const loadLogs = useCallback(async () => {
     try {
@@ -60,7 +64,7 @@ const PracticeLogSection = ({ songId }) => {
     if (!window.confirm('정말 이 연습 일지를 삭제하시겠습니까?')) {
       return;
     }
-    
+
     try {
       await deletePracticeLog(id);
       setLogs(logs.filter(l => l.id !== id));
@@ -75,11 +79,28 @@ const PracticeLogSection = ({ songId }) => {
     if (!file) return;
 
     try {
-      const updated = await uploadRecording(logId, file);
+      setUploadingLogId(logId);
+      setUploadProgress(0);
+      const updated = await uploadRecording(logId, file, (progress) => {
+        setUploadProgress(progress);
+      });
       setLogs(logs.map(l => l.id === logId ? updated : l));
     } catch (error) {
       console.error('Failed to upload recording:', error);
+    } finally {
+      setUploadingLogId(null);
+      setUploadProgress(0);
     }
+  };
+
+  const handlePlayRecording = (log) => {
+    const ext = log.recording.split('.').pop().toLowerCase();
+    const isVideo = ['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext);
+    setSelectedRecording({
+      name: log.recording,
+      url: `${API_URL}/uploads/${log.recording}`,
+      type: isVideo ? 'video' : 'audio',
+    });
   };
 
   const resetForm = () => {
@@ -138,6 +159,17 @@ const PracticeLogSection = ({ songId }) => {
         </form>
       )}
 
+      {/* Recording Player */}
+      {selectedRecording && (
+        <div className="recording-player-wrapper">
+          <div className="recording-player-header">
+            <span>🎵 {selectedRecording.name}</span>
+            <button className="close-player-btn" onClick={() => setSelectedRecording(null)}>✕</button>
+          </div>
+          <MediaPlayer file={selectedRecording} />
+        </div>
+      )}
+
       {/* List */}
       {loading ? (
         <div className="loading-small">로딩 중...</div>
@@ -155,9 +187,17 @@ const PracticeLogSection = ({ songId }) => {
                 )}
                 {log.recording && (
                   <div className="log-recording">
-                    🎵 <a href={`${API_URL}/uploads/${log.recording}`} target="_blank" rel="noreferrer">
-                      {log.recording}
-                    </a>
+                    <button className="play-recording-btn" onClick={() => handlePlayRecording(log)}>
+                      ▶️ {log.recording}
+                    </button>
+                  </div>
+                )}
+                {uploadingLogId === log.id && (
+                  <div className="upload-progress-inline">
+                    <div className="progress-bar-small">
+                      <div className="progress-fill-small" style={{ width: `${uploadProgress}%` }} />
+                    </div>
+                    <span>{Math.round(uploadProgress)}%</span>
                   </div>
                 )}
               </div>
@@ -178,7 +218,7 @@ const PracticeLogSection = ({ songId }) => {
           ))}
         </ul>
       ) : (
-        <div className="empty-logs">아직 연습 일지가 없습니다. 새 일지를 추가해보세요!</div>
+        <div className="empty-state-box">아직 연습 일지가 없습니다. 새 일지를 추가해보세요!</div>
       )}
     </div>
   );

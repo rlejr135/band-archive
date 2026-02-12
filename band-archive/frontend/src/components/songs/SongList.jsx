@@ -41,7 +41,7 @@ const SongList = ({ songs, onSelectSong, onDeleteSong, onAddSong }) => {
           ))}
         </ul>
       ) : (
-        <div className="empty-list">등록된 곡이 없습니다.</div>
+        <div className="empty-state-box">등록된 곡이 없습니다.</div>
       )}
 
       <button className="add-song-btn" onClick={onAddSong}>

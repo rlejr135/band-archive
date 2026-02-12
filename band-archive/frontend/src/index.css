@@ -56,5 +56,25 @@ button {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #a0aec0; 
+  background: #a0aec0;
+}
+
+/* Common utility classes */
+.empty-state-box {
+  text-align: center;
+  padding: 30px;
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-style: italic;
+  border: 1px dashed var(--border-color);
+}
+
+.error-state {
+  text-align: center;
+  padding: 30px;
+  color: var(--accent-color);
+  background-color: var(--surface-color);
+  border-radius: 8px;
+  border: 1px solid var(--accent-color);
 }

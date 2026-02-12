@@ -136,13 +136,80 @@
   margin-top: 8px;
 }
 
-.log-recording a {
+.play-recording-btn {
+  background: none;
+  border: 1px solid var(--border-color);
   color: var(--secondary-color);
-  text-decoration: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
 }
 
-.log-recording a:hover {
-  text-decoration: underline;
+.play-recording-btn:hover {
+  background-color: var(--surface-color);
+  border-color: var(--secondary-color);
+}
+
+/* Inline upload progress */
+.upload-progress-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.progress-bar-small {
+  flex: 1;
+  height: 6px;
+  background-color: var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill-small {
+  height: 100%;
+  background-color: var(--primary-color);
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+/* Recording player wrapper */
+.recording-player-wrapper {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 15px;
+}
+
+.recording-player-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.close-player-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.close-player-btn:hover {
+  color: var(--accent-color);
+  background-color: rgba(255, 94, 87, 0.1);
 }
 
 /* Actions */
@@ -174,16 +241,6 @@
 .log-delete-btn:hover {
   background-color: var(--surface-color);
   border-color: var(--accent-color);
-}
-
-.empty-logs {
-  text-align: center;
-  padding: 30px;
-  background-color: var(--background-color);
-  border-radius: 8px;
-  color: var(--text-secondary);
-  font-style: italic;
-  border: 1px dashed var(--border-color);
 }
 
 @media (max-width: 768px) {

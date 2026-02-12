@@ -1,31 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchMembers, createMember } from '../../services/memberApi';
+import useAsyncData from '../../hooks/useAsyncData';
 import './MemberDashboard.css';
 
 const MemberDashboard = () => {
-    const [members, setMembers] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const { data: members, setData: setMembers, loading, error, reload } = useAsyncData(fetchMembers);
     const [showForm, setShowForm] = useState(false);
     const [newMember, setNewMember] = useState({ name: '', instrument: '' });
 
     const navigate = useNavigate();
-
-    useEffect(() => {
-        loadMembers();
-    }, []);
-
-    const loadMembers = async () => {
-        try {
-            const data = await fetchMembers();
-            setMembers(data);
-        } catch (err) {
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const handleCreate = async (e) => {
         e.preventDefault();
@@ -33,14 +17,14 @@ const MemberDashboard = () => {
             await createMember(newMember);
             setShowForm(false);
             setNewMember({ name: '', instrument: '' });
-            loadMembers();
+            reload();
         } catch (err) {
             alert(err.message);
         }
     };
 
     if (loading) return <div className="loading">멤버 로딩 중...</div>;
-    if (error) return <div className="error">{error}</div>;
+    if (error) return <div className="error-state">{error}</div>;
 
     return (
         <div className="member-dashboard fade-in">
@@ -72,16 +56,16 @@ const MemberDashboard = () => {
             )}
 
             <div className="member-grid">
-                {members.map(member => (
+                {members && members.map(member => (
                     <div key={member.id} className="member-card" onClick={() => navigate(`/members/${member.id}`)}>
                         <div className="member-avatar">{member.name[0]}</div>
                         <h3>{member.name}</h3>
                         <p className="instrument">{member.instrument}</p>
                     </div>
                 ))}
-                
-                {members.length === 0 && !loading && (
-                    <div className="empty-members">
+
+                {members && members.length === 0 && (
+                    <div className="empty-state-box">
                         <p>등록된 멤버가 없습니다.</p>
                     </div>
                 )}

@@ -101,14 +101,3 @@
   color: var(--primary-color);
   background-color: rgba(255, 211, 42, 0.05);
 }
-
-.empty-list {
-  text-align: center;
-  padding: 30px 10px;
-  color: var(--text-secondary);
-  font-style: italic;
-  background-color: var(--surface-color);
-  border-radius: 8px;
-  margin-bottom: 15px;
-  border: 1px dashed var(--border-color);
-}
