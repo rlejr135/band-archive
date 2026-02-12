@@ -18,6 +18,25 @@ from config import DevelopmentConfig
 load_dotenv()
 
 
+def _run_migrations(app):
+    """기존 테이블에 누락된 컬럼을 추가하는 스타트업 마이그레이션."""
+    import sqlite3
+    db_uri = app.config['SQLALCHEMY_DATABASE_URI']
+    if not db_uri.startswith('sqlite'):
+        return
+    db_path = db_uri.replace('sqlite:///', '')
+    try:
+        conn = sqlite3.connect(db_path)
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
+        if 'original_filename' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN original_filename VARCHAR(200)')
+            conn.commit()
+            app.logger.info('Migration: added original_filename column to media table')
+        conn.close()
+    except Exception as e:
+        app.logger.warning(f'Startup migration failed: {e}')
+
+
 def create_app(config_class=None):
     if config_class is None:
         config_name = os.getenv('FLASK_CONFIG', 'config.DevelopmentConfig')
@@ -49,6 +68,7 @@ def create_app(config_class=None):
 
     with app.app_context():
         db.create_all()
+        _run_migrations(app)
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
     return app
