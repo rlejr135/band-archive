@@ -92,7 +92,7 @@ const MemberDetail = () => {
                         </div>
                         <MediaPlayer
                             file={{
-                              url: `${API_URL}/uploads/${log.filename}`,
+                              url: `${API_URL}${log.url}`,
                               name: log.title || log.filename,
                               type: log.file_type,
                             }}
