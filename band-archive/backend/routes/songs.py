@@ -46,24 +46,28 @@ def home():
 
 @songs_bp.route('/songs', methods=['GET'])
 def get_songs():
-    query = Song.query
+    try:
+        query = Song.query
 
-    q = request.args.get('q')
-    if q:
-        query = query.filter(
-            Song.title.ilike(f'%{q}%') | Song.artist.ilike(f'%{q}%')
-        )
+        q = request.args.get('q')
+        if q:
+            query = query.filter(
+                Song.title.ilike(f'%{q}%') | Song.artist.ilike(f'%{q}%')
+            )
 
-    status = request.args.get('status')
-    if status:
-        query = query.filter(Song.status == status)
+        status = request.args.get('status')
+        if status:
+            query = query.filter(Song.status == status)
 
-    genre = request.args.get('genre')
-    if genre:
-        query = query.filter(Song.genre == genre)
+        genre = request.args.get('genre')
+        if genre:
+            query = query.filter(Song.genre == genre)
 
-    songs = query.all()
-    return jsonify([song.to_dict() for song in songs])
+        songs = query.all()
+        return jsonify([song.to_dict() for song in songs])
+    except Exception as e:
+        current_app.logger.error(f"Error fetching songs: {str(e)}")
+        return jsonify({"error": str(e), "message": "Internal Server Error in get_songs"}), 500
 
 
 @songs_bp.route('/songs/<int:id>', methods=['GET'])

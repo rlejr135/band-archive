@@ -27,12 +27,15 @@ def create_app(config_class=None):
         config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
-    allowed_origins = [
-        origin.strip()
-        for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
-        if origin.strip()
-    ]
-    CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
+    if app.debug:
+        CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+    else:
+        allowed_origins = [
+            origin.strip()
+            for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
+            if origin.strip()
+        ]
+        CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
 
     db.init_app(app)
     Migrate(app, db)
