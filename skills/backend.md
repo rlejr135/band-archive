@@ -1,0 +1,241 @@
+# Band Archive Backend
+
+## 개요
+
+밴드 합주/연습 관리용 REST API 서버. 곡 관리, 미디어 파일 업로드, 연습 기록, 멤버 관리, 곡 추천 투표 기능을 제공한다.
+
+## 기술 스택
+
+- **프레임워크:** Flask 3.0.0
+- **ORM:** Flask-SQLAlchemy 3.1.1
+- **DB:** SQLite (개발/배포 모두)
+- **마이그레이션:** Flask-Migrate 4.0.5
+- **CORS:** Flask-Cors 4.0.0
+- **서버:** Gunicorn (프로덕션), Werkzeug (개발)
+- **배포:** Docker + Fly.io (도쿄 리전 `nrt`)
+- **테스트:** pytest 7.4.3
+
+## 디렉토리 구조
+
+```
+band-archive/backend/
+├── app.py              # Flask 앱 팩토리, 블루프린트 등록, 시작 시 마이그레이션
+├── config.py           # Dev/Test/Prod 설정 클래스
+├── extensions.py       # SQLAlchemy 인스턴스
+├── models.py           # 전체 DB 모델 (6개)
+├── errors.py           # ValidationError, NotFoundError 커스텀 예외
+├── validators.py       # 입력 검증 유틸리티
+├── requirements.txt    # 의존성
+├── .env                # 환경 변수
+├── Dockerfile          # python:3.13-slim 기반
+├── fly.toml            # Fly.io 배포 설정
+├── routes/
+│   ├── songs.py        # 곡 CRUD + 미디어 관리 (가장 복잡)
+│   ├── practice_logs.py # 연습 기록
+│   ├── members.py      # 멤버 관리
+│   ├── personal_logs.py # 개인 녹음 기록
+│   ├── suggestions.py  # 곡 추천 + 투표
+│   └── dashboard.py    # 통계
+└── tests/
+    ├── conftest.py     # pytest 픽스처
+    └── test_songs.py   # 곡 엔드포인트 테스트
+```
+
+## DB 모델
+
+### Song
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| title | String(100), Required | 곡 제목 |
+| artist | String(100), Required | 아티스트 |
+| status | String(20), Default='Practice' | Practice / Completed / OnHold |
+| lyrics | Text | 가사 |
+| chords | Text | 코드 |
+| link | String(200) | 참고 링크 |
+| memo | Text | 메모 |
+| genre | String(50) | 장르 |
+| difficulty | Integer, Default=3 | 난이도 1~5 |
+| sheet_music | String(200) | 악보 파일명 |
+| created_at / updated_at | DateTime | 자동 생성/갱신 |
+
+관계: `media_files` (1:N → Media), `practice_logs` (1:N → PracticeLog)
+
+### Media
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| song_id | FK → Song | |
+| filename | String(200) | UUID 기반 저장 파일명 |
+| original_filename | String(200) | 원본 파일명 (표시용) |
+| file_type | String(20) | audio / video / image / document |
+| file_size | Integer | 바이트 단위 |
+
+### Member
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| name | String(100), Required | 이름 |
+| instrument | String(100), Required | 악기 |
+
+관계: `personal_logs` (1:N → PersonalLog)
+
+### PersonalLog
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| member_id | FK → Member | |
+| title | String(200), Required | 녹음 제목 |
+| filename | String(200) | UUID 저장 파일명 |
+| original_filename | String(200) | 원본 파일명 |
+| file_type | String(20) | audio / video만 허용 |
+
+저장 경로: `uploads/personal_logs/`
+
+### PracticeLog
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| song_id | FK → Song | |
+| date | DateTime | 연습 날짜 |
+| content | Text | 연습 내용 |
+| feedback | Text | 피드백 |
+| recording | String(200) | 녹음 파일명 |
+
+### SongSuggestion
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| title | String(100), Required | 곡 제목 |
+| artist | String(100), Required | 아티스트 |
+| link | String(500), Required | 링크 |
+| memo | Text | 메모 |
+| thumbs_up / thumbs_down | Integer, Default=0 | 투표 수 |
+
+## API 엔드포인트
+
+### 곡 관리 (`/songs`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/songs` | 전체 조회 (필터: `q`, `status`, `genre`) |
+| GET | `/songs/<id>` | 단건 조회 |
+| POST | `/songs` | 생성 |
+| PUT | `/songs/<id>` | 수정 |
+| DELETE | `/songs/<id>` | 삭제 (미디어 파일 캐스케이드 삭제) |
+
+### 미디어 (`/songs/<id>/media`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/songs/<id>/media` | 곡의 미디어 목록 |
+| POST | `/songs/<id>/media` | 미디어 업로드 |
+| POST | `/songs/<id>/upload` | 악보 업로드 |
+| PUT | `/media/<id>/rename` | 미디어 이름 변경 (한글 지원) |
+| DELETE | `/media/<id>` | 미디어 삭제 |
+| GET | `/uploads/<filename>` | 파일 다운로드/스트리밍 |
+
+### 연습 기록 (`/practice-logs`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/songs/<id>/practice-logs` | 곡별 연습 기록 조회 |
+| POST | `/songs/<id>/practice-logs` | 연습 기록 생성 |
+| GET | `/practice-logs/<id>` | 단건 조회 |
+| PUT | `/practice-logs/<id>` | 수정 |
+| DELETE | `/practice-logs/<id>` | 삭제 |
+| POST | `/practice-logs/<id>/upload` | 녹음 업로드 |
+
+### 멤버 (`/members`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/members` | 전체 조회 |
+| POST | `/members` | 생성 |
+| GET | `/members/<id>` | 단건 조회 |
+| PUT | `/members/<id>` | 수정 |
+| DELETE | `/members/<id>` | 삭제 |
+
+### 개인 녹음 (`/members/<id>/logs`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/members/<id>/logs` | 멤버별 녹음 조회 |
+| POST | `/members/<id>/logs` | 녹음 업로드 (audio/video만) |
+| DELETE | `/personal-logs/<id>` | 녹음 삭제 |
+| GET | `/uploads/personal_logs/<filename>` | 녹음 스트리밍 |
+
+### 곡 추천 (`/suggestions`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/suggestions` | 전체 조회 (투표 차이순 정렬) |
+| POST | `/suggestions` | 추천 등록 |
+| DELETE | `/suggestions/<id>` | 삭제 (비밀번호: "admin") |
+| POST | `/suggestions/<id>/vote` | 투표 (vote_type: "up" / "down") |
+
+### 대시보드 (`/dashboard`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/dashboard/stats` | 통계 (총 곡 수, 상태별 수, 최근 기록) |
+
+### 기타
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/` | 헬스체크 ("Band Archive API is running!") |
+
+## 파일 업로드 처리
+
+- **허용 확장자:**
+  - 이미지: png, jpg, jpeg, gif, webp
+  - 문서: pdf
+  - 오디오: mp3, wav, ogg, m4a, aac, flac
+  - 비디오: mp4, webm, mov, avi, mkv
+- **최대 크기:** 200MB
+- **파일명:** UUID 기반 랜덤 생성 (`{uuid}.{ext}`), 원본 이름은 DB에 별도 저장
+- **M4A 특수 처리:** Content-Type을 `audio/mp4`로 설정 (브라우저 호환)
+- **저장 위치:** 개발 `backend/uploads/`, 프로덕션 `/data/uploads/`
+
+## 설정 및 환경 변수
+
+| 변수 | 설명 | 기본값 |
+|------|------|--------|
+| FLASK_ENV | 실행 환경 | development |
+| DATABASE_URL | DB 경로 | sqlite:///band_archive.db |
+| SECRET_KEY | Flask 시크릿 | dev-secret-key |
+| CORS_ALLOWED_ORIGINS | 허용 오리진 (콤마 구분) | localhost:5173,3000 |
+| FLASK_CONFIG | 설정 클래스 | (자동) |
+| UPLOAD_FOLDER | 업로드 경로 | (설정별 상이) |
+| PORT | 서버 포트 | 5000 |
+
+### 설정 클래스
+- **DevelopmentConfig:** DEBUG=True, SQLite 로컬 파일
+- **TestingConfig:** TESTING=True, 인메모리 SQLite
+- **ProductionConfig:** DEBUG=False, `/data/band_archive.db`, `/data/uploads`
+
+## 인증
+
+현재 인증 체계 없음. 곡 추천 삭제 시에만 하드코딩된 비밀번호(`"admin"`) 확인.
+
+## 캐스케이드 삭제
+
+- Song 삭제 → Media (DB + 파일시스템), PracticeLog 자동 삭제
+- Member 삭제 → PersonalLog 자동 삭제
+
+## 배포
+
+- **플랫폼:** Fly.io (도쿄 `nrt`)
+- **이미지:** python:3.13-slim
+- **서버:** gunicorn --bind 0.0.0.0:8080
+- **스토리지:** 2GB 영구 볼륨 `/data` 마운트
+- **프론트엔드 오리진:** `https://rlejr135.github.io`
+
+## 실행 방법
+
+```bash
+# 개발
+cd band-archive/backend
+pip install -r requirements.txt
+flask run --port 5000
+
+# 테스트
+pytest
+
+# 프로덕션 (Docker)
+docker build -t band-archive .
+docker run -p 8080:8080 band-archive
+```

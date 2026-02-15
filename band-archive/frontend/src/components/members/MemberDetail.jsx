@@ -23,11 +23,15 @@ const MemberDetail = () => {
 
   const handleUpload = async (file, onProgress) => {
     try {
-      const title = file.name.split('.')[0];
+      // Fix: Handle filenames with multiple dots correctly (e.g. "My.Song.mp3" -> "My.Song")
+      const lastDotIndex = file.name.lastIndexOf('.');
+      const title = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
+      
       await uploadPersonalLog(id, file, title, onProgress);
       reloadLogs();
     } catch (err) {
       alert('업로드 실패: ' + err.message);
+      throw err; // Re-throw to let FileUpload know it failed
     }
   };
 

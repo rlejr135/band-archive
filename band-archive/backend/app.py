@@ -27,11 +27,20 @@ def _run_migrations(app):
     db_path = db_uri.replace('sqlite:///', '')
     try:
         conn = sqlite3.connect(db_path)
+        
+        # Check media table
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
         if 'original_filename' not in columns:
             conn.execute('ALTER TABLE media ADD COLUMN original_filename VARCHAR(200)')
-            conn.commit()
             app.logger.info('Migration: added original_filename column to media table')
+
+        # Check personal_log table
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(personal_log)').fetchall()]
+        if 'original_filename' not in columns:
+            conn.execute('ALTER TABLE personal_log ADD COLUMN original_filename VARCHAR(200)')
+            app.logger.info('Migration: added original_filename column to personal_log table')
+            
+        conn.commit()
         conn.close()
     except Exception as e:
         app.logger.warning(f'Startup migration failed: {e}')
