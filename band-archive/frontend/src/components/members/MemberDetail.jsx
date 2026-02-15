@@ -26,7 +26,7 @@ const MemberDetail = () => {
       // Fix: Handle filenames with multiple dots correctly (e.g. "My.Song.mp3" -> "My.Song")
       const lastDotIndex = file.name.lastIndexOf('.');
       const title = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
-      
+
       await uploadPersonalLog(id, file, title, onProgress);
       reloadLogs();
     } catch (err) {
@@ -46,13 +46,13 @@ const MemberDetail = () => {
   };
 
   const handleDeleteMember = async () => {
-      if (!window.confirm('멤버와 모든 연습 기록이 삭제됩니다. 계속하시겠습니까?')) return;
-      try {
-          await deleteMember(id);
-          navigate('/members');
-      } catch (err) {
-          alert('삭제 실패: ' + err.message);
-      }
+    if (!window.confirm('멤버와 모든 연습 기록이 삭제됩니다. 계속하시겠습니까?')) return;
+    try {
+      await deleteMember(id);
+      navigate('/members');
+    } catch (err) {
+      alert('삭제 실패: ' + err.message);
+    }
   };
 
   if (loading) return <div className="loading">로딩 중...</div>;
@@ -64,47 +64,49 @@ const MemberDetail = () => {
       <div className="member-header-section">
         <button className="back-btn" onClick={() => navigate('/members')}>← 목록</button>
         <div className="member-profile">
-            <div className="member-avatar-large">{member.name[0]}</div>
-            <div className="member-info">
-                <h2>{member.name}</h2>
-                <span className="instrument-badge">{member.instrument}</span>
-            </div>
-            <button className="delete-btn-text" onClick={handleDeleteMember}>멤버 삭제</button>
+          <div className="member-avatar-large">{member.name[0]}</div>
+          <div className="member-info">
+            <h2>{member.name}</h2>
+            <span className="instrument-badge">{member.instrument}</span>
+          </div>
+          <button className="delete-btn-text" onClick={handleDeleteMember}>멤버 삭제</button>
         </div>
       </div>
 
       <div className="personal-log-upload">
         <h3>개인 연습 기록 업로드</h3>
         <FileUpload
-            onUpload={handleUpload}
-            accept=".mp3,.wav,.m4a,.mp4,.mov,.avi"
-            multiple={false}
+          onUpload={handleUpload}
+          accept=".mp3,.wav,.m4a,.mp4,.mov,.avi"
+          multiple={false}
         />
       </div>
 
       <div className="logs-list">
         <h3>연습 기록 ({logs ? logs.length : 0})</h3>
         {!logs || logs.length === 0 ? (
-            <p className="empty-state-box">기록이 없습니다.</p>
+          <p className="empty-state-box">기록이 없습니다.</p>
         ) : (
-            <div className="logs-grid">
-                {logs.map(log => (
-                    <div key={log.id} className="log-card">
-                        <div className="log-header">
-                            <h4>{log.title}</h4>
-                            <span className="log-date">{new Date(log.created_at).toLocaleDateString()}</span>
-                        </div>
-                        <MediaPlayer
-                            file={{
-                              url: `${API_URL}${log.url}`,
-                              name: log.title || log.filename,
-                              type: log.file_type,
-                            }}
-                        />
-                        <button className="delete-log-btn" onClick={() => handleDeleteLog(log.id)}>삭제</button>
-                    </div>
-                ))}
-            </div>
+          <div className="logs-grid">
+            {logs.map(log => (
+              <div key={log.id} className="log-card">
+                <div className="log-header">
+                  <h4>{log.title}</h4>
+                  <span className="log-date">{new Date(log.created_at).toLocaleDateString()}</span>
+                </div>
+                <div className="media-player-wrapper">
+                  <MediaPlayer
+                    file={{
+                      url: `${API_URL}${log.url}`,
+                      name: log.title || log.filename,
+                      type: log.file_type,
+                    }}
+                  />
+                </div>
+                <button className="delete-log-btn" onClick={() => handleDeleteLog(log.id)}>삭제</button>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>

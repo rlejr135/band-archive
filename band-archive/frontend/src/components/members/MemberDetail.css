@@ -93,25 +93,30 @@
 }
 
 .logs-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
 }
 
 .log-card {
     background: var(--surface-color);
-    padding: 20px;
+    padding: 15px 20px;
     border-radius: 12px;
     box-shadow: var(--shadow-sm);
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    width: 100%;
 }
 
 .log-header {
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    align-items: center;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 0;
+    flex: 1;
 }
 
 .log-header h4 {
@@ -125,16 +130,29 @@
     color: var(--text-secondary);
 }
 
+/* Add wrapper for media player to control width if needed */
+.log-card .media-player-wrapper {
+    flex: 2;
+    max-width: 500px;
+}
+
+/* Adjust MediaPlayer styles within log card if necessary, 
+   assuming MediaPlayer is flexible. If not, we might need to wrap it.
+   Let's check usage in JSX and wrap it there if needed. 
+*/
+
 .delete-log-btn {
-    margin-top: 15px;
+    margin-top: 0;
     background: none;
     border: 1px solid #ff4757;
     color: #ff4757;
-    padding: 8px;
+    padding: 6px 12px;
     border-radius: 6px;
     cursor: pointer;
-    width: 100%;
+    width: auto;
+    white-space: nowrap;
     transition: all 0.2s;
+    height: fit-content;
 }
 
 .delete-log-btn:hover {
