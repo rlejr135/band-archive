@@ -39,6 +39,10 @@ def _run_migrations(app):
         if 'original_filename' not in columns:
             conn.execute('ALTER TABLE personal_log ADD COLUMN original_filename VARCHAR(200)')
             app.logger.info('Migration: added original_filename column to personal_log table')
+        
+        if 'file_size' not in columns:
+            conn.execute('ALTER TABLE personal_log ADD COLUMN file_size INTEGER')
+            app.logger.info('Migration: added file_size column to personal_log table')
             
         conn.commit()
         conn.close()

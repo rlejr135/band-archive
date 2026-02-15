@@ -71,6 +71,10 @@ def create_log(member_id):
     filename = generate_secure_filename(file.filename)
     upload_dir = _get_upload_dir()
     file_path = os.path.join(upload_dir, filename)
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+    
     file.save(file_path)
     os.chmod(file_path, 0o644)
 
@@ -80,6 +84,7 @@ def create_log(member_id):
         filename=filename,
         original_filename=file.filename,
         file_type=_detect_file_type(file.filename),
+        file_size=file_size,
     )
     db.session.add(log)
     db.session.commit()

@@ -106,6 +106,7 @@ class PersonalLog(db.Model):
     filename = db.Column(db.String(200), nullable=False)
     original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=False)
+    file_size = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     member = db.relationship('Member', backref=db.backref('personal_logs', lazy=True, cascade='all, delete-orphan'))
@@ -118,6 +119,7 @@ class PersonalLog(db.Model):
             'title': self.title,
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
+            'file_size': self.file_size,
             'url': f'/uploads/personal_logs/{self.filename}',
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }

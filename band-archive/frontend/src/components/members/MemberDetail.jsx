@@ -18,6 +18,8 @@ const MemberDetail = () => {
     () => fetchMemberLogs(id), [id]
   );
 
+  const [playingLog, setPlayingLog] = useState(null);
+
   const loading = memberLoading || logsLoading;
   const error = memberError || logsError;
 
@@ -90,25 +92,55 @@ const MemberDetail = () => {
           <div className="logs-grid">
             {logs.map(log => (
               <div key={log.id} className="log-card">
-                <div className="log-header">
-                  <h4>{log.title}</h4>
-                  <span className="log-date">{new Date(log.created_at).toLocaleDateString()}</span>
+                <div className="log-icon-wrapper">
+                  <span className="log-icon">
+                    {log.file_type === 'video' ? '🎬' : '🎵'}
+                  </span>
                 </div>
-                <div className="media-player-wrapper">
-                  <MediaPlayer
-                    file={{
-                      url: `${API_URL}${log.url}`,
-                      name: log.title || log.filename,
-                      type: log.file_type,
-                    }}
-                  />
+                <div className="log-info">
+                  <div className="log-title" title={log.title}>{log.title}</div>
+                  <div className="log-meta">
+                    {log.file_size && (
+                      <span>{(log.file_size / (1024 * 1024)).toFixed(2)} MB</span>
+                    )}
+                    {/* If file_size is missing, show date as fallback */}
+                    {!log.file_size && (
+                      <span>{new Date(log.created_at).toLocaleDateString()}</span>
+                    )}
+                  </div>
                 </div>
-                <button className="delete-log-btn" onClick={() => handleDeleteLog(log.id)}>삭제</button>
+                <div className="log-actions">
+                  <button className="play-btn" onClick={() => setPlayingLog(log)}>
+                    ▶ 재생
+                  </button>
+                  <button className="delete-action-btn" onClick={() => handleDeleteLog(log.id)} title="삭제">
+                    🗑️
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {playingLog && (
+        <div className="media-modal-overlay" onClick={() => setPlayingLog(null)}>
+          <div className="media-modal-content" onClick={e => e.stopPropagation()}>
+            <button className="close-modal-btn" onClick={() => setPlayingLog(null)}>&times;</button>
+            <div className="modal-header">
+              <h3>{playingLog.title}</h3>
+            </div>
+            <MediaPlayer
+              file={{
+                url: `${API_URL}${playingLog.url}`,
+                name: playingLog.title,
+                type: playingLog.file_type,
+              }}
+              autoPlay
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
