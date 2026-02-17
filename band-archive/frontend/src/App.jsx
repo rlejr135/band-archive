@@ -9,6 +9,7 @@ import Dashboard from './components/dashboard/Dashboard';
 import SongSuggestion from './components/songs/SongSuggestion';
 import MemberDashboard from './components/members/MemberDashboard';
 import MemberDetail from './components/members/MemberDetail';
+import AnnouncementToast from './components/common/AnnouncementToast';
 import './App.css';
 import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
 // Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
@@ -21,12 +22,12 @@ import logo from './assets/logo.png';
 const SongPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { 
-    songs, loading, error, currentSong, isEditing, 
-    selectSong, removeSong, startCreate, startEdit, 
-    addMediaToSong, loadSongs, cancelEdit, addSong, editSong 
+  const {
+    songs, loading, error, currentSong, isEditing,
+    selectSong, removeSong, startCreate, startEdit,
+    addMediaToSong, loadSongs, cancelEdit, addSong, editSong
   } = useSongs();
-  
+
   const [searchQuery, setSearchQuery] = useState('');
 
   // Sync URL params with Context state
@@ -36,7 +37,7 @@ const SongPage = () => {
       if (!currentSong || currentSong.id !== songId) {
         const song = songs.find(s => s.id === songId);
         if (song) {
-            selectSong(song);
+          selectSong(song);
         }
       }
     } else if (!id && !isEditing) {
@@ -45,7 +46,7 @@ const SongPage = () => {
     }
   }, [id, songs, currentSong, selectSong, isEditing]);
 
-  const filteredSongs = songs.filter(song => 
+  const filteredSongs = songs.filter(song =>
     song.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     song.artist.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -70,10 +71,10 @@ const SongPage = () => {
     }
     cancelEdit();
   };
-  
+
   const handleDelete = async (id) => {
-      await removeSong(id);
-      navigate('/songs');
+    await removeSong(id);
+    navigate('/songs');
   };
 
   return (
@@ -93,8 +94,8 @@ const SongPage = () => {
             onSelectSong={handleSelectSong}
             onDeleteSong={handleDelete}
             onAddSong={() => {
-                startCreate();
-                navigate('/songs/new'); // Optional: URL for new song
+              startCreate();
+              navigate('/songs/new'); // Optional: URL for new song
             }}
           />
         )}
@@ -118,8 +119,8 @@ const SongPage = () => {
           <div className="empty-state">
             <p>곡을 선택하거나 새로운 곡을 추가하세요.</p>
             <button className="secondary-btn" onClick={() => {
-                startCreate();
-                // We don't necessarily need a route for 'new', can just set state
+              startCreate();
+              // We don't necessarily need a route for 'new', can just set state
             }}>곡 추가하기</button>
           </div>
         )}
@@ -136,15 +137,15 @@ const MainContent = () => {
 
   // Determine active view for styling
   const getCurrentView = () => {
-      if (location.pathname === '/') return 'dashboard';
-      if (location.pathname.startsWith('/songs')) return 'songs';
-      if (location.pathname === '/suggestions') return 'suggestions';
-      if (location.pathname.startsWith('/members')) return 'members';
-      return '';
+    if (location.pathname === '/') return 'dashboard';
+    if (location.pathname.startsWith('/songs')) return 'songs';
+    if (location.pathname === '/suggestions') return 'suggestions';
+    if (location.pathname.startsWith('/members')) return 'members';
+    return '';
   };
-  
+
   const currentView = getCurrentView();
-  
+
   // Mobile responsive helper class
   // Check if we are in a detail view (URL has ID or isEditing) to toggle sidebar on mobile
   const hasSelectedSong = (location.pathname.startsWith('/songs/') && location.pathname !== '/songs/new' && location.pathname !== '/songs') || isEditing || currentSong;
@@ -152,12 +153,12 @@ const MainContent = () => {
   return (
     <div className="app-container fade-in">
       <header className="app-header">
-        <div className="logo-container" onClick={() => navigate('/')} style={{cursor: 'pointer'}}>
-            <img src={logo} alt="들뜬 Logo" className="band-logo" />
-            <h1>들뜬 <span className="archive-text">Archive</span></h1>
+        <div className="logo-container" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
+          <img src={logo} alt="들뜬 Logo" className="band-logo" />
+          <h1>들뜬 <span className="archive-text">Archive</span></h1>
         </div>
         <div className="header-actions">
-          <button 
+          <button
             className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`}
             onClick={() => navigate('/')}
           >
@@ -184,16 +185,18 @@ const MainContent = () => {
         </div>
       </header>
 
+      <AnnouncementToast />
+
       {/* Main className handles mobile view switching */}
       <main className={`app-main ${hasSelectedSong ? 'has-selected-song' : ''}`}>
         <Routes>
-            <Route path="/" element={<Dashboard onSelectSong={(song) => navigate(`/songs/${song.id}`)} onViewSongs={() => navigate('/songs')} />} />
-            <Route path="/songs" element={<SongPage />} />
-            <Route path="/songs/:id" element={<SongPage />} />
-            <Route path="/suggestions" element={<SongSuggestion />} />
-            <Route path="/members" element={<MemberDashboard />} />
-            <Route path="/members/:id" element={<MemberDetail />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="/" element={<Dashboard onSelectSong={(song) => navigate(`/songs/${song.id}`)} onViewSongs={() => navigate('/songs')} />} />
+          <Route path="/songs" element={<SongPage />} />
+          <Route path="/songs/:id" element={<SongPage />} />
+          <Route path="/suggestions" element={<SongSuggestion />} />
+          <Route path="/members" element={<MemberDashboard />} />
+          <Route path="/members/:id" element={<MemberDetail />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </div>

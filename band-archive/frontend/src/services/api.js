@@ -233,3 +233,21 @@ export const uploadRecording = async (id, file, onProgress) => {
     xhr.send(formData);
   });
 };
+
+// Fetch current announcement
+export const fetchAnnouncement = async () => {
+  const response = await fetch(`${API_URL}/announcement`);
+  if (!response.ok) throw new Error('Failed to fetch announcement');
+  return await response.json();
+};
+
+// Update announcement (upsert)
+export const updateAnnouncement = async (content) => {
+  const response = await fetch(`${API_URL}/announcement`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) throw new Error('Failed to update announcement');
+  return await response.json();
+};
