@@ -1,8 +1,10 @@
+<!-- Last synced commit: 610c2f4cddc79916a20e3180bcc11faa6eb424107 -->
+
 # Band Archive Backend
 
 ## 개요
 
-밴드 합주/연습 관리용 REST API 서버. 곡 관리, 미디어 파일 업로드, 연습 기록, 멤버 관리, 곡 추천 투표 기능을 제공한다.
+밴드 합주/연습 관리용 REST API 서버. 곡 관리, 미디어 파일 업로드, 연습 기록, 멤버 관리, 곡 추천 투표, 공지사항, 합주 일정(캘린더) 기능을 제공한다.
 
 ## 기술 스택
 
@@ -22,7 +24,7 @@ band-archive/backend/
 ├── app.py              # Flask 앱 팩토리, 블루프린트 등록, 시작 시 마이그레이션
 ├── config.py           # Dev/Test/Prod 설정 클래스
 ├── extensions.py       # SQLAlchemy 인스턴스
-├── models.py           # 전체 DB 모델 (6개)
+├── models.py           # 전체 DB 모델 (8개 + 연결 테이블 1개)
 ├── errors.py           # ValidationError, NotFoundError 커스텀 예외
 ├── validators.py       # 입력 검증 유틸리티
 ├── requirements.txt    # 의존성
@@ -35,10 +37,14 @@ band-archive/backend/
 │   ├── members.py      # 멤버 관리
 │   ├── personal_logs.py # 개인 녹음 기록
 │   ├── suggestions.py  # 곡 추천 + 투표
+│   ├── announcements.py # 공지사항 (단일 레코드 upsert)
+│   ├── rehearsals.py   # 합주 일정 CRUD (달력 기능)
 │   └── dashboard.py    # 통계
 └── tests/
     ├── conftest.py     # pytest 픽스처
-    └── test_songs.py   # 곡 엔드포인트 테스트
+    ├── test_songs.py   # 곡 엔드포인트 테스트
+    ├── test_announcements.py # 공지사항 테스트
+    └── test_rehearsals.py    # 합주 일정 테스트
 ```
 
 ## DB 모델
@@ -59,7 +65,7 @@ band-archive/backend/
 | sheet_music | String(200) | 악보 파일명 |
 | created_at / updated_at | DateTime | 자동 생성/갱신 |
 
-관계: `media_files` (1:N → Media), `practice_logs` (1:N → PracticeLog)
+관계: `media_files` (1:N → Media), `practice_logs` (1:N → PracticeLog), `rehearsals` (N:M → Rehearsal via `rehearsal_songs`)
 
 ### Media
 | 컬럼 | 타입 | 설명 |
@@ -111,6 +117,34 @@ band-archive/backend/
 | link | String(500), Required | 링크 |
 | memo | Text | 메모 |
 | thumbs_up / thumbs_down | Integer, Default=0 | 투표 수 |
+
+### Rehearsal
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| title | String(200), Required | 일정 제목 |
+| date | Date, Required | 합주 날짜 (단일 일정용) |
+| start_date | Date | 기간 시작일 (기간 일정용) |
+| end_date | Date | 기간 종료일 (기간 일정용) |
+| time | String(20) | 합주 시간 (예: "19:00") |
+| memo | Text | 메모 |
+| color | String(7), Default='#ffd32a' | 달력 표시 색상 |
+| created_at / updated_at | DateTime | 자동 생성/갱신 |
+
+관계: `songs` (N:M → Song via `rehearsal_songs`)
+
+### rehearsal_songs (연결 테이블)
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| rehearsal_id | FK → Rehearsal, PK | |
+| song_id | FK → Song, PK | |
+
+### Announcement
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | 항상 1 (단일 레코드) |
+| content | Text, Required | 공지 본문 |
+| updated_at | DateTime | 마지막 수정 시각 |
 
 ## API 엔드포인트
 
@@ -167,6 +201,21 @@ band-archive/backend/
 | POST | `/suggestions` | 추천 등록 |
 | DELETE | `/suggestions/<id>` | 삭제 (비밀번호: "admin") |
 | POST | `/suggestions/<id>/vote` | 투표 (vote_type: "up" / "down") |
+
+### 공지사항 (`/announcement`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/announcement` | 현재 공지 조회 (없으면 빈 응답) |
+| PUT | `/announcement` | 공지 수정 (없으면 생성, upsert) |
+
+### 합주 일정 (`/rehearsals`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/rehearsals` | 전체 조회 (쿼리: `year`, `month` 필터) |
+| GET | `/rehearsals/<id>` | 단건 조회 (연결된 곡 목록 포함) |
+| POST | `/rehearsals` | 일정 생성 (song_ids로 곡 연결 가능) |
+| PUT | `/rehearsals/<id>` | 일정 수정 |
+| DELETE | `/rehearsals/<id>` | 일정 삭제 |
 
 ### 대시보드 (`/dashboard`)
 | Method | Path | 설명 |
