@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchDashboardStats } from '../../services/api';
+import RehearsalCalendar from '../calendar/RehearsalCalendar';
 import './Dashboard.css';
 
 const Dashboard = ({ onSelectSong, onViewSongs }) => {
@@ -66,6 +67,9 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
             </div>
           </div>
         </div>
+
+        {/* Rehearsal Calendar */}
+        <RehearsalCalendar />
 
         {/* Recent Practice Logs */}
         <div className="dashboard-card">
