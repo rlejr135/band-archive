@@ -172,8 +172,27 @@
     padding: 14px;
   }
 
+  .calendar-header h3 {
+    font-size: 1.05rem;
+  }
+
+  .calendar-add-btn {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+
   .calendar-body {
     flex-direction: column;
+  }
+
+  .react-calendar {
+    padding: 4px;
+  }
+
+  .react-calendar__navigation button {
+    font-size: 0.9rem;
+    min-width: 32px;
+    height: 32px;
   }
 
   .react-calendar__tile {

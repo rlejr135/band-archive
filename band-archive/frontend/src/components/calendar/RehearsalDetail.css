@@ -155,3 +155,34 @@
   border-color: var(--accent-color);
   color: var(--accent-color);
 }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .rehearsal-detail {
+    padding: 12px;
+  }
+
+  .detail-date {
+    font-size: 0.9rem;
+  }
+
+  .detail-empty {
+    padding: 20px 0;
+  }
+
+  .detail-item {
+    padding: 10px;
+  }
+
+  .detail-songs {
+    padding-left: 0;
+  }
+
+  .detail-memo {
+    padding-left: 0;
+  }
+
+  .detail-period {
+    padding-left: 0;
+  }
+}
