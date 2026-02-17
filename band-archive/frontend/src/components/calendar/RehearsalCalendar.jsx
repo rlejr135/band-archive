@@ -140,6 +140,7 @@ const RehearsalCalendar = () => {
             tileContent={tileContent}
             tileClassName={tileClassName}
             locale="ko-KR"
+            calendarType="gregory"
             formatDay={(locale, date) => date.getDate()}
           />
         </div>
