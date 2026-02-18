@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { fetchDashboardStats } from '../../services/api';
+import { fetchDashboardStats, fetchSongs } from '../../services/api';
 import RehearsalCalendar from '../calendar/RehearsalCalendar';
 import './Dashboard.css';
 
 const Dashboard = ({ onSelectSong, onViewSongs }) => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [expandedStatus, setExpandedStatus] = useState(null);
+  const [statusSongs, setStatusSongs] = useState([]);
+  const [songsLoading, setSongsLoading] = useState(false);
 
   useEffect(() => {
     loadStats();
@@ -19,6 +22,25 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
       console.error('Failed to load dashboard stats:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleStatusClick = async (status) => {
+    if (expandedStatus === status) {
+      setExpandedStatus(null);
+      setStatusSongs([]);
+      return;
+    }
+    setExpandedStatus(status);
+    setSongsLoading(true);
+    try {
+      const allSongs = await fetchSongs();
+      setStatusSongs(allSongs.filter((s) => s.status === status));
+    } catch (error) {
+      console.error('Failed to load songs:', error);
+      setStatusSongs([]);
+    } finally {
+      setSongsLoading(false);
     }
   };
 
@@ -53,18 +75,44 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
         <div className="dashboard-card">
           <h3>🎵 곡 상태</h3>
           <div className="status-list">
-            <div className="status-item">
-              <span className="status-badge practice">연습중</span>
-              <span className="status-count">{stats?.status_counts?.Practice ?? 0}곡</span>
-            </div>
-            <div className="status-item">
-              <span className="status-badge completed">완료</span>
-              <span className="status-count">{stats?.status_counts?.Completed ?? 0}곡</span>
-            </div>
-            <div className="status-item">
-              <span className="status-badge onhold">보류</span>
-              <span className="status-count">{stats?.status_counts?.OnHold ?? 0}곡</span>
-            </div>
+            {[
+              { key: 'Practice', label: '연습중', className: 'practice' },
+              { key: 'Completed', label: '완료', className: 'completed' },
+              { key: 'OnHold', label: '보류', className: 'onhold' },
+            ].map(({ key, label, className }) => (
+              <React.Fragment key={key}>
+                <div
+                  className={`status-item clickable ${expandedStatus === key ? 'active' : ''}`}
+                  onClick={() => handleStatusClick(key)}
+                >
+                  <span className={`status-badge ${className}`}>{label}</span>
+                  <span className="status-count">
+                    {stats?.status_counts?.[key] ?? 0}곡
+                    <span className={`status-arrow ${expandedStatus === key ? 'open' : ''}`}>▾</span>
+                  </span>
+                </div>
+                {expandedStatus === key && (
+                  <div className="status-songs">
+                    {songsLoading ? (
+                      <div className="status-songs-loading">로딩 중...</div>
+                    ) : statusSongs.length > 0 ? (
+                      statusSongs.map((song) => (
+                        <div
+                          key={song.id}
+                          className="status-song-item"
+                          onClick={() => onSelectSong(song)}
+                        >
+                          <span className="status-song-title">{song.title}</span>
+                          <span className="status-song-artist">{song.artist}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="status-songs-empty">해당 곡이 없습니다</div>
+                    )}
+                  </div>
+                )}
+              </React.Fragment>
+            ))}
           </div>
         </div>
 

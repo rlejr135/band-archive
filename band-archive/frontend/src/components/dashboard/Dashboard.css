@@ -181,6 +181,71 @@
   border-radius: 8px;
 }
 
+.status-item.clickable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.status-item.clickable:hover {
+  background-color: var(--border-color);
+}
+
+.status-item.active {
+  background-color: var(--border-color);
+}
+
+.status-arrow {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.8rem;
+  transition: transform 0.2s;
+}
+
+.status-arrow.open {
+  transform: rotate(180deg);
+}
+
+.status-songs {
+  background-color: var(--background-color);
+  border-radius: 8px;
+  padding: 4px 0;
+  margin-top: -4px;
+  border: 1px solid var(--border-color);
+}
+
+.status-song-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.status-song-item:hover {
+  background-color: var(--border-color);
+  padding-left: 20px;
+}
+
+.status-song-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.status-song-artist {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.status-songs-loading,
+.status-songs-empty {
+  text-align: center;
+  padding: 12px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
 .status-badge {
   padding: 4px 12px;
   border-radius: 12px;
