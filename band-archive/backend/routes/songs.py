@@ -99,7 +99,6 @@ def add_song():
         title=data['title'],
         artist=data['artist'],
         status=status,
-        lyrics=data.get('lyrics'),
         chords=data.get('chords'),
         link=data.get('link'),
         memo=data.get('memo'),
@@ -137,8 +136,6 @@ def update_song(id):
         validate_difficulty(data['difficulty'])
         song.difficulty = data['difficulty']
 
-    if 'lyrics' in data:
-        song.lyrics = data['lyrics']
     if 'chords' in data:
         song.chords = data['chords']
     if 'link' in data:
