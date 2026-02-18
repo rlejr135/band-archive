@@ -9,10 +9,13 @@ import PracticeLogSection from '../practices/PracticeLogSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
-  const { removeMediaFromSong, renameMediaInSong } = useSongs();
+  const { removeMediaFromSong, renameMediaInSong, editSong } = useSongs();
   
   const [renamingMediaId, setRenamingMediaId] = useState(null);
   const [newFilename, setNewFilename] = useState('');
+  const [editingMemo, setEditingMemo] = useState(false);
+  const [memoText, setMemoText] = useState(song?.memo || '');
+  const [memoSaving, setMemoSaving] = useState(false);
 
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
@@ -47,6 +50,28 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       setNewFilename('');
     } catch (err) {
       alert('파일 이름 변경에 실패했습니다.');
+    }
+  };
+
+  const handleMemoEdit = () => {
+    setMemoText(song.memo || '');
+    setEditingMemo(true);
+  };
+
+  const handleMemoCancel = () => {
+    setEditingMemo(false);
+    setMemoText(song.memo || '');
+  };
+
+  const handleMemoSave = async () => {
+    setMemoSaving(true);
+    try {
+      await editSong(song.id, { ...song, memo: memoText });
+      setEditingMemo(false);
+    } catch (err) {
+      alert('메모 저장에 실패했습니다.');
+    } finally {
+      setMemoSaving(false);
     }
   };
 
@@ -132,28 +157,53 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
         )}
       </div>
 
-      {(song.lyrics || song.chords || song.memo) && (
-        <div className="song-content">
-          {song.lyrics && (
-            <div className="song-lyrics">
-              <h4>가사</h4>
-              <pre>{song.lyrics}</pre>
+      <div className="song-content">
+        <div className="song-lyrics">
+          <h4>가사</h4>
+          <pre className={!song.lyrics ? 'content-empty' : ''}>
+            {song.lyrics || '등록된 가사가 없습니다.'}
+          </pre>
+        </div>
+        <div className="song-lyrics">
+          <h4>코드</h4>
+          <pre className={!song.chords ? 'content-empty' : ''}>
+            {song.chords || '등록된 코드가 없습니다.'}
+          </pre>
+        </div>
+        <div className="song-memo">
+          <div className="memo-header">
+            <h4>메모</h4>
+            {!editingMemo && (
+              <button className="memo-edit-btn" onClick={handleMemoEdit}>
+                {song.memo ? '✏️ 수정' : '✏️ 작성'}
+              </button>
+            )}
+          </div>
+          {editingMemo ? (
+            <div className="memo-editor">
+              <textarea
+                className="memo-textarea"
+                value={memoText}
+                onChange={(e) => setMemoText(e.target.value)}
+                placeholder="메모를 입력하세요..."
+                autoFocus
+              />
+              <div className="memo-actions">
+                <button className="memo-save-btn" onClick={handleMemoSave} disabled={memoSaving}>
+                  {memoSaving ? '저장 중...' : '💾 저장'}
+                </button>
+                <button className="memo-cancel-btn" onClick={handleMemoCancel} disabled={memoSaving}>
+                  취소
+                </button>
+              </div>
             </div>
-          )}
-          {song.chords && (
-            <div className="song-lyrics">
-              <h4>코드</h4>
-              <pre>{song.chords}</pre>
-            </div>
-          )}
-          {song.memo && (
-            <div className="song-memo">
-              <h4>메모</h4>
-              <pre>{song.memo}</pre>
-            </div>
+          ) : (
+            <pre className={!song.memo ? 'memo-empty' : ''}>
+              {song.memo || '등록된 메모가 없습니다. ✏️ 작성 버튼을 눌러 메모를 추가하세요.'}
+            </pre>
           )}
         </div>
-      )}
+      </div>
       <div className="song-media">
         <h4>미디어 파일</h4>
 
