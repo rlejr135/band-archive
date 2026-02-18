@@ -10,7 +10,7 @@ import PracticeLogSection from '../practices/PracticeLogSection';
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
   const { removeMediaFromSong, renameMediaInSong, editSong } = useSongs();
-  
+
   const [renamingMediaId, setRenamingMediaId] = useState(null);
   const [newFilename, setNewFilename] = useState('');
   const [editingMemo, setEditingMemo] = useState(false);
@@ -20,13 +20,13 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
   }
-  
+
   // Clean filename for display (remove id_timestamp_ prefix)
   const getDisplayName = (filename) => {
     const parts = filename.split('_');
     // Check if filename starts with id_timestamp_ format
     if (parts.length >= 3 && /^\d+$/.test(parts[0]) && /^\d{8}$/.test(parts[1])) {
-       return parts.slice(2).join('_');
+      return parts.slice(2).join('_');
     }
     // Try matching simpler pattern or just return filename if not matching
     return filename;
@@ -80,29 +80,29 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   };
 
   const handleDeleteMedia = async (mediaId) => {
-      if (!window.confirm('정말 이 파일을 삭제하시겠습니까?')) return;
-      try {
-        await removeMediaFromSong(song.id, mediaId);
-        if (selectedMedia && selectedMedia.id === mediaId) {
-          setSelectedMedia(null);
-        }
-      } catch (err) {
-        alert('파일 삭제에 실패했습니다.');
+    if (!window.confirm('정말 이 파일을 삭제하시겠습니까?')) return;
+    try {
+      await removeMediaFromSong(song.id, mediaId);
+      if (selectedMedia && selectedMedia.id === mediaId) {
+        setSelectedMedia(null);
       }
+    } catch (err) {
+      alert('파일 삭제에 실패했습니다.');
+    }
   };
 
   // Robust file type detection
   const getMediaType = (media) => {
     // Priority 1: Backend file_type if valid
     if (media.file_type && media.file_type !== 'document') return media.file_type;
-    
+
     // Priority 2: Extension based fallback
     const ext = media.filename?.split('.').pop().toLowerCase();
-    
+
     if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) return 'audio';
     if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) return 'video';
     if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
-    
+
     return 'document';
   };
 
@@ -147,7 +147,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
       <h2>{song.title}</h2>
       <h3>{song.artist}</h3>
-      
+
       <div className="song-info">
         <p><strong>상태:</strong> <span className={`status-badge ${song.status?.toLowerCase()}`}>{statusLabel[song.status] || song.status}</span></p>
         <p><strong>장르:</strong> {song.genre || '-'}</p>
@@ -158,13 +158,8 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       </div>
 
       <div className="song-content">
-        <div className="song-lyrics">
-          <h4>가사</h4>
-          <pre className={!song.lyrics ? 'content-empty' : ''}>
-            {song.lyrics || '등록된 가사가 없습니다.'}
-          </pre>
-        </div>
-        <div className="song-lyrics">
+
+        <div className="song-chords">
           <h4>코드</h4>
           <pre className={!song.chords ? 'content-empty' : ''}>
             {song.chords || '등록된 코드가 없습니다.'}
@@ -221,11 +216,11 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
             {song.media.map((media) => {
               const type = getMediaType(media);
               const isRenaming = renamingMediaId === media.id;
-              
+
               return (
                 <div key={media.id} className="media-item">
                   <span className="media-icon">{iconForType(media)}</span>
-                  
+
                   <div className="media-info">
                     {isRenaming ? (
                       <div className="rename-input-group">
@@ -246,7 +241,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                     )}
                     <span className="media-size">{(media.file_size / 1024 / 1024).toFixed(2)} MB</span>
                   </div>
-                  
+
                   {/* Action buttons based on file type */}
                   {!isRenaming && (
                     <>
@@ -259,7 +254,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                       {type === 'document' && (
                         <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
                       )}
-                      
+
                       <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
                     </>
                   )}

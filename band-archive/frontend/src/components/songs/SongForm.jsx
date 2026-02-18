@@ -14,7 +14,6 @@ const SongForm = ({ song, onSave, onCancel }) => {
     status: 'Practice',
     genre: '',
     difficulty: 3,
-    lyrics: '',
     chords: '',
     link: '',
     memo: '',
@@ -28,7 +27,6 @@ const SongForm = ({ song, onSave, onCancel }) => {
         status: song.status || 'Practice',
         genre: song.genre || '',
         difficulty: song.difficulty || 3,
-        lyrics: song.lyrics || '',
         chords: song.chords || '',
         link: song.link || '',
         memo: song.memo || '',
@@ -40,7 +38,6 @@ const SongForm = ({ song, onSave, onCancel }) => {
         status: 'Practice',
         genre: '',
         difficulty: 3,
-        lyrics: '',
         chords: '',
         link: '',
         memo: '',
@@ -100,10 +97,7 @@ const SongForm = ({ song, onSave, onCancel }) => {
         <input name="link" value={formData.link} onChange={handleChange} placeholder="YouTube, 악보 링크 등" />
       </div>
 
-      <div className="form-group">
-        <label>가사</label>
-        <textarea name="lyrics" value={formData.lyrics} onChange={handleChange} rows="5" placeholder="가사를 입력하세요" />
-      </div>
+
 
       <div className="form-group">
         <label>코드</label>

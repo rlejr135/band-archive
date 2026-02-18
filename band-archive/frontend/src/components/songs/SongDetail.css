@@ -45,11 +45,13 @@
   color: var(--primary-color);
 }
 
-.song-lyrics, .song-memo {
+.song-chords,
+.song-memo {
   margin-bottom: 30px;
 }
 
-.song-lyrics h4, .song-memo h4 {
+.song-chords h4,
+.song-memo h4 {
   margin-bottom: 10px;
   font-size: 1.1rem;
   color: var(--text-primary);
@@ -57,12 +59,14 @@
   padding-left: 10px;
 }
 
-.song-lyrics pre, .song-memo pre {
+.song-chords pre,
+.song-memo pre {
   background-color: var(--background-color);
   padding: 20px;
   border-radius: 8px;
   white-space: pre-wrap;
-  font-family: inherit; /* Keep standard font, not monospace unless intended */
+  font-family: inherit;
+  /* Keep standard font, not monospace unless intended */
   line-height: 1.8;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
@@ -233,7 +237,8 @@ pre.content-empty {
     padding: 12px;
   }
 
-  .song-lyrics pre, .song-memo pre {
+  .song-chords pre,
+  .song-memo pre {
     padding: 12px;
     font-size: 0.9rem;
     max-height: 300px;
