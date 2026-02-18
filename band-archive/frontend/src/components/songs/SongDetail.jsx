@@ -13,6 +13,9 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
   const [renamingMediaId, setRenamingMediaId] = useState(null);
   const [newFilename, setNewFilename] = useState('');
+  const [editingChords, setEditingChords] = useState(false);
+  const [chordsText, setChordsText] = useState(song?.chords || '');
+  const [chordsSaving, setChordsSaving] = useState(false);
   const [editingMemo, setEditingMemo] = useState(false);
   const [memoText, setMemoText] = useState(song?.memo || '');
   const [memoSaving, setMemoSaving] = useState(false);
@@ -50,6 +53,28 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       setNewFilename('');
     } catch (err) {
       alert('파일 이름 변경에 실패했습니다.');
+    }
+  };
+
+  const handleChordsEdit = () => {
+    setChordsText(song.chords || '');
+    setEditingChords(true);
+  };
+
+  const handleChordsCancel = () => {
+    setEditingChords(false);
+    setChordsText(song.chords || '');
+  };
+
+  const handleChordsSave = async () => {
+    setChordsSaving(true);
+    try {
+      await editSong(song.id, { ...song, chords: chordsText });
+      setEditingChords(false);
+    } catch (err) {
+      alert('코드 저장에 실패했습니다.');
+    } finally {
+      setChordsSaving(false);
     }
   };
 
@@ -160,10 +185,37 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       <div className="song-content">
 
         <div className="song-chords">
-          <h4>코드</h4>
-          <pre className={!song.chords ? 'content-empty' : ''}>
-            {song.chords || '등록된 코드가 없습니다.'}
-          </pre>
+          <div className="chords-header">
+            <h4>코드</h4>
+            {!editingChords && (
+              <button className="chords-edit-btn" onClick={handleChordsEdit}>
+                {song.chords ? '✏️ 수정' : '✏️ 작성'}
+              </button>
+            )}
+          </div>
+          {editingChords ? (
+            <div className="chords-editor">
+              <textarea
+                className="chords-textarea"
+                value={chordsText}
+                onChange={(e) => setChordsText(e.target.value)}
+                placeholder="코드를 입력하세요..."
+                autoFocus
+              />
+              <div className="chords-actions">
+                <button className="chords-save-btn" onClick={handleChordsSave} disabled={chordsSaving}>
+                  {chordsSaving ? '저장 중...' : '💾 저장'}
+                </button>
+                <button className="chords-cancel-btn" onClick={handleChordsCancel} disabled={chordsSaving}>
+                  취소
+                </button>
+              </div>
+            </div>
+          ) : (
+            <pre className={!song.chords ? 'content-empty' : ''}>
+              {song.chords || '등록된 코드가 없습니다. ✏️ 작성 버튼을 눌러 코드를 추가하세요.'}
+            </pre>
+          )}
         </div>
         <div className="song-memo">
           <div className="memo-header">

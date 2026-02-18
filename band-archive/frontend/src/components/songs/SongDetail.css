@@ -74,6 +74,8 @@
   overflow-y: auto;
 }
 
+/* Inline editor shared styles (chords & memo) */
+.chords-header,
 .memo-header {
   display: flex;
   align-items: center;
@@ -81,10 +83,12 @@
   margin-bottom: 10px;
 }
 
+.chords-header h4,
 .memo-header h4 {
   margin-bottom: 0;
 }
 
+.chords-edit-btn,
 .memo-edit-btn {
   background: none;
   border: 1px solid var(--border-color);
@@ -96,18 +100,21 @@
   transition: all 0.2s;
 }
 
+.chords-edit-btn:hover,
 .memo-edit-btn:hover {
   background-color: var(--primary-color);
   color: #1e272e;
   border-color: var(--primary-color);
 }
 
+.chords-editor,
 .memo-editor {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
+.chords-textarea,
 .memo-textarea {
   width: 100%;
   min-height: 150px;
@@ -123,16 +130,19 @@
   box-sizing: border-box;
 }
 
+.chords-textarea:focus,
 .memo-textarea:focus {
   outline: none;
   border-color: var(--primary-color);
 }
 
+.chords-actions,
 .memo-actions {
   display: flex;
   gap: 8px;
 }
 
+.chords-save-btn,
 .memo-save-btn {
   padding: 8px 20px;
   background-color: var(--secondary-color);
@@ -144,16 +154,19 @@
   transition: background-color 0.2s;
 }
 
+.chords-save-btn:hover:not(:disabled),
 .memo-save-btn:hover:not(:disabled) {
   background-color: var(--primary-color);
   color: #1e272e;
 }
 
+.chords-save-btn:disabled,
 .memo-save-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
+.chords-cancel-btn,
 .memo-cancel-btn {
   padding: 8px 20px;
   background-color: transparent;
@@ -165,6 +178,7 @@
   transition: all 0.2s;
 }
 
+.chords-cancel-btn:hover:not(:disabled),
 .memo-cancel-btn:hover:not(:disabled) {
   background-color: var(--border-color);
   color: var(--text-primary);
