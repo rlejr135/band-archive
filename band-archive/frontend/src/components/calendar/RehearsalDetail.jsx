@@ -56,7 +56,21 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
               )}
 
               {r.location && (
-                <div className="detail-location">📍 {r.location}</div>
+                <div className="detail-location">
+                  📍{' '}
+                  {r.latitude && r.longitude ? (
+                    <a
+                      href={`https://map.naver.com/p/search/${encodeURIComponent(r.location)}?c=${r.longitude},${r.latitude},15,0,0,0,dh`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="detail-location-link"
+                    >
+                      {r.location}
+                    </a>
+                  ) : (
+                    r.location
+                  )}
+                </div>
               )}
 
               {r.songs && r.songs.length > 0 && (

@@ -51,6 +51,12 @@ def _run_migrations(app):
         if 'location' not in columns:
             conn.execute('ALTER TABLE rehearsal ADD COLUMN location VARCHAR(200)')
             app.logger.info('Migration: added location column to rehearsal table')
+        if 'latitude' not in columns:
+            conn.execute('ALTER TABLE rehearsal ADD COLUMN latitude FLOAT')
+            app.logger.info('Migration: added latitude column to rehearsal table')
+        if 'longitude' not in columns:
+            conn.execute('ALTER TABLE rehearsal ADD COLUMN longitude FLOAT')
+            app.logger.info('Migration: added longitude column to rehearsal table')
 
         conn.commit()
         conn.close()

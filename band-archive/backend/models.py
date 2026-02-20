@@ -164,6 +164,8 @@ class Rehearsal(db.Model):
     end_date = db.Column(db.Date, nullable=True)
     time = db.Column(db.String(20), nullable=True)
     location = db.Column(db.String(200), nullable=True)
+    latitude = db.Column(db.Float, nullable=True)
+    longitude = db.Column(db.Float, nullable=True)
     memo = db.Column(db.Text, nullable=True)
     color = db.Column(db.String(7), default='#ffd32a')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -181,6 +183,8 @@ class Rehearsal(db.Model):
             'end_date': self.end_date.isoformat() if self.end_date else None,
             'time': self.time,
             'location': self.location,
+            'latitude': self.latitude,
+            'longitude': self.longitude,
             'memo': self.memo,
             'color': self.color,
             'songs': [{'id': s.id, 'title': s.title, 'artist': s.artist} for s in self.songs],

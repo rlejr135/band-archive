@@ -112,6 +112,15 @@
   padding-left: 12px;
 }
 
+.detail-location-link {
+  color: var(--secondary-color);
+  text-decoration: none;
+}
+
+.detail-location-link:hover {
+  text-decoration: underline;
+}
+
 .detail-songs {
   display: flex;
   flex-wrap: wrap;

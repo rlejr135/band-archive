@@ -88,6 +88,8 @@ def create_rehearsal():
         end_date=end_date,
         time=data.get('time'),
         location=location,
+        latitude=data.get('latitude'),
+        longitude=data.get('longitude'),
         memo=data.get('memo'),
         color=data.get('color', '#ffd32a'),
     )
@@ -136,6 +138,10 @@ def update_rehearsal(id):
         if data['location']:
             validate_string_length(data['location'], 'location', 200)
         rehearsal.location = data['location']
+    if 'latitude' in data:
+        rehearsal.latitude = data['latitude']
+    if 'longitude' in data:
+        rehearsal.longitude = data['longitude']
     if 'memo' in data:
         rehearsal.memo = data['memo']
     if 'color' in data:

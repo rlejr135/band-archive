@@ -27,7 +27,8 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
     - `calendar/`: 합주 일정 달력 컴포넌트
         - `RehearsalCalendar.jsx` + `.css`: 달력 메인 (react-calendar 래핑, 도트/하이라이트 표시)
         - `RehearsalDetail.jsx` + `.css`: 선택 날짜의 일정 목록 및 삭제
-        - `RehearsalModal.jsx` + `.css`: 일정 생성/수정 모달 (제목, 날짜, 기간, 시간, 색상, 곡 연결, 메모)
+        - `RehearsalModal.jsx` + `.css`: 일정 생성/수정 모달 (제목, 날짜, 기간, 시간, 장소+지도, 색상, 곡 연결, 메모)
+        - `LocationPicker.jsx` + `.css`: Naver Map 기반 장소 검색/선택 (geocoder 연동)
     - `songs/`: Song list, details, forms, and suggestion components
     - `members/`: Member list and detail views
     - `common/`: Reusable components

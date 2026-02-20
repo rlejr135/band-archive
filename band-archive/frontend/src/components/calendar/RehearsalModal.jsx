@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createRehearsal, updateRehearsal } from '../../services/rehearsalApi';
+import LocationPicker from './LocationPicker';
 import './RehearsalModal.css';
 
 const COLORS = ['#ffd32a', '#0fbcf9', '#ff5e57', '#0be881', '#f368e0', '#ff9f43'];
@@ -20,6 +21,9 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
   const [endDate, setEndDate] = useState('');
   const [time, setTime] = useState('');
   const [location, setLocation] = useState('');
+  const [latitude, setLatitude] = useState(null);
+  const [longitude, setLongitude] = useState(null);
+  const [showMap, setShowMap] = useState(false);
   const [memo, setMemo] = useState('');
   const [color, setColor] = useState('#ffd32a');
   const [selectedSongIds, setSelectedSongIds] = useState([]);
@@ -32,6 +36,8 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       setDate(rehearsal.date || '');
       setTime(rehearsal.time || '');
       setLocation(rehearsal.location || '');
+      setLatitude(rehearsal.latitude || null);
+      setLongitude(rehearsal.longitude || null);
       setMemo(rehearsal.memo || '');
       setColor(rehearsal.color || '#ffd32a');
       setSelectedSongIds(rehearsal.songs?.map((s) => s.id) || []);
@@ -71,6 +77,8 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       end_date: usePeriod ? endDate || null : null,
       time: time || null,
       location: location.trim() || null,
+      latitude: latitude || null,
+      longitude: longitude || null,
       memo: memo.trim() || null,
       color,
       song_ids: selectedSongIds,
@@ -169,13 +177,36 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
             {/* 장소 */}
             <div className="form-group">
               <label>장소</label>
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="예: 강남 연습실, 홍대 스튜디오"
-                maxLength={200}
-              />
+              <div className="location-input-row">
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => { setLocation(e.target.value); setLatitude(null); setLongitude(null); }}
+                  placeholder="예: 강남 연습실, 홍대 스튜디오"
+                  maxLength={200}
+                />
+                <button
+                  type="button"
+                  className={`location-map-toggle ${showMap ? 'active' : ''}`}
+                  onClick={() => setShowMap(!showMap)}
+                  title="지도에서 선택"
+                >
+                  🗺️
+                </button>
+              </div>
+              {showMap && (
+                <LocationPicker
+                  location={location}
+                  latitude={latitude}
+                  longitude={longitude}
+                  onChange={({ location: loc, latitude: lat, longitude: lng }) => {
+                    setLocation(loc);
+                    setLatitude(lat);
+                    setLongitude(lng);
+                  }}
+                  onClose={() => setShowMap(false)}
+                />
+              )}
             </div>
 
             {/* 색상 */}
