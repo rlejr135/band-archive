@@ -18,7 +18,7 @@ function loadNaverMapScript() {
     }
     const script = document.createElement('script');
     script.id = 'naver-map-script';
-    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpClientId=${NAVER_MAP_CLIENT_ID}&submodules=geocoder`;
+    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${NAVER_MAP_CLIENT_ID}&submodules=geocoder`;
     script.async = true;
     script.onload = resolve;
     script.onerror = () => reject(new Error('Naver Map SDK 로딩 실패'));
