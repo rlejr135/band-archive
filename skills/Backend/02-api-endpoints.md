@@ -29,7 +29,6 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
   "artist": "아티스트",      // required, max 100
   "status": "Practice",      // optional, default "Practice"
   "difficulty": 3,           // optional, 1-5, default 3
-  "lyrics": "",              // optional
   "chords": "",              // optional
   "link": "",                // optional, max 200
   "memo": "",                // optional
@@ -237,6 +236,9 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
   "start_date": "2026-02-20",
   "end_date": "2026-02-22",
   "time": "19:00",
+  "location": "장소명",
+  "latitude": 37.5665,
+  "longitude": 126.978,
   "memo": "메모",
   "color": "#ffd32a",
   "song_ids": [1, 2]

@@ -7,6 +7,7 @@
   - 개발: `http://localhost:5000`
   - 운영: `https://band-archive.fly.dev`
 - **파일 업로드**: XMLHttpRequest (진행률 추적용)
+- **Naver Map Client ID**: `import.meta.env.VITE_NAVER_MAP_CLIENT_ID` (LocationPicker에서 사용)
 
 ## 서비스 파일
 

@@ -94,6 +94,7 @@ band-archive/backend/
 | filename | String(200) | UUID 저장 파일명 |
 | original_filename | String(200) | 원본 파일명 |
 | file_type | String(20) | audio / video만 허용 |
+| file_size | Integer | 바이트 단위 |
 
 저장 경로: `uploads/personal_logs/`
 

@@ -139,6 +139,8 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
   end_date: string,         // 기간 종료일 (기간 일정용)
   time: string,             // 합주 시간 (예: "19:00")
   location: string,         // 장소
+  latitude: number | null,  // 위도 (Naver Map)
+  longitude: number | null, // 경도 (Naver Map)
   memo: string,             // 메모
   color: string,            // 달력 표시 색상 (기본: '#ffd32a')
   songs: Song[],            // 연결된 곡 목록
@@ -189,6 +191,23 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
   artist: '',
   link: '',
   memo: ''
+}
+```
+
+### Rehearsal Form (RehearsalModal.jsx)
+```javascript
+{
+  title: '',
+  date: '2026-02-20',       // 선택된 날짜 또는 오늘
+  startDate: '',             // 기간 시작일
+  endDate: '',               // 기간 종료일
+  time: '',
+  location: '',
+  latitude: null,            // Naver Map 좌표
+  longitude: null,           // Naver Map 좌표
+  memo: '',
+  color: '#ffd32a',          // 기본 색상
+  songIds: []                // 연결할 곡 ID 목록
 }
 ```
 

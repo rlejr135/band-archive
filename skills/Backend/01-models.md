@@ -144,6 +144,7 @@ Announcement (독립, 단일 레코드)
 | filename | String(200) | NOT NULL | - |
 | original_filename | String(200) | nullable | - |
 | file_type | String(20) | NOT NULL | - |
+| file_size | Integer | nullable | - |
 | created_at | DateTime | - | UTC now |
 
 **file_type 값:** `'audio'`, `'video'` (only)
@@ -162,6 +163,8 @@ Announcement (독립, 단일 레코드)
 | end_date | Date | nullable | - |
 | time | String(20) | nullable | - |
 | location | String(200) | nullable | - |
+| latitude | Float | nullable | - |
+| longitude | Float | nullable | - |
 | memo | Text | nullable | - |
 | color | String(7) | - | '#ffd32a' |
 | created_at | DateTime | - | UTC now |

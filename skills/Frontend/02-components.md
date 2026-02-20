@@ -134,9 +134,19 @@ App
 - 선택 날짜의 일정 목록 표시 및 삭제
 - API: `deleteRehearsal(id)`
 
+### LocationPicker (`components/calendar/LocationPicker.jsx`)
+- Naver Map API v3 기반 장소 검색/선택 컴포넌트
+- SDK 동적 로딩 (script 태그, geocoder 서브모듈 포함)
+- Props: `location`, `latitude`, `longitude`, `onChange`, `onClose`
+- 기능: 주소 검색 (geocode), 지도 클릭으로 선택 (reverse geocode), 마커 표시
+- 기본 중심: 서울시청 (37.5665, 126.978)
+- 환경변수: `VITE_NAVER_MAP_CLIENT_ID` 필요
+
 ### RehearsalModal (`components/calendar/RehearsalModal.jsx`)
 - 일정 생성/수정 모달
-- 필드: 제목, 날짜, 기간(start_date/end_date), 시간, 장소, 색상 선택, 곡 연결(song_ids), 메모
+- 필드: 제목, 날짜, 기간(start_date/end_date), 시간, 장소(+지도 연동), 색상 선택, 곡 연결(song_ids), 메모
+- 장소 입력 시 🗺️ 버튼으로 LocationPicker 토글 (Naver Map 기반 장소 검색/선택)
+- 지도에서 선택 시 location, latitude, longitude 자동 설정
 - API: `createRehearsal(data)`, `updateRehearsal(id, data)`
 
 ### SongPage (App.jsx 내 인라인)
