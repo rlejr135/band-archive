@@ -1,4 +1,4 @@
-<!-- Last synced commit: 610c2f4cddc79916a20e3180bcc11faa6eb424107 -->
+<!-- Last synced commit: 487f5b4d7ebb776cf61307fe420d8e5b844cb7d1 -->
 
 ---
 name: Frontend Architecture
@@ -62,9 +62,11 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
 ### 2. Song Management (`/songs`)
 - **List View**: Browse all songs with search/filter capabilities.
 - **Detail View (`/songs/:id`)**:
-    - View song details (lyrics, keys, etc.).
+    - View song details (chords, memo 등) — 코드/메모는 항상 표시.
+    - **인라인 편집**: 코드(chords), 메모(memo) 필드를 상세 화면에서 바로 편집 가능 (편집 버튼 → textarea → 저장/취소).
     - Manage associated media (audio/scores).
     - CRUD operations for songs.
+- **Song Form**: title, artist, status, genre, difficulty, link, chords, memo (lyrics 필드 제거됨).
 - **Practice Logs**:
     - Record practice sessions per song.
     - Upload recordings of practice sessions.

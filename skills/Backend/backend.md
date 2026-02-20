@@ -1,4 +1,4 @@
-<!-- Last synced commit: 610c2f4cddc79916a20e3180bcc11faa6eb424107 -->
+<!-- Last synced commit: 487f5b4d7ebb776cf61307fe420d8e5b844cb7d1 -->
 
 # Band Archive Backend
 
@@ -56,7 +56,6 @@ band-archive/backend/
 | title | String(100), Required | 곡 제목 |
 | artist | String(100), Required | 아티스트 |
 | status | String(20), Default='Practice' | Practice / Completed / OnHold |
-| lyrics | Text | 가사 |
 | chords | Text | 코드 |
 | link | String(200) | 참고 링크 |
 | memo | Text | 메모 |
@@ -255,6 +254,13 @@ band-archive/backend/
 - **DevelopmentConfig:** DEBUG=True, SQLite 로컬 파일
 - **TestingConfig:** TESTING=True, 인메모리 SQLite
 - **ProductionConfig:** DEBUG=False, `/data/band_archive.db`, `/data/uploads`
+
+## 시작 시 마이그레이션 (`_run_migrations`)
+
+SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 체크/추가:
+- `media` 테이블: `original_filename` 컬럼
+- `personal_log` 테이블: `original_filename` 컬럼
+- `personal_log` 테이블: `file_size` 컬럼
 
 ## 인증
 
