@@ -161,6 +161,7 @@ Announcement (독립, 단일 레코드)
 | start_date | Date | nullable | - |
 | end_date | Date | nullable | - |
 | time | String(20) | nullable | - |
+| location | String(200) | nullable | - |
 | memo | Text | nullable | - |
 | color | String(7) | - | '#ffd32a' |
 | created_at | DateTime | - | UTC now |

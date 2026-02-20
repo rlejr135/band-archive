@@ -55,6 +55,10 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                 </div>
               )}
 
+              {r.location && (
+                <div className="detail-location">📍 {r.location}</div>
+              )}
+
               {r.songs && r.songs.length > 0 && (
                 <div className="detail-songs">
                   {r.songs.map((s) => (

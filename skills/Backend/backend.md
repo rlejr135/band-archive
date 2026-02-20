@@ -126,6 +126,7 @@ band-archive/backend/
 | start_date | Date | 기간 시작일 (기간 일정용) |
 | end_date | Date | 기간 종료일 (기간 일정용) |
 | time | String(20) | 합주 시간 (예: "19:00") |
+| location | String(200) | 장소 |
 | memo | Text | 메모 |
 | color | String(7), Default='#ffd32a' | 달력 표시 색상 |
 | created_at / updated_at | DateTime | 자동 생성/갱신 |
@@ -261,6 +262,7 @@ SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 �
 - `media` 테이블: `original_filename` 컬럼
 - `personal_log` 테이블: `original_filename` 컬럼
 - `personal_log` 테이블: `file_size` 컬럼
+- `rehearsal` 테이블: `location` 컬럼
 
 ## 인증
 

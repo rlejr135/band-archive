@@ -46,6 +46,12 @@ def _run_migrations(app):
             conn.execute('ALTER TABLE personal_log ADD COLUMN file_size INTEGER')
             app.logger.info('Migration: added file_size column to personal_log table')
             
+        # Check rehearsal table
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(rehearsal)').fetchall()]
+        if 'location' not in columns:
+            conn.execute('ALTER TABLE rehearsal ADD COLUMN location VARCHAR(200)')
+            app.logger.info('Migration: added location column to rehearsal table')
+
         conn.commit()
         conn.close()
     except Exception as e:

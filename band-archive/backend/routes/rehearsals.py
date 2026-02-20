@@ -77,12 +77,17 @@ def create_rehearsal():
     if start_date and end_date and start_date > end_date:
         raise ValidationError("start_date must be before or equal to end_date")
 
+    location = data.get('location')
+    if location:
+        validate_string_length(location, 'location', 200)
+
     rehearsal = Rehearsal(
         title=data['title'],
         date=rehearsal_date,
         start_date=start_date,
         end_date=end_date,
         time=data.get('time'),
+        location=location,
         memo=data.get('memo'),
         color=data.get('color', '#ffd32a'),
     )
@@ -127,6 +132,10 @@ def update_rehearsal(id):
 
     if 'time' in data:
         rehearsal.time = data['time']
+    if 'location' in data:
+        if data['location']:
+            validate_string_length(data['location'], 'location', 200)
+        rehearsal.location = data['location']
     if 'memo' in data:
         rehearsal.memo = data['memo']
     if 'color' in data:

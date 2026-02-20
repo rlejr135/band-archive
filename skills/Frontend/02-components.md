@@ -136,7 +136,7 @@ App
 
 ### RehearsalModal (`components/calendar/RehearsalModal.jsx`)
 - 일정 생성/수정 모달
-- 필드: 제목, 날짜, 기간(start_date/end_date), 시간, 색상 선택, 곡 연결(song_ids), 메모
+- 필드: 제목, 날짜, 기간(start_date/end_date), 시간, 장소, 색상 선택, 곡 연결(song_ids), 메모
 - API: `createRehearsal(data)`, `updateRehearsal(id, data)`
 
 ### SongPage (App.jsx 내 인라인)

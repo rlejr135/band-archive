@@ -138,6 +138,7 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
   start_date: string,       // 기간 시작일 (기간 일정용)
   end_date: string,         // 기간 종료일 (기간 일정용)
   time: string,             // 합주 시간 (예: "19:00")
+  location: string,         // 장소
   memo: string,             // 메모
   color: string,            // 달력 표시 색상 (기본: '#ffd32a')
   songs: Song[],            // 연결된 곡 목록

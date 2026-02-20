@@ -105,6 +105,13 @@
   padding-left: 12px;
 }
 
+.detail-location {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  padding-left: 12px;
+}
+
 .detail-songs {
   display: flex;
   flex-wrap: wrap;
@@ -179,6 +186,10 @@
   }
 
   .detail-memo {
+    padding-left: 0;
+  }
+
+  .detail-location {
     padding-left: 0;
   }
 

@@ -19,6 +19,7 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [time, setTime] = useState('');
+  const [location, setLocation] = useState('');
   const [memo, setMemo] = useState('');
   const [color, setColor] = useState('#ffd32a');
   const [selectedSongIds, setSelectedSongIds] = useState([]);
@@ -30,6 +31,7 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       setTitle(rehearsal.title || '');
       setDate(rehearsal.date || '');
       setTime(rehearsal.time || '');
+      setLocation(rehearsal.location || '');
       setMemo(rehearsal.memo || '');
       setColor(rehearsal.color || '#ffd32a');
       setSelectedSongIds(rehearsal.songs?.map((s) => s.id) || []);
@@ -68,6 +70,7 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       start_date: usePeriod ? startDate || null : null,
       end_date: usePeriod ? endDate || null : null,
       time: time || null,
+      location: location.trim() || null,
       memo: memo.trim() || null,
       color,
       song_ids: selectedSongIds,
@@ -160,6 +163,18 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
                 type="time"
                 value={time}
                 onChange={(e) => setTime(e.target.value)}
+              />
+            </div>
+
+            {/* 장소 */}
+            <div className="form-group">
+              <label>장소</label>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="예: 강남 연습실, 홍대 스튜디오"
+                maxLength={200}
               />
             </div>
 

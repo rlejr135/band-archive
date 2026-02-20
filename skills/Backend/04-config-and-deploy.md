@@ -93,5 +93,6 @@ CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:create_app()"]
 - `media` 테이블에 `original_filename` 컬럼 추가 (없으면)
 - `personal_log` 테이블에 `original_filename` 컬럼 추가 (없으면)
 - `personal_log` 테이블에 `file_size` 컬럼 추가 (없으면)
+- `rehearsal` 테이블에 `location` 컬럼 추가 (없으면)
 
 새 컬럼 추가 시 이 함수에 체크 로직 추가 필요.
