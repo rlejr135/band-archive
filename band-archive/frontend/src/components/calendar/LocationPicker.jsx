@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { API_URL } from '../../services/api';
 import './LocationPicker.css';
 
 const NAVER_MAP_CLIENT_ID = import.meta.env.VITE_NAVER_MAP_CLIENT_ID;
@@ -33,6 +34,8 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
   const [searchQuery, setSearchQuery] = useState(location || '');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [showResults, setShowResults] = useState(false);
 
   const updateMarker = useCallback((lat, lng, address) => {
     const { naver } = window;
@@ -107,29 +110,59 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
       });
   }, [latitude, longitude, updateMarker, reverseGeocode]);
 
-  const handleSearch = (e) => {
+  const handleSearch = async (e) => {
     e.preventDefault();
-    if (!searchQuery.trim() || !window.naver?.maps?.Service) return;
+    if (!searchQuery.trim()) return;
 
+    setError('');
+    try {
+      const resp = await fetch(
+        `${API_URL}/api/search-places?query=${encodeURIComponent(searchQuery.trim())}`
+      );
+      if (!resp.ok) throw new Error('검색 실패');
+      const data = await resp.json();
+
+      if (data.error) {
+        setError(data.error);
+        setTimeout(() => setError(''), 2000);
+        return;
+      }
+
+      if (data.length === 0) {
+        setError('검색 결과가 없습니다.');
+        setTimeout(() => setError(''), 2000);
+        setSearchResults([]);
+        setShowResults(false);
+        return;
+      }
+
+      setSearchResults(data);
+      setShowResults(true);
+    } catch {
+      setError('검색 중 오류가 발생했습니다.');
+      setTimeout(() => setError(''), 2000);
+    }
+  };
+
+  const handleSelectResult = (result) => {
     const { naver } = window;
-    naver.maps.Service.geocode({ query: searchQuery.trim() }, (status, response) => {
-      if (status !== naver.maps.Service.Status.OK) {
-        setError('검색 결과가 없습니다.');
-        setTimeout(() => setError(''), 2000);
-        return;
-      }
-      const item = response.v2.addresses[0];
-      if (!item) {
-        setError('검색 결과가 없습니다.');
-        setTimeout(() => setError(''), 2000);
-        return;
-      }
-      const lat = parseFloat(item.y);
-      const lng = parseFloat(item.x);
-      const address = item.roadAddress || item.jibunAddress || searchQuery.trim();
-      updateMarker(lat, lng, address);
-      onChange({ location: address, latitude: lat, longitude: lng });
-    });
+    // Naver Search Local API는 Katec(TM128) 좌표를 반환
+    const tm128 = new naver.maps.Point(
+      parseInt(result.mapx, 10),
+      parseInt(result.mapy, 10)
+    );
+    const latlng = naver.maps.TransCoord.fromTM128ToLatLng(tm128);
+    const lat = latlng.lat();
+    const lng = latlng.lng();
+
+    const displayName = result.title;
+    const address = result.roadAddress || result.address;
+    const locationText = displayName + (address ? ` (${address})` : '');
+
+    updateMarker(lat, lng, locationText);
+    onChange({ location: locationText, latitude: lat, longitude: lng });
+    setSearchResults([]);
+    setShowResults(false);
   };
 
   const handleConfirm = () => {
@@ -138,15 +171,33 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
 
   return (
     <div className="location-picker">
-      <form className="location-search" onSubmit={handleSearch}>
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="주소 또는 장소명 검색"
-        />
-        <button type="submit">검색</button>
-      </form>
+      <div className="location-search-wrapper">
+        <form className="location-search" onSubmit={handleSearch}>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (showResults) setShowResults(false);
+            }}
+            placeholder="주소 또는 장소명 검색"
+          />
+          <button type="submit">검색</button>
+        </form>
+
+        {showResults && searchResults.length > 0 && (
+          <ul className="location-results">
+            {searchResults.map((result, idx) => (
+              <li key={idx} onClick={() => handleSelectResult(result)}>
+                <span className="location-result-title">{result.title}</span>
+                <span className="location-result-address">
+                  {result.roadAddress || result.address}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {error && <p className="location-error">{error}</p>}
 

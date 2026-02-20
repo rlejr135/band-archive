@@ -15,6 +15,7 @@ from routes.members import members_bp
 from routes.personal_logs import personal_logs_bp as member_personal_logs_bp
 from routes.announcements import announcements_bp
 from routes.rehearsals import rehearsals_bp
+from routes.search import search_bp
 from config import DevelopmentConfig
 
 load_dotenv()
@@ -94,6 +95,7 @@ def create_app(config_class=None):
     app.register_blueprint(member_personal_logs_bp)
     app.register_blueprint(announcements_bp)
     app.register_blueprint(rehearsals_bp)
+    app.register_blueprint(search_bp)
 
     with app.app_context():
         db.create_all()
