@@ -44,6 +44,7 @@ jobs:
         env:
           GITHUB_PAGES: true
           VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_NAVER_MAP_CLIENT_ID: ${{ vars.VITE_NAVER_MAP_CLIENT_ID }}
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
