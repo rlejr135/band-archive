@@ -139,20 +139,25 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
   };
 
   const handleSelectResult = (result) => {
+    const address = result.roadAddress || result.address;
+    const displayName = `${result.title} (${address})`;
+
+    // Naver Search Local API의 mapx/mapy를 geocode로 정확한 좌표 획득
     const { naver } = window;
-    if (!naver?.maps?.TransCoord) return;
-
-    const tm128 = new naver.maps.Point(Number(result.mapx), Number(result.mapy));
-    const latLng = naver.maps.TransCoord.fromTM128ToLatLng(tm128);
-    const lat = latLng.lat();
-    const lng = latLng.lng();
-
-    const displayName = result.roadAddress
-      ? `${result.title} (${result.roadAddress})`
-      : `${result.title} (${result.address})`;
-
-    updateMarker(lat, lng, displayName);
-    onChange({ location: displayName, latitude: lat, longitude: lng });
+    if (naver?.maps?.Service) {
+      naver.maps.Service.geocode({ query: address }, (status, response) => {
+        if (status === naver.maps.Service.Status.OK && response.v2.addresses[0]) {
+          const item = response.v2.addresses[0];
+          const lat = parseFloat(item.y);
+          const lng = parseFloat(item.x);
+          updateMarker(lat, lng, displayName);
+          onChange({ location: displayName, latitude: lat, longitude: lng });
+        } else {
+          // geocode 실패 시 검색어로 fallback
+          setSearchQuery(displayName);
+        }
+      });
+    }
     setShowResults(false);
   };
 
