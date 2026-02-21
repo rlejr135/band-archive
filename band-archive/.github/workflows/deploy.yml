@@ -22,6 +22,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: github-pages
     defaults:
       run:
         working-directory: ./band-archive/frontend
@@ -43,8 +44,9 @@ jobs:
         run: npm run build
         env:
           GITHUB_PAGES: true
-          VITE_API_URL: ${{ vars.VITE_API_URL }}
-          VITE_NAVER_MAP_CLIENT_ID: ${{ vars.VITE_NAVER_MAP_CLIENT_ID }}
+          # vars (Variables)와 secrets (Secrets) 중 등록된 곳에서 가져옵니다.
+          VITE_API_URL: ${{ secrets.VITE_API_URL || vars.VITE_API_URL }}
+          VITE_NAVER_MAP_CLIENT_ID: ${{ secrets.VITE_NAVER_MAP_CLIENT_ID || vars.VITE_NAVER_MAP_CLIENT_ID }}
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
