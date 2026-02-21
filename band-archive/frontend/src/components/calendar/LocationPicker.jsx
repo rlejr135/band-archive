@@ -163,7 +163,7 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
   return (
     <div className="location-picker">
       <div className="location-search-wrapper">
-        <form className="location-search" onSubmit={handleSearch}>
+        <div className="location-search">
           <input
             type="text"
             value={searchQuery}
@@ -171,10 +171,16 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
               setSearchQuery(e.target.value);
               if (showResults) setShowResults(false);
             }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSearch(e);
+              }
+            }}
             placeholder="주소 또는 장소명 검색"
           />
-          <button type="submit">검색</button>
-        </form>
+          <button type="button" onClick={handleSearch}>검색</button>
+        </div>
 
         {showResults && searchResults.length > 0 && (
           <ul className="location-results">
