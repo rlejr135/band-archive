@@ -18,7 +18,8 @@ uploads/
 .DS_Store
 coverage/
 .vscode/
-.env.local
+.env*
+!*.env.example
 *.local
 
 # Logs
