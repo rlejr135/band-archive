@@ -142,6 +142,8 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
     const address = result.roadAddress || result.address;
     const displayName = `${result.title} (${address})`;
 
+    setShowResults(false);
+
     // Naver Search Local API의 mapx/mapy를 geocode로 정확한 좌표 획득
     const { naver } = window;
     if (naver?.maps?.Service) {
@@ -153,12 +155,10 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
           updateMarker(lat, lng, displayName);
           onChange({ location: displayName, latitude: lat, longitude: lng });
         } else {
-          // geocode 실패 시 검색어로 fallback
           setSearchQuery(displayName);
         }
       });
     }
-    setShowResults(false);
   };
 
   const handleConfirm = () => {
