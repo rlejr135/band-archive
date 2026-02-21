@@ -84,6 +84,7 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
           ? new naver.maps.LatLng(latitude, longitude)
           : new naver.maps.LatLng(DEFAULT_CENTER.lat, DEFAULT_CENTER.lng);
 
+        markerRef.current = null;
         mapInstance.current = new naver.maps.Map(mapRef.current, {
           center,
           zoom: 15,
