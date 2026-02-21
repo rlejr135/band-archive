@@ -257,6 +257,23 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 
 ---
 
+## Search Places (`routes/search.py`)
+
+### `GET /api/search-places`
+장소명 검색 (Naver Search Local API 프록시)
+
+| Query Param | 설명 |
+|-------------|------|
+| `query` | 검색어 (장소명, 주소 등) |
+
+**Response:** `200` `[{title, address, roadAddress, mapx, mapy}]`
+> - `mapx`, `mapy`는 Katec(TM128) 좌표
+> - `title`에서 HTML 태그(`<b>`, `</b>`) 자동 제거
+> - 최대 5개 결과 반환
+> - 환경변수: `NAVER_SEARCH_CLIENT_ID`, `NAVER_SEARCH_CLIENT_SECRET` 필요
+
+---
+
 ## Dashboard (`routes/dashboard.py`)
 
 ### `GET /dashboard/stats`

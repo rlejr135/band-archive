@@ -19,7 +19,8 @@ uploads/
 coverage/
 .vscode/
 .env*
-!*.env.example
+!.env.production
+!.env.example
 *.local
 
 # Logs

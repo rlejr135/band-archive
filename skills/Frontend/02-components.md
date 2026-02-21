@@ -138,9 +138,16 @@ App
 - Naver Map API v3 기반 장소 검색/선택 컴포넌트
 - SDK 동적 로딩 (script 태그, geocoder 서브모듈 포함)
 - Props: `location`, `latitude`, `longitude`, `onChange`, `onClose`
-- 기능: 주소 검색 (geocode), 지도 클릭으로 선택 (reverse geocode), 마커 표시
+- 상태: `searchQuery`, `loading`, `error`, `searchResults` (배열), `showResults` (boolean)
+- 기능:
+  - **장소명 검색**: 백엔드 `/api/search-places` 호출 (Naver Search Local API 프록시)
+  - 검색 결과 드롭다운 리스트 표시 (최대 5개, `.location-results` UI)
+  - 결과 클릭 시 Katec→WGS84 좌표 변환 (`naver.maps.TransCoord.fromTM128ToLatLng`)
+  - location에 "장소명 (도로명주소)" 형태로 저장
+  - 지도 클릭으로 선택 (reverse geocode), 마커 표시
+- CSS 구조: `.location-search-wrapper` > `.location-search` + `.location-results` (absolute 드롭다운)
 - 기본 중심: 서울시청 (37.5665, 126.978)
-- 환경변수: `VITE_NAVER_MAP_CLIENT_ID` 필요
+- 환경변수: `VITE_NAVER_MAP_CLIENT_ID`, `VITE_API_URL` 필요
 
 ### RehearsalModal (`components/calendar/RehearsalModal.jsx`)
 - 일정 생성/수정 모달

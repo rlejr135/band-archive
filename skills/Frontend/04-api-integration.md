@@ -88,6 +88,12 @@
 | `fetchAnnouncement()` | GET | `/announcement` | 현재 공지 조회 |
 | `updateAnnouncement(content)` | PUT | `/announcement` | 공지 수정 (upsert) |
 
+### 장소 검색 (Search Places) — `LocationPicker.jsx`에서 직접 호출
+
+| 함수명 | HTTP | 엔드포인트 | 설명 |
+|--------|------|-----------|------|
+| (inline fetch) | GET | `/api/search-places?query=` | 장소명 검색 (Naver Search Local API 프록시) |
+
 ### 합주 일정 (Rehearsals) — `rehearsalApi.js`
 
 | 함수명 | HTTP | 엔드포인트 | 설명 |
