@@ -1,41 +1,50 @@
 import os
+import re
 
 import requests
 from flask import Blueprint, jsonify, request
 
 search_bp = Blueprint('search', __name__)
 
-NAVER_SEARCH_CLIENT_ID = os.getenv('NAVER_SEARCH_CLIENT_ID', '')
-NAVER_SEARCH_CLIENT_SECRET = os.getenv('NAVER_SEARCH_CLIENT_SECRET', '')
 
-
-@search_bp.route('/api/search-places')
+@search_bp.route('/api/search-places', methods=['GET'])
 def search_places():
     query = request.args.get('query', '').strip()
     if not query:
         return jsonify([])
 
-    if not NAVER_SEARCH_CLIENT_ID or not NAVER_SEARCH_CLIENT_SECRET:
+    client_id = os.getenv('NAVER_SEARCH_CLIENT_ID', '')
+    client_secret = os.getenv('NAVER_SEARCH_CLIENT_SECRET', '')
+
+    if not client_id or not client_secret:
         return jsonify({'error': 'Naver Search API credentials not configured'}), 500
 
-    resp = requests.get(
-        'https://openapi.naver.com/v1/search/local.json',
-        params={'query': query, 'display': 5},
-        headers={
-            'X-Naver-Client-Id': NAVER_SEARCH_CLIENT_ID,
-            'X-Naver-Client-Secret': NAVER_SEARCH_CLIENT_SECRET,
-        },
-        timeout=5,
-    )
+    headers = {
+        'X-Naver-Client-Id': client_id,
+        'X-Naver-Client-Secret': client_secret,
+    }
+    params = {
+        'query': query,
+        'display': 5,
+    }
 
-    if resp.status_code != 200:
-        return jsonify({'error': 'Naver Search API error'}), 502
+    try:
+        resp = requests.get(
+            'https://openapi.naver.com/v1/search/local.json',
+            headers=headers,
+            params=params,
+            timeout=5,
+        )
+        resp.raise_for_status()
+    except requests.RequestException:
+        return jsonify({'error': 'Failed to fetch from Naver API'}), 502
 
     data = resp.json()
     results = []
     for item in data.get('items', []):
+        title = re.sub(r'</?b>', '', item.get('title', ''))
         results.append({
-            'title': item.get('title', '').replace('<b>', '').replace('</b>', ''),
+            'title': title,
             'address': item.get('address', ''),
             'roadAddress': item.get('roadAddress', ''),
             'mapx': item.get('mapx', ''),

@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { API_URL } from '../../services/api';
 import './LocationPicker.css';
 
 const NAVER_MAP_CLIENT_ID = import.meta.env.VITE_NAVER_MAP_CLIENT_ID;
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const DEFAULT_CENTER = { lat: 37.5665, lng: 126.978 }; // 서울 시청
 
 function loadNaverMapScript() {
@@ -100,6 +100,7 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
           const lng = e.coord.lng();
           updateMarker(lat, lng, null);
           reverseGeocode(lat, lng);
+          setShowResults(false);
         });
 
         setLoading(false);
@@ -122,16 +123,9 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
       if (!resp.ok) throw new Error('검색 실패');
       const data = await resp.json();
 
-      if (data.error) {
-        setError(data.error);
-        setTimeout(() => setError(''), 2000);
-        return;
-      }
-
       if (data.length === 0) {
         setError('검색 결과가 없습니다.');
         setTimeout(() => setError(''), 2000);
-        setSearchResults([]);
         setShowResults(false);
         return;
       }
@@ -146,22 +140,19 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
 
   const handleSelectResult = (result) => {
     const { naver } = window;
-    // Naver Search Local API는 Katec(TM128) 좌표를 반환
-    const tm128 = new naver.maps.Point(
-      parseInt(result.mapx, 10),
-      parseInt(result.mapy, 10)
-    );
-    const latlng = naver.maps.TransCoord.fromTM128ToLatLng(tm128);
-    const lat = latlng.lat();
-    const lng = latlng.lng();
+    if (!naver?.maps?.TransCoord) return;
 
-    const displayName = result.title;
-    const address = result.roadAddress || result.address;
-    const locationText = displayName + (address ? ` (${address})` : '');
+    const tm128 = new naver.maps.Point(Number(result.mapx), Number(result.mapy));
+    const latLng = naver.maps.TransCoord.fromTM128ToLatLng(tm128);
+    const lat = latLng.lat();
+    const lng = latLng.lng();
 
-    updateMarker(lat, lng, locationText);
-    onChange({ location: locationText, latitude: lat, longitude: lng });
-    setSearchResults([]);
+    const displayName = result.roadAddress
+      ? `${result.title} (${result.roadAddress})`
+      : `${result.title} (${result.address})`;
+
+    updateMarker(lat, lng, displayName);
+    onChange({ location: displayName, latitude: lat, longitude: lng });
     setShowResults(false);
   };
 
@@ -188,7 +179,11 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
         {showResults && searchResults.length > 0 && (
           <ul className="location-results">
             {searchResults.map((result, idx) => (
-              <li key={idx} onClick={() => handleSelectResult(result)}>
+              <li
+                key={idx}
+                className="location-result-item"
+                onClick={() => handleSelectResult(result)}
+              >
                 <span className="location-result-title">{result.title}</span>
                 <span className="location-result-address">
                   {result.roadAddress || result.address}
