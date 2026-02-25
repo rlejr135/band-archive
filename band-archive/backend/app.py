@@ -9,7 +9,6 @@ from extensions import db
 from errors import register_error_handlers
 from storage import storage
 from routes.songs import songs_bp
-from routes.practice_logs import practice_logs_bp
 from routes.dashboard import dashboard_bp
 from routes.suggestions import suggestions_bp
 from routes.members import members_bp
@@ -89,7 +88,6 @@ def create_app(config_class=None):
     Migrate(app, db)
     register_error_handlers(app)
     app.register_blueprint(songs_bp)
-    app.register_blueprint(practice_logs_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
     app.register_blueprint(members_bp)
