@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSongs } from '../../context/SongContext';
 import './SongDetail.css';
 import './SongMedia.css';
@@ -18,6 +18,16 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [editingMemo, setEditingMemo] = useState(false);
   const [memoText, setMemoText] = useState(song?.memo || '');
   const [memoSaving, setMemoSaving] = useState(false);
+
+  useEffect(() => {
+    setSelectedMedia(null);
+    setRenamingMediaId(null);
+    setNewFilename('');
+    setEditingChords(false);
+    setChordsText(song?.chords || '');
+    setEditingMemo(false);
+    setMemoText(song?.memo || '');
+  }, [song?.id]);
 
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
