@@ -59,6 +59,9 @@ def _run_migrations(app):
             conn.execute('ALTER TABLE rehearsal ADD COLUMN longitude FLOAT')
             app.logger.info('Migration: added longitude column to rehearsal table')
 
+        # Drop removed tables
+        conn.execute('DROP TABLE IF EXISTS practice_log')
+
         conn.commit()
         conn.close()
     except Exception as e:
