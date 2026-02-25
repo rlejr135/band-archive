@@ -1,5 +1,6 @@
 
 from datetime import datetime, timezone
+from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
 
@@ -46,6 +47,8 @@ class Media(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     song = db.relationship('Song', backref=db.backref('media_files', lazy=True, cascade='all, delete-orphan'))
+    comments = db.relationship('Comment', backref='media', lazy=True, cascade='all, delete-orphan',
+                               foreign_keys='Comment.media_id')
 
     def to_dict(self):
         from storage import storage
@@ -56,6 +59,7 @@ class Media(db.Model):
             'file_type': self.file_type,
             'file_size': self.file_size,
             'url': storage.generate_url(f'media/{self.filename}'),
+            'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -109,6 +113,8 @@ class PersonalLog(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     member = db.relationship('Member', backref=db.backref('personal_logs', lazy=True, cascade='all, delete-orphan'))
+    comments = db.relationship('Comment', backref='personal_log', lazy=True, cascade='all, delete-orphan',
+                               foreign_keys='Comment.personal_log_id')
 
     def to_dict(self):
         from storage import storage
@@ -121,6 +127,7 @@ class PersonalLog(db.Model):
             'file_type': self.file_type,
             'file_size': self.file_size,
             'url': storage.generate_url(f'personal_logs/{self.filename}'),
+            'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -179,4 +186,36 @@ class Announcement(db.Model):
             'id': self.id,
             'content': self.content,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Comment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)
+    personal_log_id = db.Column(db.Integer, db.ForeignKey('personal_log.id'), nullable=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey('comment.id'), nullable=True)
+    author = db.Column(db.String(50), nullable=False)
+    password_hash = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    replies = db.relationship('Comment', backref=db.backref('parent', remote_side='Comment.id'),
+                              cascade='all, delete-orphan', lazy=True)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'media_id': self.media_id,
+            'personal_log_id': self.personal_log_id,
+            'parent_id': self.parent_id,
+            'author': self.author,
+            'content': self.content,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'replies': [reply.to_dict() for reply in self.replies],
         }
