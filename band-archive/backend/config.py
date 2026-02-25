@@ -4,7 +4,13 @@ import os
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     MAX_CONTENT_LENGTH = 200 * 1024 * 1024  # 200MB
-    UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+
+    # S3 호환 스토리지 설정 (R2, B2 등)
+    S3_ENDPOINT_URL = os.getenv('S3_ENDPOINT_URL')
+    S3_ACCESS_KEY = os.getenv('S3_ACCESS_KEY')
+    S3_SECRET_KEY = os.getenv('S3_SECRET_KEY')
+    S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
+    S3_PRESIGN_EXPIRES = 3600  # presigned URL 유효시간 (초)
 
 
 class DevelopmentConfig(Config):
@@ -20,4 +26,3 @@ class TestingConfig(Config):
 class ProductionConfig(Config):
     DEBUG = False
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:////data/band_archive.db')
-    UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/data/uploads')

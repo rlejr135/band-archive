@@ -1,11 +1,11 @@
-import os
+import mimetypes
 
-from flask import Blueprint, jsonify, request, current_app
-from werkzeug.utils import secure_filename
+from flask import Blueprint, jsonify, request
 
 from extensions import db
 from models import Song, PracticeLog
 from errors import NotFoundError, ValidationError
+from storage import storage
 from validators import allowed_file, generate_secure_filename, ALLOWED_EXTENSIONS
 
 practice_logs_bp = Blueprint('practice_logs', __name__)
@@ -78,9 +78,7 @@ def delete_practice_log(id):
     log = _get_practice_log_or_404(id)
 
     if log.recording:
-        file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], log.recording)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        storage.delete(f'recordings/{log.recording}')
 
     db.session.delete(log)
     db.session.commit()
@@ -102,9 +100,9 @@ def upload_recording(id):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     filename = generate_secure_filename(file.filename)
-    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
-    file.save(file_path)
-    os.chmod(file_path, 0o644)
+    content_type, _ = mimetypes.guess_type(filename)
+
+    storage.upload(f'recordings/{filename}', file, content_type=content_type)
 
     log.recording = filename
     db.session.commit()

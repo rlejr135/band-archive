@@ -1,10 +1,9 @@
-import os
-
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request
 
 from extensions import db
 from models import Member
 from errors import NotFoundError, ValidationError
+from storage import storage
 from validators import validate_required_string, validate_string_length
 
 members_bp = Blueprint('members', __name__)
@@ -75,11 +74,8 @@ def update_member(id):
 def delete_member(id):
     member = _get_member_or_404(id)
 
-    upload_folder = current_app.config['UPLOAD_FOLDER']
     for log in member.personal_logs:
-        file_path = os.path.join(upload_folder, 'personal_logs', log.filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        storage.delete(f'personal_logs/{log.filename}')
 
     db.session.delete(member)
     db.session.commit()

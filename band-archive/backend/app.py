@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from extensions import db
 from errors import register_error_handlers
+from storage import storage
 from routes.songs import songs_bp
 from routes.practice_logs import practice_logs_bp
 from routes.dashboard import dashboard_bp
@@ -97,10 +98,11 @@ def create_app(config_class=None):
     app.register_blueprint(rehearsals_bp)
     app.register_blueprint(search_bp)
 
+    storage.init_app(app)
+
     with app.app_context():
         db.create_all()
         _run_migrations(app)
-        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
     return app
 

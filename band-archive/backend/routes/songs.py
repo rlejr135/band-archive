@@ -1,12 +1,14 @@
-import os
+import re
+import mimetypes
 from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify, request, send_from_directory, current_app
+from flask import Blueprint, jsonify, request, redirect, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
 from models import Song, Media
 from errors import ValidationError, NotFoundError
+from storage import storage
 from validators import (
     validate_status,
     validate_difficulty,
@@ -37,6 +39,13 @@ def _detect_file_type(filename):
     if ext in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
         return 'image'
     return 'document'
+
+
+def _guess_content_type(filename):
+    ct, _ = mimetypes.guess_type(filename)
+    if filename.lower().endswith('.m4a'):
+        return 'audio/mp4'
+    return ct or 'application/octet-stream'
 
 
 @songs_bp.route('/')
@@ -155,28 +164,22 @@ def update_song(id):
 def delete_song(id):
     song = _get_song_or_404(id)
 
-    upload_folder = current_app.config['UPLOAD_FOLDER']
     for media in song.media_files:
-        file_path = os.path.join(upload_folder, media.filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        storage.delete(f'media/{media.filename}')
     for log in song.practice_logs:
         if log.recording:
-            file_path = os.path.join(upload_folder, log.recording)
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            storage.delete(f'recordings/{log.recording}')
 
     db.session.delete(song)
     db.session.commit()
     return jsonify({"message": "Song deleted"}), 200
 
 
-import re
-
 def _safe_filename(filename):
     # Preserve Korean characters, letters, numbers, dots, underscores, and hyphens.
     # Replace other characters with underscore.
     return re.sub(r'[^a-zA-Z0-9가-힣._-]', '_', filename)
+
 
 @songs_bp.route('/songs/<int:id>/upload', methods=['POST'])
 def upload_sheet_music(id):
@@ -193,16 +196,20 @@ def upload_sheet_music(id):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     filename = generate_secure_filename(file.filename)
-    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
-    file.save(file_path)
-    os.chmod(file_path, 0o644)
+    content_type = _guess_content_type(filename)
+
+    file.seek(0, 2)
+    file_size = file.tell()
+    file.seek(0)
+
+    storage.upload(f'media/{filename}', file, content_type=content_type)
 
     media = Media(
         song_id=id,
         filename=filename,
         original_filename=file.filename,
         file_type=_detect_file_type(filename),
-        file_size=os.path.getsize(file_path),
+        file_size=file_size,
     )
     db.session.add(media)
 
@@ -232,16 +239,20 @@ def add_media(id):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     filename = generate_secure_filename(file.filename)
-    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
-    file.save(file_path)
-    os.chmod(file_path, 0o644)
+    content_type = _guess_content_type(filename)
+
+    file.seek(0, 2)
+    file_size = file.tell()
+    file.seek(0)
+
+    storage.upload(f'media/{filename}', file, content_type=content_type)
 
     media = Media(
         song_id=id,
         filename=filename,
         original_filename=file.filename,
         file_type=_detect_file_type(filename),
-        file_size=os.path.getsize(file_path),
+        file_size=file_size,
     )
     db.session.add(media)
     db.session.commit()
@@ -266,33 +277,32 @@ def rename_media(media_id):
         ext = media.filename.rsplit('.', 1)[1] if '.' in media.filename else ''
         if ext:
             new_name = f"{new_name}.{ext}"
-            
+
     # Allow safe filename characters
     safe_name = _safe_filename(new_name)
-    
+
     # Try to preserve the ID_TIMESTAMP prefix structure
     parts = media.filename.split('_', 2)
     if len(parts) >= 3:
         prefix = f"{parts[0]}_{parts[1]}_"
     else:
-        # Should not happen typically, but fallback
         timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
         prefix = f"{media.song_id}_{timestamp}_"
-        
+
     new_filename = f"{prefix}{safe_name}"
-    
-    old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], media.filename)
-    new_path = os.path.join(current_app.config['UPLOAD_FOLDER'], new_filename)
-    
-    if os.path.exists(new_path):
+
+    old_key = f'media/{media.filename}'
+    new_key = f'media/{new_filename}'
+
+    if storage.exists(new_key):
         raise ValidationError("File with this name already exists")
-        
-    if os.path.exists(old_path):
-        os.rename(old_path, new_path)
-        
+
+    storage.copy(old_key, new_key)
+    storage.delete(old_key)
+
     media.filename = new_filename
     db.session.commit()
-    
+
     return jsonify(media.to_dict()), 200
 
 
@@ -302,9 +312,7 @@ def delete_media(media_id):
     if not media:
         raise NotFoundError("Media not found")
 
-    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], media.filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
+    storage.delete(f'media/{media.filename}')
 
     db.session.delete(media)
     db.session.commit()
@@ -313,8 +321,6 @@ def delete_media(media_id):
 
 @songs_bp.route('/uploads/<filename>')
 def uploaded_file(filename):
-    response = send_from_directory(current_app.config['UPLOAD_FOLDER'], filename)
-    # Explicitly set MIME type for .m4a files for browser compatibility
-    if filename.lower().endswith('.m4a'):
-        response.headers['Content-Type'] = 'audio/mp4'
-    return response
+    """하위 호환: presigned URL로 리다이렉트"""
+    url = storage.generate_url(f'media/{filename}')
+    return redirect(url)

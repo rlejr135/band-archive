@@ -1,21 +1,19 @@
 import os
+import mimetypes
 
-from flask import Blueprint, jsonify, request, current_app, send_from_directory
+from flask import Blueprint, jsonify, request, redirect
 
 from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
+from storage import storage
 from validators import (
     validate_required_string,
     validate_string_length,
-    allowed_file,
     generate_secure_filename,
-    ALLOWED_EXTENSIONS,
 )
 
 personal_logs_bp = Blueprint('personal_logs', __name__)
-
-PERSONAL_LOGS_SUBDIR = 'personal_logs'
 
 AUDIO_EXTENSIONS = {'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'}
 VIDEO_EXTENSIONS = {'mp4', 'webm', 'mov', 'avi', 'mkv'}
@@ -27,12 +25,6 @@ def _get_member_or_404(member_id):
     if not member:
         raise NotFoundError("Member not found")
     return member
-
-
-def _get_upload_dir():
-    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], PERSONAL_LOGS_SUBDIR)
-    os.makedirs(upload_dir, exist_ok=True)
-    return upload_dir
 
 
 def _detect_file_type(filename):
@@ -69,14 +61,13 @@ def create_log(member_id):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(sorted(ALLOWED_LOG_EXTENSIONS))}")
 
     filename = generate_secure_filename(file.filename)
-    upload_dir = _get_upload_dir()
-    file_path = os.path.join(upload_dir, filename)
+    content_type, _ = mimetypes.guess_type(filename)
+
     file.seek(0, os.SEEK_END)
     file_size = file.tell()
     file.seek(0)
-    
-    file.save(file_path)
-    os.chmod(file_path, 0o644)
+
+    storage.upload(f'personal_logs/{filename}', file, content_type=content_type)
 
     log = PersonalLog(
         member_id=member_id,
@@ -97,10 +88,7 @@ def delete_log(log_id):
     if not log:
         raise NotFoundError("Personal log not found")
 
-    upload_dir = _get_upload_dir()
-    file_path = os.path.join(upload_dir, log.filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
+    storage.delete(f'personal_logs/{log.filename}')
 
     db.session.delete(log)
     db.session.commit()
@@ -109,5 +97,6 @@ def delete_log(log_id):
 
 @personal_logs_bp.route('/uploads/personal_logs/<filename>')
 def serve_personal_log_file(filename):
-    upload_dir = _get_upload_dir()
-    return send_from_directory(upload_dir, filename)
+    """하위 호환: presigned URL로 리다이렉트"""
+    url = storage.generate_url(f'personal_logs/{filename}')
+    return redirect(url)

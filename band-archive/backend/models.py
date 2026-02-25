@@ -48,13 +48,14 @@ class Media(db.Model):
     song = db.relationship('Song', backref=db.backref('media_files', lazy=True, cascade='all, delete-orphan'))
 
     def to_dict(self):
+        from storage import storage
         return {
             'id': self.id,
             'song_id': self.song_id,
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
-            'url': f'/uploads/{self.filename}',
+            'url': storage.generate_url(f'media/{self.filename}'),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -110,6 +111,7 @@ class PersonalLog(db.Model):
     member = db.relationship('Member', backref=db.backref('personal_logs', lazy=True, cascade='all, delete-orphan'))
 
     def to_dict(self):
+        from storage import storage
         return {
             'id': self.id,
             'member_id': self.member_id,
@@ -118,7 +120,7 @@ class PersonalLog(db.Model):
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
-            'url': f'/uploads/personal_logs/{self.filename}',
+            'url': storage.generate_url(f'personal_logs/{self.filename}'),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -137,6 +139,7 @@ class PracticeLog(db.Model):
     song = db.relationship('Song', backref=db.backref('practice_logs', lazy=True, cascade='all, delete-orphan'))
 
     def to_dict(self):
+        from storage import storage
         return {
             'id': self.id,
             'song_id': self.song_id,
@@ -145,6 +148,7 @@ class PracticeLog(db.Model):
             'content': self.content,
             'feedback': self.feedback,
             'recording': self.recording,
+            'recording_url': storage.generate_url(f'recordings/{self.recording}') if self.recording else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
