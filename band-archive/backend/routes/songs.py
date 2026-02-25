@@ -166,9 +166,6 @@ def delete_song(id):
 
     for media in song.media_files:
         storage.delete(f'media/{media.filename}')
-    for log in song.practice_logs:
-        if log.recording:
-            storage.delete(f'recordings/{log.recording}')
 
     db.session.delete(song)
     db.session.commit()
