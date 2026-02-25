@@ -154,6 +154,18 @@ def update_song(id):
 @songs_bp.route('/songs/<int:id>', methods=['DELETE'])
 def delete_song(id):
     song = _get_song_or_404(id)
+
+    upload_folder = current_app.config['UPLOAD_FOLDER']
+    for media in song.media_files:
+        file_path = os.path.join(upload_folder, media.filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    for log in song.practice_logs:
+        if log.recording:
+            file_path = os.path.join(upload_folder, log.recording)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
     db.session.delete(song)
     db.session.commit()
     return jsonify({"message": "Song deleted"}), 200

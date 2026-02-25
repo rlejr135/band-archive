@@ -76,6 +76,12 @@ def update_practice_log(id):
 @practice_logs_bp.route('/practice-logs/<int:id>', methods=['DELETE'])
 def delete_practice_log(id):
     log = _get_practice_log_or_404(id)
+
+    if log.recording:
+        file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], log.recording)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
     db.session.delete(log)
     db.session.commit()
     return jsonify({"message": "Practice log deleted"}), 200
