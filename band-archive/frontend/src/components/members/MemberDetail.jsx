@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getMember, fetchMemberLogs, uploadPersonalLog, deletePersonalLog, deleteMember } from '../../services/memberApi';
 import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
+import CommentSection from '../common/CommentSection';
 import useAsyncData from '../../hooks/useAsyncData';
 import './MemberDetail.css';
 
@@ -96,6 +97,7 @@ const MemberDetail = () => {
                 type: playingLog.file_type,
               }}
             />
+            <CommentSection targetType="personal-logs" targetId={playingLog.id} />
           </div>
         )}
 
