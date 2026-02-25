@@ -1,5 +1,6 @@
 import boto3
 from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
 
 
 class StorageClient:
@@ -13,6 +14,7 @@ class StorageClient:
 
     def init_app(self, app):
         self._bucket = app.config['S3_BUCKET_NAME']
+        self._presign_expires = app.config.get('S3_PRESIGN_EXPIRES', 3600)
         self._client = boto3.client(
             's3',
             endpoint_url=app.config['S3_ENDPOINT_URL'],
@@ -32,12 +34,12 @@ class StorageClient:
         """파일 삭제"""
         self._client.delete_object(Bucket=self._bucket, Key=key)
 
-    def generate_url(self, key, expires_in=3600):
-        """presigned URL 생성 (기본 1시간)"""
+    def generate_url(self, key, expires_in=None):
+        """presigned URL 생성 (기본: config S3_PRESIGN_EXPIRES)"""
         return self._client.generate_presigned_url(
             'get_object',
             Params={'Bucket': self._bucket, 'Key': key},
-            ExpiresIn=expires_in,
+            ExpiresIn=expires_in or self._presign_expires,
         )
 
     def exists(self, key):
@@ -45,7 +47,7 @@ class StorageClient:
         try:
             self._client.head_object(Bucket=self._bucket, Key=key)
             return True
-        except self._client.exceptions.ClientError:
+        except ClientError:
             return False
 
     def copy(self, src_key, dst_key):

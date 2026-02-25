@@ -294,6 +294,9 @@ def rename_media(media_id):
     old_key = f'media/{media.filename}'
     new_key = f'media/{new_filename}'
 
+    if not storage.exists(old_key):
+        raise NotFoundError("Original file not found in storage")
+
     if storage.exists(new_key):
         raise ValidationError("File with this name already exists")
 
