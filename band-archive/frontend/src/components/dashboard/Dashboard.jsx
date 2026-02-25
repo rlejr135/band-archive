@@ -64,10 +64,6 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
               <span className="stat-value">{stats?.total_songs ?? 0}</span>
               <span className="stat-label">전체 곡</span>
             </div>
-            <div className="stat-item">
-              <span className="stat-value">{stats?.total_practice_logs ?? 0}</span>
-              <span className="stat-label">연습 일지</span>
-            </div>
           </div>
         </div>
 
@@ -119,32 +115,6 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
         {/* Rehearsal Calendar */}
         <RehearsalCalendar />
 
-        {/* Recent Practice Logs */}
-        <div className="dashboard-card">
-          <h3>📝 최근 연습 일지</h3>
-          {stats?.recent_practice_logs?.length > 0 ? (
-            <ul className="recent-list">
-              {stats.recent_practice_logs.map((log) => (
-                <li
-                  key={log.id}
-                  className="recent-item"
-                  onClick={() => onSelectSong({ id: log.song_id })}
-                >
-                  <div className="recent-info">
-                    <span className="recent-title">{log.song_title}</span>
-                    <span className="recent-artist">{log.content || '내용 없음'}</span>
-                  </div>
-                  <span className="recent-date">
-                    {new Date(log.date).toLocaleDateString('ko-KR')}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="empty-card">아직 연습 일지가 없습니다</div>
-          )}
-        </div>
-
         {/* Quick Actions */}
         <div className="dashboard-card">
           <h3>⚡ 빠른 작업</h3>
@@ -163,7 +133,6 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
           <h3>💡 연습 팁</h3>
           <div className="tips-content">
             <p>✨ 정기적으로 연습 영상을 업로드하여 발전 과정을 기록하세요</p>
-            <p>🎯 각 곡의 연습 일지 기능을 활용하여 연습 포인트를 정리하세요</p>
             <p>🎸 어려운 부분은 반복 연습하고 기록을 남기세요</p>
           </div>
         </div>
