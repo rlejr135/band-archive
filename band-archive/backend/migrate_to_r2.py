@@ -14,7 +14,7 @@ import sys
 import mimetypes
 
 from app import create_app
-from models import Media, PracticeLog, PersonalLog
+from models import Media, PersonalLog
 from storage import storage
 
 
@@ -61,33 +61,7 @@ def migrate(app):
                 print(f"  [FAIL] {key}: {e}")
                 failed += 1
 
-        # 2. PracticeLog 녹음 파일
-        print("\n=== PracticeLog 녹음 마이그레이션 ===")
-        for log in PracticeLog.query.filter(PracticeLog.recording.isnot(None)).all():
-            key = f'recordings/{log.recording}'
-            local_path = os.path.join(upload_folder, log.recording)
-
-            if not os.path.exists(local_path):
-                print(f"  [MISSING] {local_path}")
-                missing += 1
-                continue
-
-            if storage.exists(key):
-                print(f"  [SKIP] {key} (이미 존재)")
-                skipped += 1
-                continue
-
-            try:
-                ct = guess_content_type(log.recording)
-                with open(local_path, 'rb') as f:
-                    storage.upload(key, f, content_type=ct)
-                print(f"  [OK] {key} ({os.path.getsize(local_path)} bytes)")
-                success += 1
-            except Exception as e:
-                print(f"  [FAIL] {key}: {e}")
-                failed += 1
-
-        # 3. PersonalLog 파일
+        # 2. PersonalLog 파일
         print("\n=== PersonalLog 파일 마이그레이션 ===")
         for log in PersonalLog.query.all():
             key = f'personal_logs/{log.filename}'
@@ -131,15 +105,6 @@ def verify(app):
         print("=== 검증: Media ===")
         for media in Media.query.all():
             key = f'media/{media.filename}'
-            if storage.exists(key):
-                ok += 1
-            else:
-                print(f"  [MISSING] {key}")
-                missing += 1
-
-        print("=== 검증: PracticeLog 녹음 ===")
-        for log in PracticeLog.query.filter(PracticeLog.recording.isnot(None)).all():
-            key = f'recordings/{log.recording}'
             if storage.exists(key):
                 ok += 1
             else:
