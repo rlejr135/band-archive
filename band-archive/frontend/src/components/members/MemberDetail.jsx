@@ -85,6 +85,20 @@ const MemberDetail = () => {
 
       <div className="logs-list">
         <h3>연습 기록 ({logs ? logs.length : 0})</h3>
+
+        {playingLog && (
+          <div className="inline-player-wrapper">
+            <button className="close-player-btn" onClick={() => setPlayingLog(null)}>&times;</button>
+            <MediaPlayer
+              file={{
+                url: playingLog.url,
+                name: playingLog.title,
+                type: playingLog.file_type,
+              }}
+            />
+          </div>
+        )}
+
         {!logs || logs.length === 0 ? (
           <p className="empty-state-box">기록이 없습니다.</p>
         ) : (
@@ -121,25 +135,6 @@ const MemberDetail = () => {
           </div>
         )}
       </div>
-
-      {playingLog && (
-        <div className="media-modal-overlay" onClick={() => setPlayingLog(null)}>
-          <div className="media-modal-content" onClick={e => e.stopPropagation()}>
-            <button className="close-modal-btn" onClick={() => setPlayingLog(null)}>&times;</button>
-            <div className="modal-header">
-              <h3>{playingLog.title}</h3>
-            </div>
-            <MediaPlayer
-              file={{
-                url: playingLog.url,
-                name: playingLog.title,
-                type: playingLog.file_type,
-              }}
-              autoPlay
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };

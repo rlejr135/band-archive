@@ -232,6 +232,36 @@ pre.content-empty {
   color: var(--primary-color);
 }
 
+/* Inline player */
+.song-media .inline-player-wrapper {
+  position: relative;
+  margin-bottom: 16px;
+  background: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.song-media .close-player-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.4rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.song-media .close-player-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-color);
+}
+
 @media (max-width: 768px) {
   .mobile-back-btn {
     display: flex;

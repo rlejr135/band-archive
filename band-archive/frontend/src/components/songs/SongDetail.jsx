@@ -267,7 +267,10 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
         {/* Media Player for selected file */}
         {selectedMedia && (
-          <MediaPlayer file={selectedMedia} />
+          <div className="inline-player-wrapper">
+            <button className="close-player-btn" onClick={() => setSelectedMedia(null)}>&times;</button>
+            <MediaPlayer file={selectedMedia} />
+          </div>
         )}
 
         {/* Media List */}
