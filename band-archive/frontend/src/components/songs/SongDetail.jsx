@@ -4,7 +4,6 @@ import './SongDetail.css';
 import './SongMedia.css';
 import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
-import PracticeLogSection from '../practices/PracticeLogSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
@@ -330,9 +329,6 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
           </div>
         )}
       </div>
-
-      {/* Practice Logs */}
-      <PracticeLogSection songId={song.id} />
 
       <div className="detail-actions">
         <button onClick={() => onEdit(song)} className="edit-btn">정보 수정</button>
