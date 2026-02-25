@@ -5,7 +5,6 @@ import {
   updatePracticeLog,
   deletePracticeLog,
   uploadRecording,
-  API_URL,
 } from '../../services/api';
 import MediaPlayer from '../common/MediaPlayer';
 import './PracticeLogSection.css';
@@ -98,7 +97,7 @@ const PracticeLogSection = ({ songId }) => {
     const isVideo = ['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext);
     setSelectedRecording({
       name: log.recording,
-      url: `${API_URL}/uploads/${log.recording}`,
+      url: log.recording_url,
       type: isVideo ? 'video' : 'audio',
     });
   };

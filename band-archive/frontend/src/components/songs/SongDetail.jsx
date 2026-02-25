@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { API_URL } from '../../services/api';
 import { useSongs } from '../../context/SongContext';
 import './SongDetail.css';
 import './SongMedia.css';
@@ -146,7 +145,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     setSelectedMedia({
       id: media.id,
       name: getDisplayName(media.filename),
-      url: `${API_URL}${media.url}`,
+      url: media.url,
       type: getMediaType(media),
     });
   };
@@ -155,7 +154,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     setSelectedMedia({
       id: media.id,
       name: getDisplayName(media.filename),
-      url: `${API_URL}${media.url}`,
+      url: media.url,
       type: getMediaType(media),
     });
   };
@@ -304,7 +303,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
                       )}
                       {type === 'document' && (
-                        <a href={`${API_URL}${media.url}`} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
+                        <a href={media.url} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
                       )}
 
                       <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>

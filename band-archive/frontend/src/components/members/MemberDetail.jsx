@@ -4,7 +4,6 @@ import { getMember, fetchMemberLogs, uploadPersonalLog, deletePersonalLog, delet
 import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import useAsyncData from '../../hooks/useAsyncData';
-import { API_URL } from '../../services/api';
 import './MemberDetail.css';
 
 const MemberDetail = () => {
@@ -132,7 +131,7 @@ const MemberDetail = () => {
             </div>
             <MediaPlayer
               file={{
-                url: `${API_URL}${playingLog.url}`,
+                url: playingLog.url,
                 name: playingLog.title,
                 type: playingLog.file_type,
               }}
