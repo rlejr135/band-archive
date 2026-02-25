@@ -125,35 +125,6 @@ class PersonalLog(db.Model):
         }
 
 
-class PracticeLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)
-    date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    content = db.Column(db.Text, nullable=True)
-    feedback = db.Column(db.Text, nullable=True)
-    recording = db.Column(db.String(200), nullable=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
-                           onupdate=lambda: datetime.now(timezone.utc))
-
-    song = db.relationship('Song', backref=db.backref('practice_logs', lazy=True, cascade='all, delete-orphan'))
-
-    def to_dict(self):
-        from storage import storage
-        return {
-            'id': self.id,
-            'song_id': self.song_id,
-            'song_title': self.song.title if self.song else None,
-            'date': self.date.isoformat() if self.date else None,
-            'content': self.content,
-            'feedback': self.feedback,
-            'recording': self.recording,
-            'recording_url': storage.generate_url(f'recordings/{self.recording}') if self.recording else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
 rehearsal_songs = db.Table('rehearsal_songs',
     db.Column('rehearsal_id', db.Integer, db.ForeignKey('rehearsal.id'), primary_key=True),
     db.Column('song_id', db.Integer, db.ForeignKey('song.id'), primary_key=True)
