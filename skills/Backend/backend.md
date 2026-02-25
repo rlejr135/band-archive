@@ -11,6 +11,7 @@
 - **프레임워크:** Flask 3.0.0
 - **ORM:** Flask-SQLAlchemy 3.1.1
 - **DB:** SQLite (개발/배포 모두)
+- **파일 스토리지:** Cloudflare R2 (S3 호환, boto3)
 - **마이그레이션:** Flask-Migrate 4.0.5
 - **CORS:** Flask-Cors 4.0.0
 - **서버:** Gunicorn (프로덕션), Werkzeug (개발)
@@ -22,8 +23,9 @@
 ```
 band-archive/backend/
 ├── app.py              # Flask 앱 팩토리, 블루프린트 등록, 시작 시 마이그레이션
-├── config.py           # Dev/Test/Prod 설정 클래스
+├── config.py           # Dev/Test/Prod 설정 클래스 + S3 환경변수
 ├── extensions.py       # SQLAlchemy 인스턴스
+├── storage.py          # S3 호환 스토리지 추상화 (upload/delete/generate_url/exists/copy)
 ├── models.py           # 전체 DB 모델 (8개 + 연결 테이블 1개)
 ├── errors.py           # ValidationError, NotFoundError 커스텀 예외
 ├── validators.py       # 입력 검증 유틸리티
@@ -32,7 +34,7 @@ band-archive/backend/
 ├── Dockerfile          # python:3.13-slim 기반
 ├── fly.toml            # Fly.io 배포 설정
 ├── routes/
-│   ├── songs.py        # 곡 CRUD + 미디어 관리 (가장 복잡)
+│   ├── songs.py        # 곡 CRUD + 미디어 관리 + R2 파일 관리 (가장 복잡)
 │   ├── practice_logs.py # 연습 기록
 │   ├── members.py      # 멤버 관리
 │   ├── personal_logs.py # 개인 녹음 기록
@@ -96,7 +98,7 @@ band-archive/backend/
 | file_type | String(20) | audio / video만 허용 |
 | file_size | Integer | 바이트 단위 |
 
-저장 경로: `uploads/personal_logs/`
+S3 Key: `personal_logs/{filename}`
 
 ### PracticeLog
 | 컬럼 | 타입 | 설명 |
@@ -168,7 +170,7 @@ band-archive/backend/
 | POST | `/songs/<id>/upload` | 악보 업로드 |
 | PUT | `/media/<id>/rename` | 미디어 이름 변경 (한글 지원) |
 | DELETE | `/media/<id>` | 미디어 삭제 |
-| GET | `/uploads/<filename>` | 파일 다운로드/스트리밍 |
+| GET | `/uploads/<filename>` | R2 presigned URL로 리다이렉트 (하위 호환) |
 
 ### 연습 기록 (`/practice-logs`)
 | Method | Path | 설명 |
@@ -195,7 +197,7 @@ band-archive/backend/
 | GET | `/members/<id>/logs` | 멤버별 녹음 조회 |
 | POST | `/members/<id>/logs` | 녹음 업로드 (audio/video만) |
 | DELETE | `/personal-logs/<id>` | 녹음 삭제 |
-| GET | `/uploads/personal_logs/<filename>` | 녹음 스트리밍 |
+| GET | `/uploads/personal_logs/<filename>` | R2 presigned URL로 리다이렉트 (하위 호환) |
 
 ### 곡 추천 (`/suggestions`)
 | Method | Path | 설명 |
@@ -230,8 +232,15 @@ band-archive/backend/
 |--------|------|------|
 | GET | `/` | 헬스체크 ("Band Archive API is running!") |
 
-## 파일 업로드 처리
+## 파일 스토리지 (Cloudflare R2)
 
+- **스토리지:** Cloudflare R2 (S3 호환 API, boto3 사용)
+- **추상화:** `storage.py` — `StorageClient` 클래스 (upload, delete, generate_url, exists, copy)
+- **파일 서빙:** presigned URL 방식 (to_dict()에서 직접 반환)
+- **S3 Key 구조:**
+  - 곡 미디어/악보: `media/{uuid}.{ext}`
+  - 연습 녹음: `recordings/{uuid}.{ext}`
+  - 개인 로그: `personal_logs/{uuid}.{ext}`
 - **허용 확장자:**
   - 이미지: png, jpg, jpeg, gif, webp
   - 문서: pdf
@@ -240,7 +249,7 @@ band-archive/backend/
 - **최대 크기:** 200MB
 - **파일명:** UUID 기반 랜덤 생성 (`{uuid}.{ext}`), 원본 이름은 DB에 별도 저장
 - **M4A 특수 처리:** Content-Type을 `audio/mp4`로 설정 (브라우저 호환)
-- **저장 위치:** 개발 `backend/uploads/`, 프로덕션 `/data/uploads/`
+- **하위 호환:** `/uploads/` 엔드포인트는 R2 presigned URL로 302 리다이렉트
 
 ## 설정 및 환경 변수
 
@@ -251,13 +260,16 @@ band-archive/backend/
 | SECRET_KEY | Flask 시크릿 | dev-secret-key |
 | CORS_ALLOWED_ORIGINS | 허용 오리진 (콤마 구분) | localhost:5173,3000 |
 | FLASK_CONFIG | 설정 클래스 | (자동) |
-| UPLOAD_FOLDER | 업로드 경로 | (설정별 상이) |
+| S3_ENDPOINT_URL | R2 엔드포인트 URL | - |
+| S3_ACCESS_KEY | R2 Access Key ID | - |
+| S3_SECRET_KEY | R2 Secret Access Key | - |
+| S3_BUCKET_NAME | R2 버킷 이름 | - |
 | PORT | 서버 포트 | 5000 |
 
 ### 설정 클래스
 - **DevelopmentConfig:** DEBUG=True, SQLite 로컬 파일
 - **TestingConfig:** TESTING=True, 인메모리 SQLite
-- **ProductionConfig:** DEBUG=False, `/data/band_archive.db`, `/data/uploads`
+- **ProductionConfig:** DEBUG=False, `/data/band_archive.db`, R2 스토리지
 
 ## 시작 시 마이그레이션 (`_run_migrations`)
 
@@ -273,15 +285,16 @@ SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 �
 
 ## 캐스케이드 삭제
 
-- Song 삭제 → Media (DB + 파일시스템), PracticeLog 자동 삭제
-- Member 삭제 → PersonalLog 자동 삭제
+- Song 삭제 → Media (DB + R2), PracticeLog recording (R2) 자동 삭제
+- Member 삭제 → PersonalLog (DB + R2) 자동 삭제
 
 ## 배포
 
 - **플랫폼:** Fly.io (도쿄 `nrt`)
 - **이미지:** python:3.13-slim
 - **서버:** gunicorn --bind 0.0.0.0:8080
-- **스토리지:** 2GB 영구 볼륨 `/data` 마운트
+- **DB 볼륨:** 2GB 영구 볼륨 `/data` 마운트 (SQLite만 사용)
+- **파일 스토리지:** Cloudflare R2 (S3 호환)
 - **프론트엔드 오리진:** `https://rlejr135.github.io`
 
 ## 실행 방법

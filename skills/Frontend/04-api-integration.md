@@ -117,6 +117,8 @@ export const fetchSongs = async () => {
 };
 ```
 > `API_URL`은 `export`되어 `memberApi.js`에서 import하여 재사용.
+>
+> **파일 URL 주의:** 미디어/녹음 파일의 URL은 백엔드가 R2 presigned URL을 절대경로로 반환하므로, 프론트에서 `API_URL`과 조합하지 않고 `media.url`, `log.recording_url`, `playingLog.url`을 그대로 사용해야 함.
 
 ### POST/PUT 요청 (JSON)
 ```javascript
