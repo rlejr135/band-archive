@@ -13,7 +13,7 @@
 
 | 파일 | 담당 |
 |------|------|
-| `src/services/api.js` | 곡, 미디어, 대시보드, 추천, 공지 |
+| `src/services/api.js` | 곡, 미디어, 대시보드, 추천, 공지, 댓글 |
 | `src/services/memberApi.js` | 멤버, 개인 로그 |
 | `src/services/rehearsalApi.js` | 합주 일정 CRUD |
 
@@ -92,6 +92,18 @@
 | `createRehearsal(data)` | POST | `/rehearsals` | 일정 생성 |
 | `updateRehearsal(id, data)` | PUT | `/rehearsals/:id` | 일정 수정 |
 | `deleteRehearsal(id)` | DELETE | `/rehearsals/:id` | 일정 삭제 |
+
+### 댓글 (Comments) — `api.js`
+
+| 함수명 | HTTP | 엔드포인트 | 설명 |
+|--------|------|-----------|------|
+| `fetchComments(targetType, targetId)` | GET | `/:targetType/:id/comments` | 댓글 목록 (대댓글 중첩) |
+| `createComment(targetType, targetId, data)` | POST | `/:targetType/:id/comments` | 댓글 작성 |
+| `createReply(commentId, data)` | POST | `/comments/:id/replies` | 대댓글 작성 |
+| `updateComment(commentId, data)` | PUT | `/comments/:id` | 댓글 수정 (비밀번호 검증) |
+| `deleteComment(commentId, password)` | DELETE | `/comments/:id` | 댓글 삭제 (비밀번호 검증) |
+
+> `targetType`은 `"media"` 또는 `"personal-logs"`
 
 ## API 호출 패턴
 

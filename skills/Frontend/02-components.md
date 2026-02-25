@@ -21,13 +21,15 @@ App
                 │   │   └── PasswordModal
                 │   └── SongDetail / SongForm
                 │       ├── FileUpload
-                │       └── MediaPlayer
+                │       ├── MediaPlayer
+                │       └── CommentSection
                 ├── SongSuggestion
                 │   └── PasswordModal
                 ├── MemberDashboard
                 └── MemberDetail
                     ├── FileUpload
-                    └── MediaPlayer
+                    ├── MediaPlayer
+                    └── CommentSection
 ```
 
 ---
@@ -107,6 +109,21 @@ App
 
 **참고**: `checkPassword` 미제공 시 기본 비밀번호 `'admin'`으로 클라이언트 검증
 
+### CommentSection
+**파일**: `common/CommentSection.jsx`
+**역할**: 미디어/개인로그 공용 댓글 컴포넌트 (대댓글 지원)
+
+| Prop | 타입 | 설명 |
+|------|------|------|
+| `targetType` | `string` | `"media"` 또는 `"personal-logs"` |
+| `targetId` | `number` | 대상 ID |
+
+**특이사항**:
+- `CommentItem` 재귀 렌더링으로 대댓글 표시
+- 댓글 작성: 이름 + 비밀번호 + 내용
+- 수정/삭제 시 비밀번호 검증 (서버 해시 비교)
+- API: `fetchComments()`, `createComment()`, `createReply()`, `updateComment()`, `deleteComment()`
+
 ---
 
 ## 페이지 컴포넌트
@@ -173,8 +190,9 @@ App
   - 저장 시 `editSong(id, { ...song, chords/memo: text })` 호출
 - 코드/메모는 항상 표시 (`<pre>` 태그)
 - 미디어 관리 (업로드, 재생, 이름 변경, 삭제)
+- 미디어 선택 시 인라인 플레이어 + 댓글(CommentSection) 표시
 - 내부 상태: `selectedMedia`, `renamingMediaId`, `newFilename`
-- 하위 컴포넌트: FileUpload, MediaPlayer
+- 하위 컴포넌트: FileUpload, MediaPlayer, CommentSection
 
 ### SongForm (`components/songs/SongForm.jsx`)
 - **순수 props 컴포넌트** (Context 미사용)

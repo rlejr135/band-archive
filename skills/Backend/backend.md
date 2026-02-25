@@ -26,7 +26,7 @@ band-archive/backend/
 ├── config.py           # Dev/Test/Prod 설정 클래스 + S3 환경변수
 ├── extensions.py       # SQLAlchemy 인스턴스
 ├── storage.py          # S3 호환 스토리지 추상화 (upload/delete/generate_url/exists/copy)
-├── models.py           # 전체 DB 모델 (7개 + 연결 테이블 1개)
+├── models.py           # 전체 DB 모델 (8개 + 연결 테이블 1개)
 ├── errors.py           # ValidationError, NotFoundError 커스텀 예외
 ├── validators.py       # 입력 검증 유틸리티
 ├── requirements.txt    # 의존성
@@ -40,6 +40,7 @@ band-archive/backend/
 │   ├── suggestions.py  # 곡 추천 + 투표
 │   ├── announcements.py # 공지사항 (단일 레코드 upsert)
 │   ├── rehearsals.py   # 합주 일정 CRUD (달력 기능)
+│   ├── comments.py     # 댓글 CRUD (Media/PersonalLog 공용)
 │   └── dashboard.py    # 통계
 └── tests/
     ├── conftest.py     # pytest 픽스처
@@ -140,6 +141,20 @@ S3 Key: `personal_logs/{filename}`
 | content | Text, Required | 공지 본문 |
 | updated_at | DateTime | 마지막 수정 시각 |
 
+### Comment
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | Integer, PK | |
+| media_id | FK → Media, nullable | 미디어 댓글 |
+| personal_log_id | FK → PersonalLog, nullable | 개인로그 댓글 |
+| parent_id | FK → Comment, nullable | 대댓글 (self-ref) |
+| author | String(50), Required | 작성자 |
+| password_hash | String(200), Required | 비밀번호 해시 |
+| content | Text, Required | 댓글 내용 |
+| created_at | DateTime | 생성일시 |
+
+관계: `replies` (self-referential 1:N, cascade delete)
+
 ## API 엔드포인트
 
 ### 곡 관리 (`/songs`)
@@ -200,6 +215,17 @@ S3 Key: `personal_logs/{filename}`
 | POST | `/rehearsals` | 일정 생성 (song_ids로 곡 연결 가능) |
 | PUT | `/rehearsals/<id>` | 일정 수정 |
 | DELETE | `/rehearsals/<id>` | 일정 삭제 |
+
+### 댓글 (`/comments`)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/media/<id>/comments` | 미디어 댓글 목록 (대댓글 중첩) |
+| POST | `/media/<id>/comments` | 미디어 댓글 작성 |
+| GET | `/personal-logs/<id>/comments` | 개인로그 댓글 목록 |
+| POST | `/personal-logs/<id>/comments` | 개인로그 댓글 작성 |
+| POST | `/comments/<id>/replies` | 대댓글 작성 |
+| PUT | `/comments/<id>` | 댓글 수정 (비밀번호 검증) |
+| DELETE | `/comments/<id>` | 댓글 삭제 (비밀번호 검증, cascade) |
 
 ### 대시보드 (`/dashboard`)
 | Method | Path | 설명 |
@@ -263,8 +289,9 @@ SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 �
 
 ## 캐스케이드 삭제
 
-- Song 삭제 → Media (DB + R2) 자동 삭제
-- Member 삭제 → PersonalLog (DB + R2) 자동 삭제
+- Song 삭제 → Media (DB + R2) + 댓글 자동 삭제
+- Member 삭제 → PersonalLog (DB + R2) + 댓글 자동 삭제
+- Comment 삭제 → 하위 대댓글 cascade 삭제
 
 ## 배포
 

@@ -37,6 +37,7 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
         - `FileUpload.jsx` + `.css`: 파일 업로드 컴포넌트
         - `MediaPlayer.jsx` + `.css`: 미디어 재생 컴포넌트
         - `PasswordModal.jsx` + `.css`: 비밀번호 입력 모달
+        - `CommentSection.jsx` + `.css`: 댓글/대댓글 컴포넌트 (Media/PersonalLog 공용)
     - `layout/`: Layout components (`Header.css`)
 - **`context/`**: Global state management
     - `SongContext.jsx`: Manages song lists, current selection, and loading states.
@@ -94,6 +95,7 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
 - **`api.js`**:
     - `fetchSongs`, `getSong`, `createSong`, `updateSong`, `deleteSong`
     - `uploadMedia` (supports progress tracking via XHR)
+    - `fetchComments`, `createComment`, `createReply`, `updateComment`, `deleteComment`
     - `fetchSuggestions`, `createSuggestion`, `deleteSuggestion`, `voteSuggestion`
     - `fetchAnnouncement`, `updateAnnouncement`
     - `deleteMedia`, `renameMedia`

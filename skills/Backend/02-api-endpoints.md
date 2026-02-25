@@ -239,6 +239,49 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 
 ---
 
+## Comments (`routes/comments.py`)
+
+### `GET /media/<media_id>/comments`
+미디어 댓글 목록 (대댓글 중첩)
+**Response:** `200` Comment[]
+
+### `POST /media/<media_id>/comments`
+미디어 댓글 작성
+```json
+{ "author": "홍길동", "password": "1234", "content": "이 부분 좋다!" }
+```
+**Response:** `201` Comment | `400` | `404`
+
+### `GET /personal-logs/<log_id>/comments`
+개인로그 댓글 목록 (대댓글 중첩)
+**Response:** `200` Comment[]
+
+### `POST /personal-logs/<log_id>/comments`
+개인로그 댓글 작성
+**Body:** 위와 동일
+**Response:** `201` Comment | `400` | `404`
+
+### `POST /comments/<id>/replies`
+대댓글 작성
+**Body:** 위와 동일
+**Response:** `201` Comment | `400` | `404`
+
+### `PUT /comments/<id>`
+댓글 수정 (비밀번호 검증)
+```json
+{ "password": "1234", "content": "수정된 내용" }
+```
+**Response:** `200` Comment | `400` | `404`
+
+### `DELETE /comments/<id>`
+댓글 삭제 (비밀번호 검증, 하위 대댓글 cascade)
+```json
+{ "password": "1234" }
+```
+**Response:** `200` | `400` | `404`
+
+---
+
 ## Dashboard (`routes/dashboard.py`)
 
 ### `GET /dashboard/stats`

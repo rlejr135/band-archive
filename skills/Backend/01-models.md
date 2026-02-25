@@ -8,6 +8,9 @@
 Song (1) ──── (*) Media
 Song (*) ──── (*) Rehearsal    (via rehearsal_songs)
 Member (1) ── (*) PersonalLog
+Media (1) ─── (*) Comment
+PersonalLog (1) ── (*) Comment
+Comment (1) ── (*) Comment    (self-referential, 대댓글)
 SongSuggestion (독립)
 Announcement (독립, 단일 레코드)
 ```
@@ -163,3 +166,34 @@ Announcement (독립, 단일 레코드)
 | id | Integer | PK | 항상 1 (단일 레코드) |
 | content | Text | NOT NULL | - |
 | updated_at | DateTime | - | UTC now, auto-update |
+
+---
+
+## Comment
+
+| 필드 | 타입 | 제약 | 기본값 |
+|------|------|------|--------|
+| id | Integer | PK | auto |
+| media_id | Integer | FK(media.id), nullable | - |
+| personal_log_id | Integer | FK(personal_log.id), nullable | - |
+| parent_id | Integer | FK(comment.id), nullable | - |
+| author | String(50) | NOT NULL | - |
+| password_hash | String(200) | NOT NULL | - |
+| content | Text | NOT NULL | - |
+| created_at | DateTime | - | UTC now |
+
+- `media_id` / `personal_log_id`: 둘 중 하나만 연결 (다형성)
+- `parent_id`: NULL이면 최상위 댓글, 값이 있으면 대댓글
+- 비밀번호: `werkzeug.security`로 해시 저장/검증
+- **Relationships:** `replies` (self-referential, cascade delete)
+
+**`to_dict()` 출력 (password 미포함, replies 중첩):**
+```json
+{
+  "id": 1, "media_id": 1, "personal_log_id": null,
+  "parent_id": null, "author": "홍길동",
+  "content": "이 부분 좋다!",
+  "created_at": "...",
+  "replies": [{ ... }]
+}
+```
