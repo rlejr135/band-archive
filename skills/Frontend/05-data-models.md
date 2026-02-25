@@ -48,19 +48,6 @@
 | `'image'` | jpg, png, gif, webp |
 | `'document'` | pdf, doc, txt 등 기타 |
 
-## Practice Log (연습 로그)
-
-```javascript
-{
-  id: number,               // PK
-  song_id: number,          // FK → Song
-  date: string,             // 날짜 (ISO8601)
-  content: string,          // 연습 내용
-  feedback: string,         // 피드백/메모
-  recording: string | null  // 녹음 파일명 (optional)
-}
-```
-
 ## Suggestion (추천곡)
 
 ```javascript
@@ -110,21 +97,11 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
 ```javascript
 {
   total_songs: number,             // 전체 곡 수
-  total_practice_logs: number,     // 전체 연습 로그 수
   status_counts: {
     Practice: number,              // 연습 중 곡 수
     Completed: number,             // 완료된 곡 수
     OnHold: number                 // 보류 곡 수
-  },
-  recent_practice_logs: [          // 최근 연습 로그
-    {
-      id: number,
-      song_id: number,
-      song_title: string,
-      content: string,
-      date: string                 // ISO8601
-    }
-  ]
+  }
 }
 ```
 
@@ -172,15 +149,6 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
   link: '',
   chords: '',
   memo: ''
-}
-```
-
-### Practice Log Form (PracticeLogSection.jsx)
-```javascript
-{
-  date: new Date().toISOString().split('T')[0],  // 오늘 날짜
-  content: '',
-  feedback: ''
 }
 ```
 

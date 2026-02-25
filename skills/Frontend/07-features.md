@@ -8,16 +8,14 @@
 **API**: `fetchDashboardStats()`
 
 ### 표시 내용
-- 전체 곡 수 & 연습 로그 수 (숫자 카드)
+- 전체 곡 수 (숫자 카드)
 - 곡 상태 분포 차트 (Practice / Completed / OnHold)
-- 최근 연습 로그 목록 (곡 제목 + 내용 + 날짜)
 - 연습 팁 섹션
 - 빠른 액션 버튼 (새로고침, 전체 곡 보기)
 
 ### 동작
 1. 마운트 시 `fetchDashboardStats()` 호출
 2. 로딩/에러/데이터 상태에 따라 렌더링
-3. 최근 연습 로그 클릭 → `/songs/:songId`로 이동
 
 ---
 
@@ -44,8 +42,6 @@
   - 미디어 클릭 → MediaPlayer로 재생
   - 미디어 이름 변경 (인라인 편집)
   - 미디어 삭제
-- **연습 로그** (PracticeLogSection 하위 컴포넌트)
-
 ### 곡 생성/수정 (SongForm)
 - 순수 props 컴포넌트 (Props: `song`, `onSave`, `onCancel`)
 - 폼 필드: title*, artist*, status, genre, difficulty(1-5), link, chords, memo (lyrics 제거됨)
@@ -56,24 +52,7 @@
 
 ---
 
-## 3. 연습 로그 (Practice Logs)
-
-**컴포넌트**: `components/practices/PracticeLogSection.jsx`
-**위치**: SongDetail 내부에 임베디드
-**API**: `fetchPracticeLogs()`, `createPracticeLog()`, `updatePracticeLog()`, `deletePracticeLog()`, `uploadRecording()`
-
-### 기능
-- Props로 `songId` 받아서 해당 곡의 연습 로그 CRUD
-- 로그 추가: 날짜, 내용, 피드백 입력
-- 로그 편집: 기존 데이터 폼에 채워서 수정
-- 로그 삭제: 확인 후 삭제
-- 녹음 업로드: 인라인 진행률 바 표시 (XHR onProgress)
-- 녹음 재생: 업로드된 녹음을 MediaPlayer로 즉시 재생 (재생 버튼 클릭 → 플레이어 표시)
-- 날짜순 정렬
-
----
-
-## 4. 추천곡 (Suggestions)
+## 3. 추천곡 (Suggestions)
 
 **경로**: `/suggestions`
 **컴포넌트**: `components/songs/SongSuggestion.jsx`
@@ -93,7 +72,7 @@
 
 ---
 
-## 5. 멤버 관리 (Members)
+## 4. 멤버 관리 (Members)
 
 **경로**: `/members`, `/members/:id`
 **컴포넌트**: `components/members/MemberDashboard.jsx`, `MemberDetail.jsx`
@@ -116,7 +95,7 @@
 
 ---
 
-## 6. 공지 토스트 (Announcement Toast)
+## 5. 공지 토스트 (Announcement Toast)
 
 **컴포넌트**: `components/common/AnnouncementToast.jsx`
 **위치**: 모든 페이지 — 헤더 아래에 항상 표시
@@ -129,7 +108,7 @@
 
 ---
 
-## 7. 합주 달력 (Rehearsal Calendar)
+## 6. 합주 달력 (Rehearsal Calendar)
 
 **컴포넌트**: `components/calendar/RehearsalCalendar.jsx`, `RehearsalDetail.jsx`, `RehearsalModal.jsx`
 **위치**: 대시보드 내부
@@ -146,7 +125,7 @@
 
 ---
 
-## 8. 파일 업로드 시스템
+## 7. 파일 업로드 시스템
 
 **컴포넌트**: `components/common/FileUpload.jsx`
 
@@ -160,12 +139,11 @@
 
 ### 사용 위치
 - SongDetail: 곡에 미디어 파일 첨부
-- PracticeLogSection: 연습 녹음 파일 업로드
 - MemberDetail: 개인 연습 로그 (audio/video) 업로드
 
 ---
 
-## 9. 비밀번호 보호
+## 8. 비밀번호 보호
 
 **컴포넌트**: `components/common/PasswordModal.jsx`
 
@@ -183,7 +161,6 @@
 
 ### 주의사항
 - 멤버 삭제는 PasswordModal 없이 `window.confirm()` 사용
-- 연습 로그 삭제도 비밀번호 없이 바로 삭제
 - 보안 수준이 낮음 (실제 인증 시스템 아님)
 
 ---

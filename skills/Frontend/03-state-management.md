@@ -132,15 +132,6 @@ memoText: string                 // 편집 중인 메모 텍스트
 memoSaving: boolean              // 메모 저장 중 여부
 ```
 
-### PracticeLogSection
-```javascript
-logs: array       // 연습 로그 목록
-loading: boolean  // 로딩 상태
-showForm: boolean // 폼 표시 여부
-editingLog: object | null // 편집 중인 로그
-formData: { date, content, feedback } // 폼 데이터
-```
-
 ### SongSuggestion
 ```javascript
 suggestions: array  // 추천곡 목록

@@ -21,9 +21,7 @@ App
                 │   │   └── PasswordModal
                 │   └── SongDetail / SongForm
                 │       ├── FileUpload
-                │       ├── MediaPlayer
-                │       └── PracticeLogSection
-                │           └── FileUpload
+                │       └── MediaPlayer
                 ├── SongSuggestion
                 │   └── PasswordModal
                 ├── MemberDashboard
@@ -115,9 +113,8 @@ App
 
 ### Dashboard (`components/dashboard/Dashboard.jsx`)
 - Props: `onSelectSong`, `onViewSongs`
-- 대시보드 통계 표시 (전체 곡 수, 연습 로그 수)
+- 대시보드 통계 표시 (전체 곡 수)
 - 곡 상태 분포 (Practice, Completed, OnHold)
-- 최근 연습 로그 (클릭 시 `onSelectSong({ id: log.song_id })`)
 - **합주 일정 달력** (`RehearsalCalendar`) 통합
 - 빠른 작업: 새로고침, 전체 곡 보기 (`onViewSongs`)
 - 연습 팁 섹션
@@ -177,7 +174,7 @@ App
 - 코드/메모는 항상 표시 (`<pre>` 태그)
 - 미디어 관리 (업로드, 재생, 이름 변경, 삭제)
 - 내부 상태: `selectedMedia`, `renamingMediaId`, `newFilename`
-- 하위 컴포넌트: FileUpload, MediaPlayer, PracticeLogSection
+- 하위 컴포넌트: FileUpload, MediaPlayer
 
 ### SongForm (`components/songs/SongForm.jsx`)
 - **순수 props 컴포넌트** (Context 미사용)
@@ -190,12 +187,6 @@ App
 - 추천곡 목록 + 투표 (thumbs up/down)
 - 추천곡 추가/삭제
 - API: `fetchSuggestions()`, `createSuggestion()`, `voteSuggestion()`, `deleteSuggestion()`
-
-### PracticeLogSection (`components/practices/PracticeLogSection.jsx`)
-- Props: `songId`
-- 해당 곡의 연습 로그 CRUD
-- 녹음 파일 업로드 (진행률 표시) + MediaPlayer로 즉시 재생
-- API: `fetchPracticeLogs()`, `createPracticeLog()`, `updatePracticeLog()`, `deletePracticeLog()`, `uploadRecording()`
 
 ### MemberDashboard (`components/members/MemberDashboard.jsx`)
 - 멤버 그리드 목록

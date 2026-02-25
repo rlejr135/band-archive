@@ -13,7 +13,7 @@
 
 | 파일 | 담당 |
 |------|------|
-| `src/services/api.js` | 곡, 미디어, 대시보드, 연습 로그, 추천, 공지 |
+| `src/services/api.js` | 곡, 미디어, 대시보드, 추천, 공지 |
 | `src/services/memberApi.js` | 멤버, 개인 로그 |
 | `src/services/rehearsalApi.js` | 합주 일정 CRUD |
 
@@ -42,17 +42,6 @@
 | 함수명 | HTTP | 엔드포인트 | 설명 |
 |--------|------|-----------|------|
 | `fetchDashboardStats()` | GET | `/dashboard/stats` | 대시보드 통계 |
-
-### 연습 로그 (Practice Logs)
-
-| 함수명 | HTTP | 엔드포인트 | 설명 |
-|--------|------|-----------|------|
-| `fetchPracticeLogs(songId)` | GET | `/songs/:id/practice-logs` | 곡별 연습 로그 |
-| `getPracticeLog(id)` | GET | `/practice-logs/:id` | 연습 로그 상세 |
-| `createPracticeLog(songId, data)` | POST | `/songs/:id/practice-logs` | 연습 로그 생성 |
-| `updatePracticeLog(logId, data)` | PUT | `/practice-logs/:id` | 연습 로그 수정 |
-| `deletePracticeLog(logId)` | DELETE | `/practice-logs/:id` | 연습 로그 삭제 |
-| `uploadRecording(logId, file, onProgress)` | POST | `/practice-logs/:id/upload` | 녹음 파일 업로드 |
 
 ### 추천곡 (Suggestions)
 

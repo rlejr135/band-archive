@@ -6,7 +6,6 @@
 
 ```
 Song (1) ──── (*) Media
-Song (1) ──── (*) PracticeLog
 Song (*) ──── (*) Rehearsal    (via rehearsal_songs)
 Member (1) ── (*) PersonalLog
 SongSuggestion (독립)
@@ -36,7 +35,6 @@ Announcement (독립, 단일 레코드)
 
 **Relationships:**
 - `media_files` (backref from Media)
-- `practice_logs` (backref from PracticeLog)
 - `rehearsals` (N:M via `rehearsal_songs`)
 
 **`to_dict()` 출력:**
@@ -78,31 +76,6 @@ Announcement (독립, 단일 레코드)
 }
 ```
 > `filename` 필드는 `original_filename`이 있으면 그걸 반환, 없으면 `filename` 반환.
-
----
-
-## PracticeLog
-
-| 필드 | 타입 | 제약 | 기본값 |
-|------|------|------|--------|
-| id | Integer | PK | auto |
-| song_id | Integer | FK(song.id), NOT NULL | - |
-| date | DateTime | - | UTC now |
-| content | Text | nullable | - |
-| feedback | Text | nullable | - |
-| recording | String(200) | nullable | - |
-| created_at | DateTime | - | UTC now |
-| updated_at | DateTime | - | UTC now, auto-update |
-
-**`to_dict()` 출력:**
-```json
-{
-  "id": 1, "song_id": 1, "song_title": "Be I",
-  "date": "...", "content": "...", "feedback": "...",
-  "recording": null,
-  "created_at": "...", "updated_at": "..."
-}
-```
 
 ---
 

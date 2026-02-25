@@ -8,7 +8,7 @@ description: Analysis of the frontend architecture, structure, and functionality
 # Frontend Analysis - Band Archive
 
 ## Overview
-The frontend is a **React 19** application built with **Vite 7**, designed to manage a band's archive. It features song management, practice logs, member tracking, song suggestions, an announcement toast, and a rehearsal calendar.
+The frontend is a **React 19** application built with **Vite 7**, designed to manage a band's archive. It features song management, member tracking, song suggestions, an announcement toast, and a rehearsal calendar.
 
 ## Technology Stack
 - **Framework**: React 19.2.0
@@ -38,7 +38,6 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
         - `MediaPlayer.jsx` + `.css`: 미디어 재생 컴포넌트
         - `PasswordModal.jsx` + `.css`: 비밀번호 입력 모달
     - `layout/`: Layout components (`Header.css`)
-    - `practices/`: Practice log components
 - **`context/`**: Global state management
     - `SongContext.jsx`: Manages song lists, current selection, and loading states.
 - **`services/`**: API interaction layers
@@ -68,10 +67,6 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
     - Manage associated media (audio/scores).
     - CRUD operations for songs.
 - **Song Form**: title, artist, status, genre, difficulty, link, chords, memo (lyrics 필드 제거됨).
-- **Practice Logs**:
-    - Record practice sessions per song.
-    - Upload recordings of practice sessions.
-
 ### 3. Member Management (`/members`)
 - **Directory**: List all band members.
 - **Profiles (`/members/:id`)**:
@@ -99,12 +94,10 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
 - **`api.js`**:
     - `fetchSongs`, `getSong`, `createSong`, `updateSong`, `deleteSong`
     - `uploadMedia` (supports progress tracking via XHR)
-    - `fetchPracticeLogs`, `createPracticeLog`, `uploadRecording`
     - `fetchSuggestions`, `createSuggestion`, `deleteSuggestion`, `voteSuggestion`
     - `fetchAnnouncement`, `updateAnnouncement`
     - `deleteMedia`, `renameMedia`
     - `fetchDashboardStats`
-    - `getPracticeLog`, `updatePracticeLog`, `deletePracticeLog`
 - **`memberApi.js`**:
     - CRUD for members.
     - `uploadPersonalLog` (supports progress tracking).

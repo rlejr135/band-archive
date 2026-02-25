@@ -58,8 +58,6 @@ frontend/
     │   │   ├── SongForm.jsx/css        # 곡 생성/수정 폼
     │   │   ├── SongMedia.css           # 미디어 목록 스타일
     │   │   └── SongSuggestion.jsx      # 다음 곡 추천
-    │   ├── practices/                  # 연습 기록
-    │   │   └── PracticeLogSection.jsx/css
     │   └── members/                    # 멤버 관리
     │       ├── MemberDashboard.jsx/css
     │       └── MemberDetail.jsx/css

@@ -4,7 +4,7 @@
 
 ## 개요
 
-밴드 합주/연습 관리용 REST API 서버. 곡 관리, 미디어 파일 업로드, 연습 기록, 멤버 관리, 곡 추천 투표, 공지사항, 합주 일정(캘린더) 기능을 제공한다.
+밴드 합주/연습 관리용 REST API 서버. 곡 관리, 미디어 파일 업로드, 멤버 관리, 곡 추천 투표, 공지사항, 합주 일정(캘린더) 기능을 제공한다.
 
 ## 기술 스택
 
@@ -26,7 +26,7 @@ band-archive/backend/
 ├── config.py           # Dev/Test/Prod 설정 클래스 + S3 환경변수
 ├── extensions.py       # SQLAlchemy 인스턴스
 ├── storage.py          # S3 호환 스토리지 추상화 (upload/delete/generate_url/exists/copy)
-├── models.py           # 전체 DB 모델 (8개 + 연결 테이블 1개)
+├── models.py           # 전체 DB 모델 (7개 + 연결 테이블 1개)
 ├── errors.py           # ValidationError, NotFoundError 커스텀 예외
 ├── validators.py       # 입력 검증 유틸리티
 ├── requirements.txt    # 의존성
@@ -35,7 +35,6 @@ band-archive/backend/
 ├── fly.toml            # Fly.io 배포 설정
 ├── routes/
 │   ├── songs.py        # 곡 CRUD + 미디어 관리 + R2 파일 관리 (가장 복잡)
-│   ├── practice_logs.py # 연습 기록
 │   ├── members.py      # 멤버 관리
 │   ├── personal_logs.py # 개인 녹음 기록
 │   ├── suggestions.py  # 곡 추천 + 투표
@@ -66,7 +65,7 @@ band-archive/backend/
 | sheet_music | String(200) | 악보 파일명 |
 | created_at / updated_at | DateTime | 자동 생성/갱신 |
 
-관계: `media_files` (1:N → Media), `practice_logs` (1:N → PracticeLog), `rehearsals` (N:M → Rehearsal via `rehearsal_songs`)
+관계: `media_files` (1:N → Media), `rehearsals` (N:M → Rehearsal via `rehearsal_songs`)
 
 ### Media
 | 컬럼 | 타입 | 설명 |
@@ -99,16 +98,6 @@ band-archive/backend/
 | file_size | Integer | 바이트 단위 |
 
 S3 Key: `personal_logs/{filename}`
-
-### PracticeLog
-| 컬럼 | 타입 | 설명 |
-|------|------|------|
-| id | Integer, PK | |
-| song_id | FK → Song | |
-| date | DateTime | 연습 날짜 |
-| content | Text | 연습 내용 |
-| feedback | Text | 피드백 |
-| recording | String(200) | 녹음 파일명 |
 
 ### SongSuggestion
 | 컬럼 | 타입 | 설명 |
@@ -160,7 +149,7 @@ S3 Key: `personal_logs/{filename}`
 | GET | `/songs/<id>` | 단건 조회 |
 | POST | `/songs` | 생성 |
 | PUT | `/songs/<id>` | 수정 |
-| DELETE | `/songs/<id>` | 삭제 (미디어 파일 캐스케이드 삭제) |
+| DELETE | `/songs/<id>` | 삭제 (미디어 R2 파일 캐스케이드 삭제) |
 
 ### 미디어 (`/songs/<id>/media`)
 | Method | Path | 설명 |
@@ -171,16 +160,6 @@ S3 Key: `personal_logs/{filename}`
 | PUT | `/media/<id>/rename` | 미디어 이름 변경 (한글 지원) |
 | DELETE | `/media/<id>` | 미디어 삭제 |
 | GET | `/uploads/<filename>` | R2 presigned URL로 리다이렉트 (하위 호환) |
-
-### 연습 기록 (`/practice-logs`)
-| Method | Path | 설명 |
-|--------|------|------|
-| GET | `/songs/<id>/practice-logs` | 곡별 연습 기록 조회 |
-| POST | `/songs/<id>/practice-logs` | 연습 기록 생성 |
-| GET | `/practice-logs/<id>` | 단건 조회 |
-| PUT | `/practice-logs/<id>` | 수정 |
-| DELETE | `/practice-logs/<id>` | 삭제 |
-| POST | `/practice-logs/<id>/upload` | 녹음 업로드 |
 
 ### 멤버 (`/members`)
 | Method | Path | 설명 |
@@ -225,7 +204,7 @@ S3 Key: `personal_logs/{filename}`
 ### 대시보드 (`/dashboard`)
 | Method | Path | 설명 |
 |--------|------|------|
-| GET | `/dashboard/stats` | 통계 (총 곡 수, 상태별 수, 최근 기록) |
+| GET | `/dashboard/stats` | 통계 (총 곡 수, 상태별 수) |
 
 ### 기타
 | Method | Path | 설명 |
@@ -239,7 +218,6 @@ S3 Key: `personal_logs/{filename}`
 - **파일 서빙:** presigned URL 방식 (to_dict()에서 직접 반환)
 - **S3 Key 구조:**
   - 곡 미디어/악보: `media/{uuid}.{ext}`
-  - 연습 녹음: `recordings/{uuid}.{ext}`
   - 개인 로그: `personal_logs/{uuid}.{ext}`
 - **허용 확장자:**
   - 이미지: png, jpg, jpeg, gif, webp
@@ -285,7 +263,7 @@ SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 �
 
 ## 캐스케이드 삭제
 
-- Song 삭제 → Media (DB + R2), PracticeLog recording (R2) 자동 삭제
+- Song 삭제 → Media (DB + R2) 자동 삭제
 - Member 삭제 → PersonalLog (DB + R2) 자동 삭제
 
 ## 배포

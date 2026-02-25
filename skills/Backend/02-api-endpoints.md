@@ -43,7 +43,7 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 **Response:** `200` Song | `400` | `404`
 
 ### `DELETE /songs/<id>`
-곡 삭제 (cascade: media, practice_logs 함께 삭제)
+곡 삭제 (cascade: media 함께 삭제)
 **Response:** `200` `{"message": "Song deleted"}` | `404`
 
 ---
@@ -79,41 +79,6 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 ### `GET /uploads/<filename>`
 파일 다운로드 (static serving)
 > `.m4a` 파일은 `Content-Type: audio/mp4`로 강제 설정
-
----
-
-## Practice Logs (`routes/practice_logs.py`)
-
-### `GET /songs/<song_id>/practice-logs`
-곡의 연습 일지 목록 (날짜 내림차순)
-**Response:** `200` PracticeLog[]
-
-### `POST /songs/<song_id>/practice-logs`
-연습 일지 작성
-```json
-{ "content": "연습 내용", "feedback": "피드백" }
-```
-**Response:** `201` PracticeLog | `400` | `404`
-
-### `GET /practice-logs/<id>`
-연습 일지 상세
-**Response:** `200` PracticeLog | `404`
-
-### `PUT /practice-logs/<id>`
-연습 일지 수정
-```json
-{ "content": "수정 내용", "feedback": "수정 피드백" }
-```
-**Response:** `200` PracticeLog | `400` | `404`
-
-### `DELETE /practice-logs/<id>`
-연습 일지 삭제
-**Response:** `200` | `404`
-
-### `POST /practice-logs/<id>/upload`
-연습 녹음 업로드 (multipart)
-**Body:** `file`
-**Response:** `200` PracticeLog | `400` | `404`
 
 ---
 
@@ -282,8 +247,6 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 ```json
 {
   "total_songs": 5,
-  "status_counts": { "Practice": 4, "Completed": 1 },
-  "recent_practice_logs": [ /* 최근 5개 */ ],
-  "total_practice_logs": 10
+  "status_counts": { "Practice": 4, "Completed": 1 }
 }
 ```
