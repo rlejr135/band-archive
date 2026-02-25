@@ -106,6 +106,14 @@
     font-size: 0.85rem;
     color: var(--text-secondary);
     margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.comment-count-badge {
+    font-size: 0.8rem;
+    color: var(--secondary-color);
 }
 
 

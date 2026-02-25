@@ -4,6 +4,7 @@ import './SongDetail.css';
 import './SongMedia.css';
 import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
+import CommentSection from '../common/CommentSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
@@ -270,6 +271,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
           <div className="inline-player-wrapper">
             <button className="close-player-btn" onClick={() => setSelectedMedia(null)}>&times;</button>
             <MediaPlayer file={selectedMedia} />
+            <CommentSection targetType="media" targetId={selectedMedia.id} />
           </div>
         )}
 
@@ -302,7 +304,10 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         {getDisplayName(media.filename)} <span className="rename-hint">✏️</span>
                       </span>
                     )}
-                    <span className="media-size">{(media.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                    <span className="media-size">
+                      {(media.file_size / 1024 / 1024).toFixed(2)} MB
+                      {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
+                    </span>
                   </div>
 
                   {/* Action buttons based on file type */}
