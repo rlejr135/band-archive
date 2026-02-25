@@ -169,3 +169,54 @@ export const updateAnnouncement = async (content) => {
   if (!response.ok) throw new Error('Failed to update announcement');
   return await response.json();
 };
+
+// Fetch comments for a target (media or personal-log)
+export const fetchComments = async (targetType, targetId) => {
+  const response = await fetch(`${API_URL}/${targetType}/${targetId}/comments`);
+  if (!response.ok) throw new Error('Failed to fetch comments');
+  return await response.json();
+};
+
+// Create a comment on a target
+export const createComment = async (targetType, targetId, { author, password, content }) => {
+  const response = await fetch(`${API_URL}/${targetType}/${targetId}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ author, password, content }),
+  });
+  if (!response.ok) throw new Error('Failed to create comment');
+  return await response.json();
+};
+
+// Create a reply to a comment
+export const createReply = async (commentId, { author, password, content }) => {
+  const response = await fetch(`${API_URL}/comments/${commentId}/replies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ author, password, content }),
+  });
+  if (!response.ok) throw new Error('Failed to create reply');
+  return await response.json();
+};
+
+// Update a comment (password required)
+export const updateComment = async (commentId, { password, content }) => {
+  const response = await fetch(`${API_URL}/comments/${commentId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password, content }),
+  });
+  if (!response.ok) throw new Error('Failed to update comment');
+  return await response.json();
+};
+
+// Delete a comment (password required)
+export const deleteComment = async (commentId, password) => {
+  const response = await fetch(`${API_URL}/comments/${commentId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) throw new Error('Failed to delete comment');
+  return await response.json();
+};
