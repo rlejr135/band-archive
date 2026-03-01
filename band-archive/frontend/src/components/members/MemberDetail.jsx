@@ -79,7 +79,7 @@ const MemberDetail = () => {
         <h3>개인 연습 기록 업로드</h3>
         <FileUpload
           onUpload={handleUpload}
-          accept=".mp3,.wav,.m4a,.mp4,.mov,.avi"
+          accept="audio/*,video/*,.mp3,.wav,.m4a,.mp4,.mov,.avi"
           multiple={false}
         />
       </div>
