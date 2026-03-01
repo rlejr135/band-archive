@@ -67,6 +67,13 @@
   cursor: pointer;
 }
 
+.link-error {
+  display: block;
+  margin-top: 6px;
+  color: var(--accent-color);
+  font-size: 0.85rem;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;

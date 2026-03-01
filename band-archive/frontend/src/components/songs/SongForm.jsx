@@ -7,7 +7,14 @@ const STATUSES = [
   { value: 'OnHold', label: '보류' },
 ];
 
+const isValidYoutubeUrl = (url) => {
+  if (!url) return true;
+  const pattern = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)[\w-]+/;
+  return pattern.test(url);
+};
+
 const SongForm = ({ song, onSave, onCancel }) => {
+  const [linkError, setLinkError] = useState('');
   const [formData, setFormData] = useState({
     title: '',
     artist: '',
@@ -55,6 +62,11 @@ const SongForm = ({ song, onSave, onCancel }) => {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (!isValidYoutubeUrl(formData.link)) {
+      setLinkError('유효한 YouTube 링크를 입력해주세요.');
+      return;
+    }
+    setLinkError('');
     onSave(formData);
   };
 
@@ -94,7 +106,8 @@ const SongForm = ({ song, onSave, onCancel }) => {
 
       <div className="form-group">
         <label>링크</label>
-        <input name="link" value={formData.link} onChange={handleChange} placeholder="YouTube, 악보 링크 등" />
+        <input name="link" value={formData.link} onChange={(e) => { handleChange(e); setLinkError(''); }} placeholder="YouTube 영상 링크" />
+        {linkError && <span className="link-error">{linkError}</span>}
       </div>
 
 
