@@ -45,6 +45,25 @@
   color: var(--primary-color);
 }
 
+.youtube-embed {
+  margin: 16px 0;
+}
+
+.youtube-embed h4 {
+  margin-bottom: 10px;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  border-left: 4px solid var(--accent-color);
+  padding-left: 10px;
+}
+
+.youtube-embed iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  border-radius: 8px;
+}
+
 .song-chords,
 .song-memo {
   margin-bottom: 30px;

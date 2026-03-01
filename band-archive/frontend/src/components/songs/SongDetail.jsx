@@ -29,6 +29,11 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     setMemoText(song?.memo || '');
   }, [song?.id]);
 
+  const getYoutubeId = (url) => {
+    const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]+)/);
+    return match ? match[1] : null;
+  };
+
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
   }
@@ -190,6 +195,18 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
           <p><strong>링크:</strong> <a href={song.link} target="_blank" rel="noreferrer">{song.link}</a></p>
         )}
       </div>
+
+      {song.link && getYoutubeId(song.link) && (
+        <div className="youtube-embed">
+          <h4>원곡 영상</h4>
+          <iframe
+            src={`https://www.youtube.com/embed/${getYoutubeId(song.link)}`}
+            title="YouTube video"
+            allowFullScreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          />
+        </div>
+      )}
 
       <div className="song-content">
 
