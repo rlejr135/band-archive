@@ -10,7 +10,7 @@
   status: string,           // 'Practice' | 'Completed' | 'OnHold'
   genre: string,            // 장르
   difficulty: number,       // 난이도 (1~5)
-  link: string,             // 원곡 URL
+  link: string,             // YouTube 영상 URL (watch/youtu.be/shorts)
   chords: string,           // 코드 진행
   memo: string,             // 메모
   media: Media[],           // 첨부 미디어 목록
@@ -146,7 +146,7 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
   status: 'Practice',     // 기본값
   genre: '',
   difficulty: 3,           // 기본값
-  link: '',
+  link: '',                // YouTube URL 전용 (검증: isValidYoutubeUrl)
   chords: '',
   memo: ''
 }

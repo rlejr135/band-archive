@@ -184,6 +184,7 @@ App
 ### SongDetail (`components/songs/SongDetail.jsx`)
 - Props: `song`, `onEdit`, `onUploadMedia`, `onBack`
 - Context 사용: `useSongs()`에서 `editSong`, `removeMediaFromSong`, `renameMediaInSong`
+- **YouTube 임베드**: link 필드가 YouTube URL이면 iframe 임베드 플레이어 표시 (`getYoutubeId()`)
 - **인라인 편집**: 코드(chords), 메모(memo) 필드를 상세 화면에서 바로 편집 가능
   - 편집 버튼 클릭 → textarea 표시 → 저장/취소
   - 내부 상태: `editingChords`, `chordsText`, `chordsSaving`, `editingMemo`, `memoText`, `memoSaving`
@@ -197,7 +198,9 @@ App
 ### SongForm (`components/songs/SongForm.jsx`)
 - **순수 props 컴포넌트** (Context 미사용)
 - Props: `song`, `onSave`, `onCancel`
-- 폼 필드: title, artist, status, genre, difficulty, link, chords, memo (lyrics 필드 제거됨)
+- 폼 필드: title, artist, status, genre, difficulty, link (YouTube URL 전용), chords, memo
+- **YouTube URL 검증**: `isValidYoutubeUrl()` — watch, youtu.be, shorts 형식 지원
+  - 유효하지 않은 URL 제출 시 에러 메시지 표시 (`linkError` 상태)
 - 생성/수정 모드 자동 판별 (`song` prop 존재 여부)
 
 ### SongSuggestion (`components/songs/SongSuggestion.jsx`)

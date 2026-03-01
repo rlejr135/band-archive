@@ -34,6 +34,7 @@
 
 ### 곡 상세 (SongDetail)
 - 곡 정보 표시: 제목, 아티스트, 상태, 장르, 난이도, 링크, 코드, 메모
+- **YouTube 임베드**: link가 YouTube URL이면 iframe 임베드 플레이어 표시 (16:9 반응형)
 - 코드/메모는 항상 표시 (`<pre>` 태그), **인라인 편집** 지원 (편집 버튼 → textarea → 저장/취소)
 - 수정 버튼 → `startEdit()` → SongForm으로 전환
 - **미디어 관리**:
@@ -44,7 +45,7 @@
   - 미디어 삭제
 ### 곡 생성/수정 (SongForm)
 - 순수 props 컴포넌트 (Props: `song`, `onSave`, `onCancel`)
-- 폼 필드: title*, artist*, status, genre, difficulty(1-5), link, chords, memo (lyrics 제거됨)
+- 폼 필드: title*, artist*, status, genre, difficulty(1-5), link (YouTube URL 전용, 검증), chords, memo
 - 생성 모드: `song` prop이 null
 - 수정 모드: `song` prop이 존재
 - 저장 → `onSave(formData)`
