@@ -150,6 +150,7 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 연습 기록 업로드 (multipart/form-data)
 **Body:** `title` (form field) + `file` (audio/video only)
 **허용 확장자:** mp3, wav, ogg, m4a, aac, flac, mp4, webm, mov, avi, mkv
+**Content-Type fallback:** 확장자 검증 실패 시 Content-Type 헤더로 재판단 (모바일 대응)
 **Response:** `201` PersonalLog | `400` | `404`
 
 ### `DELETE /personal-logs/<log_id>`

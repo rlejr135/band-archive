@@ -217,7 +217,7 @@ App
 ### MemberDetail (`components/members/MemberDetail.jsx`)
 - URL 파라미터: `useParams()` → `id`
 - 멤버 프로필 + 개인 연습 로그
-- 로그 업로드 (FileUpload) + 재생 (MediaPlayer)
+- 로그 업로드 (FileUpload, `accept="audio/*,video/*,.mp3,.wav,.m4a,.mp4,.mov,.avi"`) + 재생 (MediaPlayer)
 - API: `fetchMember()`, `fetchPersonalLogs()`, `uploadPersonalLog()`, `deletePersonalLog()`, `deleteMember()`
 
 ---
