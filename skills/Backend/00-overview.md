@@ -11,7 +11,7 @@
 | File Storage | Cloudflare R2 (S3 호환, boto3) |
 | Server (prod) | Gunicorn on Docker |
 | Deploy | Fly.io (region: nrt, auto-stop enabled) |
-| Frontend | Vite React (GitHub Pages) |
+| Frontend | Vite React (Cloudflare Pages) |
 
 ## Project Structure
 

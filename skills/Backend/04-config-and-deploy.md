@@ -30,7 +30,7 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 ### Production (`fly.toml`)
 ```
 FLASK_CONFIG=config.ProductionConfig
-CORS_ALLOWED_ORIGINS=https://rlejr135.github.io
+CORS_ALLOWED_ORIGINS=https://rlejr135.github.io,https://band-archive.pages.dev
 ```
 
 ---
@@ -77,11 +77,13 @@ CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:create_app()"]
 
 ## Frontend Deployment
 
-- GitHub Pages (GitHub Actions)
-- Trigger: push to `main` branch
-- Build: `npm run build` (Vite)
-- Env: `VITE_API_URL` (GitHub Variables → Fly.io backend URL)
-- Workflow: `.github/workflows/deploy.yml`
+- Cloudflare Pages (Git 연동, 자동 빌드/배포)
+- URL: `https://band-archive.pages.dev`
+- Trigger: push to `master` branch
+- Build command: `cd band-archive/frontend && npm ci && npm run build`
+- Build output: `band-archive/frontend/dist`
+- Env: `VITE_API_URL=https://band-archive.fly.dev`, `NODE_VERSION=20`
+- SPA fallback: Cloudflare Pages 네이티브 지원 (404.html 불필요)
 
 ---
 

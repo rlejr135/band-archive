@@ -300,7 +300,7 @@ SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 �
 - **서버:** gunicorn --bind 0.0.0.0:8080
 - **DB 볼륨:** 2GB 영구 볼륨 `/data` 마운트 (SQLite만 사용)
 - **파일 스토리지:** Cloudflare R2 (S3 호환)
-- **프론트엔드 오리진:** `https://rlejr135.github.io`
+- **프론트엔드 오리진:** `https://band-archive.pages.dev` (Cloudflare Pages)
 
 ## 실행 방법
 

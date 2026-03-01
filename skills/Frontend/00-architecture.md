@@ -75,7 +75,7 @@ frontend/
 
 ### Vite 설정 (`vite.config.js`)
 - `@vitejs/plugin-react` 플러그인 사용
-- GitHub Pages 배포를 위한 `base` 경로 설정: `process.env.GITHUB_PAGES ? '/band-archive/' : '/'`
+- `base: '/'` 고정 (Cloudflare Pages 배포)
 
 ### 환경 변수
 ```
