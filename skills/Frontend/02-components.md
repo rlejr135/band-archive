@@ -206,6 +206,7 @@ App
 ### SongSuggestion (`components/songs/SongSuggestion.jsx`)
 - 독립적 (Context 미사용, 자체 상태 관리)
 - 추천곡 목록 + 투표 (thumbs up/down)
+- **YouTube 임베드**: `getYoutubeId()` — YouTube 링크는 카드 내 iframe, 비YouTube는 🔗 외부 링크
 - 추천곡 추가/삭제
 - API: `fetchSuggestions()`, `createSuggestion()`, `voteSuggestion()`, `deleteSuggestion()`
 

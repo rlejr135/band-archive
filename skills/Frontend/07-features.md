@@ -62,6 +62,7 @@
 ### 기능
 - 추천곡 목록 (score 기준 내림차순 정렬)
 - 순위 표시 (#1, #2, ...)
+- **YouTube 임베드**: YouTube 링크인 경우 카드 내 iframe 임베드 표시, 비YouTube 링크는 🔗 외부 링크 유지
 - 투표: 👍 thumbs_up / 👎 thumbs_down
 - score = thumbs_up - thumbs_down
 - 추천곡 추가: 제목, 아티스트, 링크, 메모
