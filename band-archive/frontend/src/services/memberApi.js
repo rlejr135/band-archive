@@ -77,7 +77,12 @@ export const uploadPersonalLog = async (memberId, file, title, onProgress) => {
           reject(new Error('Invalid response format'));
         }
       } else {
-        reject(new Error(`Upload failed: ${xhr.statusText}`));
+        let message = `Upload failed: ${xhr.statusText}`;
+        try {
+          const errorData = JSON.parse(xhr.responseText);
+          if (errorData.error) message = errorData.error;
+        } catch (e) { /* 파싱 실패 시 기본 메시지 사용 */ }
+        reject(new Error(message));
       }
     });
 
