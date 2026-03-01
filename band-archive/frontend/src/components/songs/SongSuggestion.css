@@ -79,6 +79,7 @@
 /* Card */
 .suggestion-card {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   background-color: var(--surface-color);
@@ -146,6 +147,19 @@
 
 .suggestion-link:hover {
   transform: scale(1.2);
+}
+
+/* YouTube embed */
+.suggestion-youtube {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.suggestion-youtube iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  border-radius: 8px;
 }
 
 /* Actions */

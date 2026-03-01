@@ -3,6 +3,12 @@ import { fetchSuggestions, createSuggestion, deleteSuggestion, voteSuggestion } 
 import PasswordModal from '../common/PasswordModal';
 import './SongSuggestion.css';
 
+const getYoutubeId = (url) => {
+  if (!url) return null;
+  const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]+)/);
+  return match ? match[1] : null;
+};
+
 const SongSuggestion = () => {
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -126,16 +132,28 @@ const SongSuggestion = () => {
                   <p className="suggestion-artist">{s.artist}</p>
                   {s.memo && <p className="suggestion-memo">{s.memo}</p>}
                 </div>
-                <a
-                  href={s.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="suggestion-link"
-                  title="원곡 듣기"
-                >
-                  🔗
-                </a>
+                {s.link && !getYoutubeId(s.link) && (
+                  <a
+                    href={s.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="suggestion-link"
+                    title="원곡 듣기"
+                  >
+                    🔗
+                  </a>
+                )}
               </div>
+              {s.link && getYoutubeId(s.link) && (
+                <div className="suggestion-youtube">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${getYoutubeId(s.link)}`}
+                    title="YouTube video"
+                    allowFullScreen
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  />
+                </div>
+              )}
               <div className="suggestion-actions">
                 <button
                   className="vote-btn vote-up"
