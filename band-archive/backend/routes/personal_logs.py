@@ -58,7 +58,14 @@ def create_log(member_id):
 
     ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
     if ext not in ALLOWED_LOG_EXTENSIONS:
-        raise ValidationError(f"File type not allowed. Allowed: {', '.join(sorted(ALLOWED_LOG_EXTENSIONS))}")
+        # Fallback: Content-Type 헤더로 판단 (모바일에서 확장자 없이 MIME만 보내는 경우)
+        ct = (file.content_type or '').lower()
+        if ct.startswith('audio/') or ct.startswith('video/'):
+            mime_sub = ct.split('/')[-1]
+            mime_ext_map = {'mpeg': 'mp3', 'x-m4a': 'm4a', 'mp4': 'mp4', 'quicktime': 'mov', 'x-wav': 'wav'}
+            ext = mime_ext_map.get(mime_sub, mime_sub)
+        if ext not in ALLOWED_LOG_EXTENSIONS:
+            raise ValidationError(f"File type not allowed. Allowed: {', '.join(sorted(ALLOWED_LOG_EXTENSIONS))}")
 
     filename = generate_secure_filename(file.filename)
     content_type, _ = mimetypes.guess_type(filename)
