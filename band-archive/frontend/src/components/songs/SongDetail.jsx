@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSongs } from '../../context/SongContext';
 import { linkMediaToRehearsal } from '../../services/api';
+import { fetchRehearsals } from '../../services/rehearsalApi';
 import './SongDetail.css';
 import './SongMedia.css';
 import FileUpload from '../common/FileUpload';
@@ -21,6 +22,11 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [memoSaving, setMemoSaving] = useState(false);
   const [uploadRehearsalId, setUploadRehearsalId] = useState('');
   const [rehearsalPickerMediaId, setRehearsalPickerMediaId] = useState(null);
+  const [allRehearsals, setAllRehearsals] = useState([]);
+
+  useEffect(() => {
+    fetchRehearsals().then(setAllRehearsals).catch(console.error);
+  }, []);
 
   useEffect(() => {
     setSelectedMedia(null);
@@ -298,14 +304,14 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
         {/* Upload with optional rehearsal link */}
         <div className="upload-with-rehearsal">
-          {song.rehearsals?.length > 0 && (
+          {allRehearsals.length > 0 && (
             <select
               className="rehearsal-select"
               value={uploadRehearsalId}
               onChange={(e) => setUploadRehearsalId(e.target.value)}
             >
               <option value="">합주 연결 없음</option>
-              {song.rehearsals.map(r => (
+              {allRehearsals.map(r => (
                 <option key={r.id} value={r.id}>{r.date} {r.title}</option>
               ))}
             </select>
@@ -362,7 +368,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                           onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
                         >
                           <option value="">연결 없음</option>
-                          {song.rehearsals?.map(r => (
+                          {allRehearsals.map(r => (
                             <option key={r.id} value={r.id}>{r.date} {r.title}</option>
                           ))}
                         </select>
@@ -373,7 +379,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         <span className="rehearsal-badge" onClick={() => setRehearsalPickerMediaId(media.id)}>
                           📅 {media.rehearsal_date} {media.rehearsal_title}
                         </span>
-                      ) : song.rehearsals?.length > 0 ? (
+                      ) : allRehearsals.length > 0 ? (
                         <button className="link-rehearsal-btn" onClick={() => setRehearsalPickerMediaId(media.id)}>
                           📅 합주 연결
                         </button>
