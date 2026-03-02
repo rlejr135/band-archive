@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request, redirect, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Song, Media
+from models import Song, Media, Rehearsal
 from errors import ValidationError, NotFoundError
 from storage import storage
 from validators import (
@@ -244,16 +244,42 @@ def add_media(id):
 
     storage.upload(f'media/{filename}', file, content_type=content_type)
 
+    rehearsal_id = request.form.get('rehearsal_id', type=int)
+    if rehearsal_id:
+        rehearsal = db.session.get(Rehearsal, rehearsal_id)
+        if not rehearsal:
+            raise ValidationError("Rehearsal not found")
+
     media = Media(
         song_id=id,
         filename=filename,
         original_filename=file.filename,
         file_type=_detect_file_type(filename),
         file_size=file_size,
+        rehearsal_id=rehearsal_id,
     )
     db.session.add(media)
     db.session.commit()
     return jsonify(media.to_dict()), 201
+
+
+@songs_bp.route('/media/<int:media_id>/rehearsal', methods=['PATCH'])
+def link_media_rehearsal(media_id):
+    media = db.session.get(Media, media_id)
+    if not media:
+        raise NotFoundError("Media not found")
+
+    data = request.get_json()
+    rehearsal_id = data.get('rehearsal_id')
+
+    if rehearsal_id is not None:
+        rehearsal = db.session.get(Rehearsal, rehearsal_id)
+        if not rehearsal:
+            raise NotFoundError("Rehearsal not found")
+
+    media.rehearsal_id = rehearsal_id
+    db.session.commit()
+    return jsonify(media.to_dict())
 
 
 @songs_bp.route('/media/<int:media_id>/rename', methods=['PUT'])

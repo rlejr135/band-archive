@@ -1,11 +1,20 @@
+import os
+import mimetypes
 from datetime import date
 
 from flask import Blueprint, jsonify, request
 
 from extensions import db
-from models import Rehearsal, Song
+from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
-from validators import validate_required_string, validate_string_length
+from storage import storage
+from validators import (
+    validate_required_string,
+    validate_string_length,
+    allowed_file,
+    generate_secure_filename,
+    ALLOWED_EXTENSIONS,
+)
 
 rehearsals_bp = Blueprint('rehearsals', __name__)
 
@@ -161,3 +170,70 @@ def delete_rehearsal(id):
     db.session.delete(rehearsal)
     db.session.commit()
     return jsonify({"message": "Rehearsal deleted"}), 200
+
+
+def _detect_file_type(filename):
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    if ext in ('mp4', 'webm', 'mov', 'avi', 'mkv'):
+        return 'video'
+    if ext in ('mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'):
+        return 'audio'
+    if ext in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
+        return 'image'
+    return 'document'
+
+
+def _guess_content_type(filename):
+    ct, _ = mimetypes.guess_type(filename)
+    if filename.lower().endswith('.m4a'):
+        return 'audio/mp4'
+    return ct or 'application/octet-stream'
+
+
+@rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['GET'])
+def get_rehearsal_media(id):
+    rehearsal = _get_rehearsal_or_404(id)
+    return jsonify([m.to_dict() for m in rehearsal.media_files])
+
+
+@rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['POST'])
+def upload_rehearsal_media(id):
+    rehearsal = _get_rehearsal_or_404(id)
+
+    song_id = request.form.get('song_id', type=int)
+    if not song_id:
+        raise ValidationError("song_id is required")
+    song = db.session.get(Song, song_id)
+    if not song:
+        raise NotFoundError("Song not found")
+
+    if 'file' not in request.files:
+        raise ValidationError("No file provided")
+
+    file = request.files['file']
+    if file.filename == '':
+        raise ValidationError("No file selected")
+
+    if not allowed_file(file.filename):
+        raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+
+    filename = generate_secure_filename(file.filename)
+    content_type = _guess_content_type(filename)
+
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    storage.upload(f'media/{filename}', file, content_type=content_type)
+
+    media = Media(
+        song_id=song_id,
+        rehearsal_id=id,
+        filename=filename,
+        original_filename=file.filename,
+        file_type=_detect_file_type(filename),
+        file_size=file_size,
+    )
+    db.session.add(media)
+    db.session.commit()
+    return jsonify(media.to_dict()), 201
