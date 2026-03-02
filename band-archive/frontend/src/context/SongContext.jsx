@@ -113,6 +113,14 @@ export const SongProvider = ({ children }) => {
     }
   };
 
+  const refreshSong = async (songId) => {
+    const updatedSong = await getSong(songId);
+    setSongs(songs.map(s => s.id === songId ? updatedSong : s));
+    if (currentSong && currentSong.id === songId) {
+      setCurrentSong(updatedSong);
+    }
+  };
+
   const selectSong = (song) => {
     setCurrentSong(song);
     setIsEditing(false);
@@ -149,7 +157,8 @@ export const SongProvider = ({ children }) => {
         cancelEdit,
         addMediaToSong,
         removeMediaFromSong,
-        renameMediaInSong
+        renameMediaInSong,
+        refreshSong
     }}>
       {children}
     </SongContext.Provider>

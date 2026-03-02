@@ -10,7 +10,7 @@ import CommentSection from '../common/CommentSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
-  const { removeMediaFromSong, renameMediaInSong, editSong, loadSongs } = useSongs();
+  const { removeMediaFromSong, renameMediaInSong, editSong, refreshSong } = useSongs();
 
   const [renamingMediaId, setRenamingMediaId] = useState(null);
   const [newFilename, setNewFilename] = useState('');
@@ -134,7 +134,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     try {
       await linkMediaToRehearsal(mediaId, rehearsalId || null);
       setRehearsalPickerMediaId(null);
-      await loadSongs();
+      await refreshSong(song.id);
     } catch (err) {
       alert('합주 연결에 실패했습니다.');
     }
