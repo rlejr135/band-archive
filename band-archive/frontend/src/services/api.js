@@ -46,10 +46,11 @@ export const deleteSong = async (id) => {
 };
 
 // Upload media with progress tracking
-export const uploadMedia = async (songId, file, onProgress) => {
+export const uploadMedia = async (songId, file, onProgress, rehearsalId) => {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (rehearsalId) formData.append('rehearsal_id', rehearsalId);
 
     const xhr = new XMLHttpRequest();
 
@@ -81,6 +82,17 @@ export const uploadMedia = async (songId, file, onProgress) => {
     xhr.open('POST', `${API_URL}/songs/${songId}/media`);
     xhr.send(formData);
   });
+};
+
+// Link/unlink media to rehearsal
+export const linkMediaToRehearsal = async (mediaId, rehearsalId) => {
+  const response = await fetch(`${API_URL}/media/${mediaId}/rehearsal`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rehearsal_id: rehearsalId }),
+  });
+  if (!response.ok) throw new Error('Failed to link media to rehearsal');
+  return await response.json();
 };
 
 // Delete media
