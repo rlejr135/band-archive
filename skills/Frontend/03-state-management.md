@@ -39,7 +39,7 @@
 | `startEdit(song)` | `Song` | 편집 모드 진입 (currentSong 설정, isEditing=true) |
 | `startCreate()` | - | 생성 모드 진입 (currentSong=null, isEditing=true) |
 | `cancelEdit()` | - | 편집/생성 모드 취소 (isEditing=false) |
-| `addMediaToSong(songId, file, onProgress)` | `number, File, function` | 곡에 미디어 업로드 (진행률 콜백) |
+| `addMediaToSong(songId, file, onProgress, rehearsalId)` | `number, File, function, number?` | 곡에 미디어 업로드 (진행률 콜백, 선택적 합주 연동) |
 | `removeMediaFromSong(songId, mediaId)` | `number, number` | 곡에서 미디어 삭제 |
 | `renameMediaInSong(songId, mediaId, newName)` | `number, number, string` | 미디어 이름 변경 |
 
@@ -130,6 +130,8 @@ chordsSaving: boolean            // 코드 저장 중 여부
 editingMemo: boolean             // 메모 인라인 편집 중 여부
 memoText: string                 // 편집 중인 메모 텍스트
 memoSaving: boolean              // 메모 저장 중 여부
+uploadRehearsalId: string        // 업로드 시 합주 연동 선택값
+rehearsalPickerMediaId: number|null // 합주 연결 인라인 피커 표시 중인 미디어 ID
 ```
 
 ### SongSuggestion
@@ -154,6 +156,16 @@ newMember: { name, instrument } // 새 멤버 데이터
 member: object | null     // 멤버 정보
 logs: array              // 개인 로그 목록
 loading: boolean         // 로딩 상태
+```
+
+### RehearsalDetail
+```javascript
+mediaMap: { [rehearsalId]: Media[] } // 합주별 연결된 미디어 목록
+playingMedia: object | null          // 현재 재생 중인 미디어
+uploadingFor: number | null          // 업로드 폼 표시 중인 합주 ID
+uploadSongId: string                 // 업로드 시 선택된 곡 ID
+uploadProgress: number               // 업로드 진행률 (0-100)
+uploading: boolean                   // 업로드 중 여부
 ```
 
 ### FileUpload

@@ -33,9 +33,10 @@
 
 | 함수명 | HTTP | 엔드포인트 | 설명 |
 |--------|------|-----------|------|
-| `uploadMedia(songId, file, onProgress)` | POST | `/songs/:id/media` | 미디어 업로드 (FormData) |
+| `uploadMedia(songId, file, onProgress, rehearsalId)` | POST | `/songs/:id/media` | 미디어 업로드 (FormData, 선택적 합주 연동) |
 | `deleteMedia(mediaId)` | DELETE | `/media/:id` | 미디어 삭제 |
 | `renameMedia(mediaId, newFilename)` | PUT | `/media/:id/rename` | 미디어 이름 변경 |
+| `linkMediaToRehearsal(mediaId, rehearsalId)` | PATCH | `/media/:id/rehearsal` | 미디어-합주 연동 변경/해제 |
 
 ### 대시보드 (Dashboard)
 
@@ -92,6 +93,8 @@
 | `createRehearsal(data)` | POST | `/rehearsals` | 일정 생성 |
 | `updateRehearsal(id, data)` | PUT | `/rehearsals/:id` | 일정 수정 |
 | `deleteRehearsal(id)` | DELETE | `/rehearsals/:id` | 일정 삭제 |
+| `fetchRehearsalMedia(rehearsalId)` | GET | `/rehearsals/:id/media` | 합주 연결 미디어 조회 |
+| `uploadRehearsalMedia(rehearsalId, songId, file, onProgress)` | POST | `/rehearsals/:id/media` | 합주에서 미디어 업로드 (XHR) |
 
 ### 댓글 (Comments) — `api.js`
 

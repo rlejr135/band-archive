@@ -60,21 +60,27 @@ Announcement (독립, 단일 레코드)
 |------|------|------|--------|
 | id | Integer | PK | auto |
 | song_id | Integer | FK(song.id), NOT NULL | - |
+| rehearsal_id | Integer | FK(rehearsal.id), nullable | - |
 | filename | String(200) | NOT NULL | - |
 | original_filename | String(200) | nullable | - |
 | file_type | String(20) | nullable | - |
 | file_size | Integer | nullable | - |
 | created_at | DateTime | - | UTC now |
 
+**Relationships:** `song` (N:1), `rehearsal` (N:1, nullable)
+
 **file_type 값:** `'video'`, `'audio'`, `'image'`, `'document'`
 
 **`to_dict()` 출력:**
 ```json
 {
-  "id": 1, "song_id": 1,
+  "id": 1, "song_id": 1, "rehearsal_id": 3,
+  "rehearsal_title": "합주", "rehearsal_date": "2026-03-01",
+  "song_title": "곡 제목", "song_artist": "아티스트",
   "filename": "원본파일명.m4a",
   "file_type": "audio", "file_size": 2090804,
   "url": "/uploads/1_20260208_162641_uuid.m4a",
+  "comment_count": 2,
   "created_at": "2026-02-08T16:26:41.345637"
 }
 ```
@@ -146,7 +152,7 @@ Announcement (독립, 단일 레코드)
 | created_at | DateTime | - | UTC now |
 | updated_at | DateTime | - | UTC now, auto-update |
 
-**Relationships:** `songs` (N:M via `rehearsal_songs`)
+**Relationships:** `songs` (N:M via `rehearsal_songs`), `media_files` (1:N, Media.rehearsal_id)
 
 ---
 

@@ -73,10 +73,13 @@ band-archive/backend/
 |------|------|------|
 | id | Integer, PK | |
 | song_id | FK → Song | |
+| rehearsal_id | FK → Rehearsal, nullable | 합주 연동 |
 | filename | String(200) | UUID 기반 저장 파일명 |
 | original_filename | String(200) | 원본 파일명 (표시용) |
 | file_type | String(20) | audio / video / image / document |
 | file_size | Integer | 바이트 단위 |
+
+관계: `song` (N:1 → Song), `rehearsal` (N:1 → Rehearsal, nullable)
 
 ### Member
 | 컬럼 | 타입 | 설명 |
@@ -126,7 +129,7 @@ S3 Key: `personal_logs/{filename}`
 | color | String(7), Default='#ffd32a' | 달력 표시 색상 |
 | created_at / updated_at | DateTime | 자동 생성/갱신 |
 
-관계: `songs` (N:M → Song via `rehearsal_songs`)
+관계: `songs` (N:M → Song via `rehearsal_songs`), `media_files` (1:N → Media)
 
 ### rehearsal_songs (연결 테이블)
 | 컬럼 | 타입 | 설명 |
@@ -170,9 +173,10 @@ S3 Key: `personal_logs/{filename}`
 | Method | Path | 설명 |
 |--------|------|------|
 | GET | `/songs/<id>/media` | 곡의 미디어 목록 |
-| POST | `/songs/<id>/media` | 미디어 업로드 |
+| POST | `/songs/<id>/media` | 미디어 업로드 (선택적 `rehearsal_id` 폼 필드로 합주 연동) |
 | POST | `/songs/<id>/upload` | 악보 업로드 |
 | PUT | `/media/<id>/rename` | 미디어 이름 변경 (한글 지원) |
+| PATCH | `/media/<id>/rehearsal` | 미디어-합주 연동 변경/해제 (`rehearsal_id`: 값 또는 null) |
 | DELETE | `/media/<id>` | 미디어 삭제 |
 | GET | `/uploads/<filename>` | R2 presigned URL로 리다이렉트 (하위 호환) |
 
@@ -215,6 +219,8 @@ S3 Key: `personal_logs/{filename}`
 | POST | `/rehearsals` | 일정 생성 (song_ids로 곡 연결 가능) |
 | PUT | `/rehearsals/<id>` | 일정 수정 |
 | DELETE | `/rehearsals/<id>` | 일정 삭제 |
+| GET | `/rehearsals/<id>/media` | 합주 연결 미디어 목록 |
+| POST | `/rehearsals/<id>/media` | 합주에서 미디어 업로드 (song_id 필수) |
 
 ### 댓글 (`/comments`)
 | Method | Path | 설명 |
@@ -279,6 +285,7 @@ S3 Key: `personal_logs/{filename}`
 
 SQLite 환경에서 `db.create_all()`로 추가되지 않는 컬럼을 수동 체크/추가:
 - `media` 테이블: `original_filename` 컬럼
+- `media` 테이블: `rehearsal_id` 컬럼 (합주 연동)
 - `personal_log` 테이블: `original_filename` 컬럼
 - `personal_log` 테이블: `file_size` 컬럼
 - `rehearsal` 테이블: `location`, `latitude`, `longitude` 컬럼

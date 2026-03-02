@@ -13,7 +13,8 @@
   link: string,             // YouTube 영상 URL (watch/youtu.be/shorts)
   chords: string,           // 코드 진행
   memo: string,             // 메모
-  media: Media[],           // 첨부 미디어 목록
+  media: Media[],           // 첨부 미디어 목록 (rehearsal 정보 포함)
+  rehearsals: Rehearsal[],  // 연결된 합주 일정 목록 (id, title, date만 포함)
   created_at: string,       // 생성일시 (ISO8601)
   updated_at: string        // 수정일시 (ISO8601)
 }
@@ -32,11 +33,17 @@
 {
   id: number,               // PK
   song_id: number,          // FK → Song
-  filename: string,         // 서버 저장 파일명
-  original_filename: string,// 원본 파일명
+  rehearsal_id: number|null, // FK → Rehearsal (nullable, 합주 연동)
+  rehearsal_title: string|null, // 연결된 합주 제목
+  rehearsal_date: string|null,  // 연결된 합주 날짜
+  song_title: string,       // 곡 제목 (서버에서 join)
+  song_artist: string,      // 아티스트명 (서버에서 join)
+  filename: string,         // 원본 파일명 (original_filename 우선)
   file_type: string,        // 'audio' | 'video' | 'image' | 'document'
   file_size: number,        // 파일 크기 (bytes)
-  url: string               // 접근 URL
+  url: string,              // R2 presigned URL
+  comment_count: number,    // 댓글 수
+  created_at: string        // 생성일시 (ISO8601)
 }
 ```
 
@@ -121,6 +128,7 @@ score = thumbs_up - thumbs_down  // 프론트에서 계산
   memo: string,             // 메모
   color: string,            // 달력 표시 색상 (기본: '#ffd32a')
   songs: Song[],            // 연결된 곡 목록
+  media_count: number,      // 연결된 미디어 수
   created_at: string,       // 생성일시 (ISO8601)
   updated_at: string        // 수정일시 (ISO8601)
 }

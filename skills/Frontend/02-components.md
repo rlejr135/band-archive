@@ -146,7 +146,11 @@ App
 
 ### RehearsalDetail (`components/calendar/RehearsalDetail.jsx`)
 - 선택 날짜의 일정 목록 표시 및 삭제
-- API: `deleteRehearsal(id)`
+- **연결된 미디어 표시**: 합주에 연동된 미디어 목록 (아이콘 + 파일명 + 곡 정보 + 재생 버튼)
+- **인라인 미디어 플레이어**: MediaPlayer 컴포넌트로 오디오/비디오 재생
+- **합주에서 미디어 업로드**: 곡 선택 + 파일 업로드 (진행률 표시)
+- 상태: `mediaMap` (합주별 미디어), `playingMedia`, `uploadingFor`, `uploadSongId`, `uploadProgress`, `uploading`
+- API: `deleteRehearsal(id)`, `fetchRehearsalMedia(id)`, `uploadRehearsalMedia(id, songId, file, onProgress)`
 
 ### LocationPicker (`components/calendar/LocationPicker.jsx`)
 - Naver Map API v3 기반 장소 검색/선택 컴포넌트
@@ -191,8 +195,9 @@ App
   - 저장 시 `editSong(id, { ...song, chords/memo: text })` 호출
 - 코드/메모는 항상 표시 (`<pre>` 태그)
 - 미디어 관리 (업로드, 재생, 이름 변경, 삭제)
+- **합주 연동**: 업로드 시 합주 선택 드롭다운, 미디어별 합주 배지 표시, 인라인 합주 연결/변경/해제
 - 미디어 선택 시 인라인 플레이어 + 댓글(CommentSection) 표시
-- 내부 상태: `selectedMedia`, `renamingMediaId`, `newFilename`
+- 내부 상태: `selectedMedia`, `renamingMediaId`, `newFilename`, `uploadRehearsalId`, `rehearsalPickerMediaId`
 - 하위 컴포넌트: FileUpload, MediaPlayer, CommentSection
 
 ### SongForm (`components/songs/SongForm.jsx`)

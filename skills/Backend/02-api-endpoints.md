@@ -56,7 +56,7 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 
 ### `POST /songs/<id>/media`
 미디어 파일 업로드 (multipart/form-data)
-**Body:** `file` (max 200MB)
+**Body:** `file` (max 200MB), `rehearsal_id` (optional, 합주 연동)
 **허용 확장자:** png, jpg, jpeg, gif, webp, pdf, mp3, wav, ogg, m4a, aac, flac, mp4, webm, mov, avi, mkv
 **Response:** `201` Media | `400` | `404`
 
@@ -71,6 +71,13 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 { "filename": "새파일명.mp3" }
 ```
 **Response:** `200` Media | `400` | `404`
+
+### `PATCH /media/<media_id>/rehearsal`
+미디어-합주 연동 변경/해제
+```json
+{ "rehearsal_id": 3 }   // null이면 연동 해제
+```
+**Response:** `200` Media | `404`
 
 ### `DELETE /media/<media_id>`
 미디어 파일 삭제 (DB + 디스크)
@@ -220,6 +227,15 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 ### `DELETE /rehearsals/<id>`
 합주 일정 삭제
 **Response:** `200` | `404`
+
+### `GET /rehearsals/<id>/media`
+합주에 연결된 미디어 목록 조회
+**Response:** `200` Media[]
+
+### `POST /rehearsals/<id>/media`
+합주에서 미디어 업로드 (multipart/form-data)
+**Body:** `file` + `song_id` (필수, 미디어가 속할 곡)
+**Response:** `201` Media | `400` | `404`
 
 ---
 
