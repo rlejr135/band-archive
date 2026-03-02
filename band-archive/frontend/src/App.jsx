@@ -30,6 +30,11 @@ const SongPage = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
 
+  // SongPage 진입 시 최신 데이터 로드
+  useEffect(() => {
+    loadSongs();
+  }, []);
+
   // Sync URL params with Context state
   useEffect(() => {
     if (id && songs.length > 0) {
