@@ -53,9 +53,9 @@ export const SongProvider = ({ children }) => {
       }
   }
 
-  const addMediaToSong = async (songId, file, onProgress) => {
+  const addMediaToSong = async (songId, file, onProgress, rehearsalId) => {
       try {
-        await uploadMedia(songId, file, onProgress);
+        await uploadMedia(songId, file, onProgress, rehearsalId);
         // Refresh the song data from backend after upload
         const updatedSong = await getSong(songId);
         const updatedSongs = songs.map(song =>

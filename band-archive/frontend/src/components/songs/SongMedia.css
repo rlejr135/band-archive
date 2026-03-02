@@ -184,6 +184,81 @@
     color: white;
 }
 
+/* Upload with rehearsal select */
+.upload-with-rehearsal {
+  margin-bottom: 12px;
+}
+
+.rehearsal-select {
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--surface-color);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+/* Rehearsal badge on media items */
+.rehearsal-badge {
+  display: inline-block;
+  font-size: 0.8rem;
+  color: var(--secondary-color);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.rehearsal-badge:hover {
+  color: var(--primary-color);
+}
+
+.link-rehearsal-btn {
+  background: none;
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.link-rehearsal-btn:hover {
+  border-color: var(--secondary-color);
+  color: var(--secondary-color);
+}
+
+.rehearsal-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.rehearsal-picker select {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--background-color);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.picker-cancel-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.picker-cancel-btn:hover {
+  color: var(--text-primary);
+}
+
 @media (max-width: 768px) {
   .media-item {
     flex-wrap: wrap;

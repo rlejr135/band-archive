@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSongs } from '../../context/SongContext';
+import { linkMediaToRehearsal } from '../../services/api';
 import './SongDetail.css';
 import './SongMedia.css';
 import FileUpload from '../common/FileUpload';
@@ -8,7 +9,7 @@ import CommentSection from '../common/CommentSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [selectedMedia, setSelectedMedia] = useState(null);
-  const { removeMediaFromSong, renameMediaInSong, editSong } = useSongs();
+  const { removeMediaFromSong, renameMediaInSong, editSong, loadSongs } = useSongs();
 
   const [renamingMediaId, setRenamingMediaId] = useState(null);
   const [newFilename, setNewFilename] = useState('');
@@ -18,6 +19,8 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [editingMemo, setEditingMemo] = useState(false);
   const [memoText, setMemoText] = useState(song?.memo || '');
   const [memoSaving, setMemoSaving] = useState(false);
+  const [uploadRehearsalId, setUploadRehearsalId] = useState('');
+  const [rehearsalPickerMediaId, setRehearsalPickerMediaId] = useState(null);
 
   useEffect(() => {
     setSelectedMedia(null);
@@ -115,7 +118,17 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   };
 
   const handleUpload = async (file, onProgress) => {
-    await onUploadMedia(song.id, file, onProgress);
+    await onUploadMedia(song.id, file, onProgress, uploadRehearsalId || null);
+  };
+
+  const handleLinkRehearsal = async (mediaId, rehearsalId) => {
+    try {
+      await linkMediaToRehearsal(mediaId, rehearsalId || null);
+      setRehearsalPickerMediaId(null);
+      await loadSongs();
+    } catch (err) {
+      alert('합주 연결에 실패했습니다.');
+    }
   };
 
   const handleDeleteMedia = async (mediaId) => {
@@ -280,8 +293,22 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       <div className="song-media">
         <h4>미디어 파일</h4>
 
-        {/* Drag & Drop Upload */}
-        <FileUpload onUpload={handleUpload} />
+        {/* Upload with optional rehearsal link */}
+        <div className="upload-with-rehearsal">
+          {song.rehearsals?.length > 0 && (
+            <select
+              className="rehearsal-select"
+              value={uploadRehearsalId}
+              onChange={(e) => setUploadRehearsalId(e.target.value)}
+            >
+              <option value="">합주 연결 없음</option>
+              {song.rehearsals.map(r => (
+                <option key={r.id} value={r.id}>{r.date} {r.title}</option>
+              ))}
+            </select>
+          )}
+          <FileUpload onUpload={handleUpload} />
+        </div>
 
         {/* Media Player for selected file */}
         {selectedMedia && (
@@ -325,6 +352,30 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                       {(media.file_size / 1024 / 1024).toFixed(2)} MB
                       {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
                     </span>
+                    {rehearsalPickerMediaId === media.id ? (
+                      <div className="rehearsal-picker">
+                        <select
+                          defaultValue={media.rehearsal_id || ''}
+                          onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
+                        >
+                          <option value="">연결 없음</option>
+                          {song.rehearsals?.map(r => (
+                            <option key={r.id} value={r.id}>{r.date} {r.title}</option>
+                          ))}
+                        </select>
+                        <button className="picker-cancel-btn" onClick={() => setRehearsalPickerMediaId(null)}>취소</button>
+                      </div>
+                    ) : (
+                      media.rehearsal_title ? (
+                        <span className="rehearsal-badge" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                          📅 {media.rehearsal_date} {media.rehearsal_title}
+                        </span>
+                      ) : song.rehearsals?.length > 0 ? (
+                        <button className="link-rehearsal-btn" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                          📅 합주 연결
+                        </button>
+                      ) : null
+                    )}
                   </div>
 
                   {/* Action buttons based on file type */}
