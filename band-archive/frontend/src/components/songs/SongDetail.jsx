@@ -20,7 +20,6 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   const [editingMemo, setEditingMemo] = useState(false);
   const [memoText, setMemoText] = useState(song?.memo || '');
   const [memoSaving, setMemoSaving] = useState(false);
-  const [uploadRehearsalId, setUploadRehearsalId] = useState('');
   const [rehearsalPickerMediaId, setRehearsalPickerMediaId] = useState(null);
   const [allRehearsals, setAllRehearsals] = useState([]);
 
@@ -36,7 +35,6 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     setChordsText(song?.chords || '');
     setEditingMemo(false);
     setMemoText(song?.memo || '');
-    setUploadRehearsalId('');
     setRehearsalPickerMediaId(null);
   }, [song?.id]);
 
@@ -126,8 +124,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   };
 
   const handleUpload = async (file, onProgress) => {
-    await onUploadMedia(song.id, file, onProgress, uploadRehearsalId || null);
-    setUploadRehearsalId('');
+    await onUploadMedia(song.id, file, onProgress);
   };
 
   const handleLinkRehearsal = async (mediaId, rehearsalId) => {
@@ -300,22 +297,8 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
         </div>
       </div>
       <div className="song-media">
-        <h4>미디어 파일</h4>
-
         {/* Upload with optional rehearsal link */}
         <div className="upload-with-rehearsal">
-          {allRehearsals.length > 0 && (
-            <select
-              className="rehearsal-select"
-              value={uploadRehearsalId}
-              onChange={(e) => setUploadRehearsalId(e.target.value)}
-            >
-              <option value="">합주 연결 없음</option>
-              {allRehearsals.map(r => (
-                <option key={r.id} value={r.id}>{r.date} {r.title}</option>
-              ))}
-            </select>
-          )}
           <FileUpload onUpload={handleUpload} />
         </div>
 
