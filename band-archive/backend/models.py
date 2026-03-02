@@ -32,6 +32,7 @@ class Song(db.Model):
             'difficulty': self.difficulty,
             'sheet_music': self.sheet_music,
             'media': [media.to_dict() for media in self.media_files],
+            'rehearsals': [{'id': r.id, 'title': r.title, 'date': r.date.isoformat()} for r in self.rehearsals],
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -40,6 +41,7 @@ class Song(db.Model):
 class Media(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)
+    rehearsal_id = db.Column(db.Integer, db.ForeignKey('rehearsal.id'), nullable=True)
     filename = db.Column(db.String(200), nullable=False)
     original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=True)
@@ -47,6 +49,7 @@ class Media(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     song = db.relationship('Song', backref=db.backref('media_files', lazy=True, cascade='all, delete-orphan'))
+    rehearsal = db.relationship('Rehearsal', backref=db.backref('media_files', lazy=True))
     comments = db.relationship('Comment', backref='media', lazy=True, cascade='all, delete-orphan',
                                foreign_keys='Comment.media_id')
 
@@ -55,6 +58,11 @@ class Media(db.Model):
         return {
             'id': self.id,
             'song_id': self.song_id,
+            'rehearsal_id': self.rehearsal_id,
+            'rehearsal_title': self.rehearsal.title if self.rehearsal else None,
+            'rehearsal_date': self.rehearsal.date.isoformat() if self.rehearsal and self.rehearsal.date else None,
+            'song_title': self.song.title if self.song else None,
+            'song_artist': self.song.artist if self.song else None,
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
@@ -170,6 +178,7 @@ class Rehearsal(db.Model):
             'memo': self.memo,
             'color': self.color,
             'songs': [{'id': s.id, 'title': s.title, 'artist': s.artist} for s in self.songs],
+            'media_count': len(self.media_files),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

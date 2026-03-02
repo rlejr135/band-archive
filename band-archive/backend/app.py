@@ -60,6 +60,12 @@ def _run_migrations(app):
             conn.execute('ALTER TABLE rehearsal ADD COLUMN longitude FLOAT')
             app.logger.info('Migration: added longitude column to rehearsal table')
 
+        # Check media table for rehearsal_id
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
+        if 'rehearsal_id' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN rehearsal_id INTEGER REFERENCES rehearsal(id)')
+            app.logger.info('Migration: added rehearsal_id column to media table')
+
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')
 
