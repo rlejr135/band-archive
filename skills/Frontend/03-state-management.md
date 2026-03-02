@@ -42,6 +42,7 @@
 | `addMediaToSong(songId, file, onProgress, rehearsalId)` | `number, File, function, number?` | 곡에 미디어 업로드 (진행률 콜백, 선택적 합주 연동) |
 | `removeMediaFromSong(songId, mediaId)` | `number, number` | 곡에서 미디어 삭제 |
 | `renameMediaInSong(songId, mediaId, newName)` | `number, number, string` | 미디어 이름 변경 |
+| `refreshSong(songId)` | `number` | 개별 곡 재로딩 (songs + currentSong 동시 갱신) |
 
 ### 사용법
 ```jsx
