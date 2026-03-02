@@ -30,6 +30,8 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     setChordsText(song?.chords || '');
     setEditingMemo(false);
     setMemoText(song?.memo || '');
+    setUploadRehearsalId('');
+    setRehearsalPickerMediaId(null);
   }, [song?.id]);
 
   const getYoutubeId = (url) => {
