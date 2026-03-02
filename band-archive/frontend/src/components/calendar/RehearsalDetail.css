@@ -172,6 +172,184 @@
   color: var(--accent-color);
 }
 
+/* ── Inline player ── */
+.rd-player-wrapper {
+  position: relative;
+  margin-bottom: 12px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.rd-close-player {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.4rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.rd-close-player:hover {
+  color: var(--text-primary);
+  background-color: var(--background-color);
+}
+
+/* ── Linked media list ── */
+.rd-media-list {
+  margin: 8px 0;
+  padding-left: 12px;
+}
+
+.rd-media-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.rd-media-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background-color: var(--background-color);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.rd-media-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.rd-media-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.rd-media-name {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rd-media-song {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.rd-play-btn {
+  background-color: var(--secondary-color);
+  color: white;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  transition: background-color 0.2s;
+}
+
+.rd-play-btn:hover {
+  background-color: var(--primary-color);
+  color: #1e272e;
+}
+
+/* ── Upload from rehearsal ── */
+.rd-add-media-btn {
+  background: none;
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin: 8px 0;
+  transition: all 0.2s;
+}
+
+.rd-add-media-btn:hover {
+  border-color: var(--secondary-color);
+  color: var(--secondary-color);
+}
+
+.rd-upload-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px;
+  background-color: var(--background-color);
+  border-radius: 6px;
+}
+
+.rd-song-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: var(--surface-color);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.rd-file-input {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.rd-upload-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.rd-upload-btn {
+  padding: 6px 14px;
+  background-color: var(--secondary-color);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: background-color 0.2s;
+}
+
+.rd-upload-btn:hover:not(:disabled) {
+  background-color: var(--primary-color);
+  color: #1e272e;
+}
+
+.rd-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rd-upload-cancel {
+  padding: 6px 14px;
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.rd-upload-cancel:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .rehearsal-detail {
