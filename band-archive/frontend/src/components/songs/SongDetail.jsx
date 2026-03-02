@@ -121,6 +121,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
   const handleUpload = async (file, onProgress) => {
     await onUploadMedia(song.id, file, onProgress, uploadRehearsalId || null);
+    setUploadRehearsalId('');
   };
 
   const handleLinkRehearsal = async (mediaId, rehearsalId) => {
@@ -357,7 +358,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                     {rehearsalPickerMediaId === media.id ? (
                       <div className="rehearsal-picker">
                         <select
-                          defaultValue={media.rehearsal_id || ''}
+                          value={media.rehearsal_id || ''}
                           onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
                         >
                           <option value="">연결 없음</option>
