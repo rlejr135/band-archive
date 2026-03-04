@@ -49,12 +49,15 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const handleFilesSelected = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
-    setPendingFiles(files.map(f => ({
-      file: f,
-      songId: '',
-      progress: 0,
-      status: 'pending',
-    })));
+    setPendingFiles(prev => [
+      ...prev,
+      ...files.map(f => ({
+        file: f,
+        songId: '',
+        progress: 0,
+        status: 'pending',
+      })),
+    ]);
   };
 
   const updatePendingFile = (index, key, value) => {
