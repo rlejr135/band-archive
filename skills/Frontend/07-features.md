@@ -37,12 +37,12 @@
 - **YouTube 임베드**: link가 YouTube URL이면 iframe 임베드 플레이어 표시 (16:9 반응형)
 - 코드/메모는 항상 표시 (`<pre>` 태그), **인라인 편집** 지원 (편집 버튼 → textarea → 저장/취소)
 - 수정 버튼 → `startEdit()` → SongForm으로 전환
-- **미디어 관리**:
-  - FileUpload로 파일 첨부 (업로드 시 합주 선택 드롭다운으로 합주 연동 가능)
-  - 미디어 타입별 그룹화 (audio/video/image/document)
+- **미디어 관리 (아코디언 방식)**:
+  - FileUpload로 파일 첨부
+  - 각 미디어 항목이 아코디언(확장/축소) 방식으로 동작 — 여러 개 동시 확장 가능
+  - 헤더 클릭으로 확장 토글 → 확장 시 MediaPlayer + CommentSection 인라인 표시
   - 미디어별 합주 연결 배지 표시 (📅 날짜 제목) 또는 "합주 연결" 버튼
   - 인라인 합주 연결 피커로 연동 변경/해제 가능 (`linkMediaToRehearsal`)
-  - 미디어 클릭 → MediaPlayer로 재생
   - 미디어 이름 변경 (인라인 편집)
   - 미디어 삭제
 ### 곡 생성/수정 (SongForm)

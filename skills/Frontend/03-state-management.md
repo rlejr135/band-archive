@@ -122,7 +122,7 @@ loading: boolean // 로딩 상태
 
 ### SongDetail
 ```javascript
-selectedMedia: object | null     // 현재 선택된 미디어
+expandedMediaIds: Set            // 확장된 미디어 ID 세트 (아코디언)
 renamingMediaId: number | null   // 이름 변경 중인 미디어 ID
 newFilename: string              // 새 파일명
 editingChords: boolean           // 코드 인라인 편집 중 여부
@@ -131,7 +131,6 @@ chordsSaving: boolean            // 코드 저장 중 여부
 editingMemo: boolean             // 메모 인라인 편집 중 여부
 memoText: string                 // 편집 중인 메모 텍스트
 memoSaving: boolean              // 메모 저장 중 여부
-uploadRehearsalId: string        // 업로드 시 합주 연동 선택값
 rehearsalPickerMediaId: number|null // 합주 연결 인라인 피커 표시 중인 미디어 ID
 ```
 

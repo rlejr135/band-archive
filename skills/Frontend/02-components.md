@@ -194,10 +194,12 @@ App
   - 내부 상태: `editingChords`, `chordsText`, `chordsSaving`, `editingMemo`, `memoText`, `memoSaving`
   - 저장 시 `editSong(id, { ...song, chords/memo: text })` 호출
 - 코드/메모는 항상 표시 (`<pre>` 태그)
-- 미디어 관리 (업로드, 재생, 이름 변경, 삭제)
-- **합주 연동**: 업로드 시 합주 선택 드롭다운, 미디어별 합주 배지 표시, 인라인 합주 연결/변경/해제
-- 미디어 선택 시 인라인 플레이어 + 댓글(CommentSection) 표시
-- 내부 상태: `selectedMedia`, `renamingMediaId`, `newFilename`, `uploadRehearsalId`, `rehearsalPickerMediaId`
+- **미디어 아코디언**: 각 미디어 항목이 확장/축소 방식으로 열림 (여러 개 동시 확장 가능)
+  - `expandedMediaIds` (Set)로 확장 상태 관리
+  - 헤더 클릭으로 토글 (이름 변경/합주 피커 활성 시 토글 방지)
+  - 확장 시 `media-item-body`에 MediaPlayer + CommentSection 인라인 표시
+- **합주 연동**: 미디어별 합주 배지 표시, 인라인 합주 연결/변경/해제
+- 내부 상태: `expandedMediaIds`, `renamingMediaId`, `newFilename`, `rehearsalPickerMediaId`
 - 하위 컴포넌트: FileUpload, MediaPlayer, CommentSection
 
 ### SongForm (`components/songs/SongForm.jsx`)

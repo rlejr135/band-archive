@@ -9,7 +9,7 @@ import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 
 const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
-  const [selectedMedia, setSelectedMedia] = useState(null);
+  const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
   const { removeMediaFromSong, renameMediaInSong, editSong, refreshSong } = useSongs();
 
   const [renamingMediaId, setRenamingMediaId] = useState(null);
@@ -28,7 +28,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
   }, []);
 
   useEffect(() => {
-    setSelectedMedia(null);
+    setExpandedMediaIds(new Set());
     setRenamingMediaId(null);
     setNewFilename('');
     setEditingChords(false);
@@ -141,9 +141,6 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     if (!window.confirm('정말 이 파일을 삭제하시겠습니까?')) return;
     try {
       await removeMediaFromSong(song.id, mediaId);
-      if (selectedMedia && selectedMedia.id === mediaId) {
-        setSelectedMedia(null);
-      }
     } catch (err) {
       alert('파일 삭제에 실패했습니다.');
     }
@@ -175,21 +172,15 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     }
   };
 
-  const handlePlay = (media) => {
-    setSelectedMedia({
-      id: media.id,
-      name: getDisplayName(media.filename),
-      url: media.url,
-      type: getMediaType(media),
-    });
-  };
-
-  const handlePreview = (media) => {
-    setSelectedMedia({
-      id: media.id,
-      name: getDisplayName(media.filename),
-      url: media.url,
-      type: getMediaType(media),
+  const toggleMediaExpand = (mediaId) => {
+    setExpandedMediaIds(prev => {
+      const next = new Set(prev);
+      if (next.has(mediaId)) {
+        next.delete(mediaId);
+      } else {
+        next.add(mediaId);
+      }
+      return next;
     });
   };
 
@@ -302,89 +293,83 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
           <FileUpload onUpload={handleUpload} />
         </div>
 
-        {/* Media Player for selected file */}
-        {selectedMedia && (
-          <div className="inline-player-wrapper">
-            <button className="close-player-btn" onClick={() => setSelectedMedia(null)}>&times;</button>
-            <MediaPlayer file={selectedMedia} />
-            <CommentSection targetType="media" targetId={selectedMedia.id} />
-          </div>
-        )}
-
         {/* Media List */}
         {song.media?.length > 0 ? (
           <div className="media-list">
             {song.media.map((media) => {
               const type = getMediaType(media);
               const isRenaming = renamingMediaId === media.id;
+              const isExpanded = expandedMediaIds.has(media.id);
 
               return (
-                <div key={media.id} className="media-item">
-                  <span className="media-icon">{iconForType(media)}</span>
+                <div key={media.id} className={`media-item ${isExpanded ? 'expanded' : ''}`}>
+                  <div className="media-item-header" onClick={() => !isRenaming && rehearsalPickerMediaId !== media.id && toggleMediaExpand(media.id)}>
+                    <span className="media-icon">{iconForType(media)}</span>
 
-                  <div className="media-info">
-                    {isRenaming ? (
-                      <div className="rename-input-group">
-                        <input
-                          type="text"
-                          value={newFilename}
-                          onChange={(e) => setNewFilename(e.target.value)}
-                          className="rename-input"
-                          autoFocus
-                        />
-                        <button onClick={() => handleSaveRename(media.id)} className="save-btn">💾</button>
-                        <button onClick={handleCancelRename} className="cancel-btn">❌</button>
-                      </div>
-                    ) : (
-                      <span className="media-name" onClick={() => handleStartRename(media)} title="클릭하여 이름 변경">
-                        {getDisplayName(media.filename)} <span className="rename-hint">✏️</span>
-                      </span>
-                    )}
-                    <span className="media-size">
-                      {(media.file_size / 1024 / 1024).toFixed(2)} MB
-                      {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
-                    </span>
-                    {rehearsalPickerMediaId === media.id ? (
-                      <div className="rehearsal-picker">
-                        <select
-                          value={media.rehearsal_id || ''}
-                          onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
-                        >
-                          <option value="">연결 없음</option>
-                          {allRehearsals.map(r => (
-                            <option key={r.id} value={r.id}>{r.date} {r.title}</option>
-                          ))}
-                        </select>
-                        <button className="picker-cancel-btn" onClick={() => setRehearsalPickerMediaId(null)}>취소</button>
-                      </div>
-                    ) : (
-                      media.rehearsal_title ? (
-                        <span className="rehearsal-badge" onClick={() => setRehearsalPickerMediaId(media.id)}>
-                          📅 {media.rehearsal_date} {media.rehearsal_title}
+                    <div className="media-info" onClick={(e) => e.stopPropagation()}>
+                      {isRenaming ? (
+                        <div className="rename-input-group">
+                          <input
+                            type="text"
+                            value={newFilename}
+                            onChange={(e) => setNewFilename(e.target.value)}
+                            className="rename-input"
+                            autoFocus
+                          />
+                          <button onClick={() => handleSaveRename(media.id)} className="save-btn">💾</button>
+                          <button onClick={handleCancelRename} className="cancel-btn">❌</button>
+                        </div>
+                      ) : (
+                        <span className="media-name" onClick={() => handleStartRename(media)} title="클릭하여 이름 변경">
+                          {getDisplayName(media.filename)} <span className="rename-hint">✏️</span>
                         </span>
-                      ) : allRehearsals.length > 0 ? (
-                        <button className="link-rehearsal-btn" onClick={() => setRehearsalPickerMediaId(media.id)}>
-                          📅 합주 연결
-                        </button>
-                      ) : null
+                      )}
+                      <span className="media-size">
+                        {(media.file_size / 1024 / 1024).toFixed(2)} MB
+                        {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
+                      </span>
+                      {rehearsalPickerMediaId === media.id ? (
+                        <div className="rehearsal-picker">
+                          <select
+                            value={media.rehearsal_id || ''}
+                            onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
+                          >
+                            <option value="">연결 없음</option>
+                            {allRehearsals.map(r => (
+                              <option key={r.id} value={r.id}>{r.date} {r.title}</option>
+                            ))}
+                          </select>
+                          <button className="picker-cancel-btn" onClick={() => setRehearsalPickerMediaId(null)}>취소</button>
+                        </div>
+                      ) : (
+                        media.rehearsal_title ? (
+                          <span className="rehearsal-badge" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                            📅 {media.rehearsal_date} {media.rehearsal_title}
+                          </span>
+                        ) : allRehearsals.length > 0 ? (
+                          <button className="link-rehearsal-btn" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                            📅 합주 연결
+                          </button>
+                        ) : null
+                      )}
+                    </div>
+
+                    {!isRenaming && (
+                      <button className="log-delete-btn" onClick={(e) => { e.stopPropagation(); handleDeleteMedia(media.id); }}>🗑️</button>
                     )}
+                    <span className="expand-indicator">{isExpanded ? '▲' : '▼'}</span>
                   </div>
 
-                  {/* Action buttons based on file type */}
-                  {!isRenaming && (
-                    <>
-                      {(type === 'audio' || type === 'video') && (
-                        <button className="play-btn" onClick={() => handlePlay(media)}>▶ 재생</button>
-                      )}
-                      {type === 'image' && (
-                        <button className="play-btn" onClick={() => handlePreview(media)}>🖼️ 보기</button>
-                      )}
-                      {type === 'document' && (
-                        <a href={media.url} target="_blank" rel="noreferrer" className="play-btn">📄 다운로드</a>
-                      )}
-
-                      <button className="log-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️</button>
-                    </>
+                  {isExpanded && (
+                    <div className="media-item-body">
+                      <MediaPlayer file={{
+                        id: media.id,
+                        name: getDisplayName(media.filename),
+                        url: media.url,
+                        type: type,
+                      }} />
+                      <CommentSection targetType="media" targetId={media.id} />
+                    </div>
                   )}
                 </div>
               );
