@@ -303,12 +303,12 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
               return (
                 <div key={media.id} className={`media-item ${isExpanded ? 'expanded' : ''}`}>
-                  <div className="media-item-header" onClick={() => !isRenaming && rehearsalPickerMediaId !== media.id && toggleMediaExpand(media.id)}>
+                  <div className="media-item-header" onClick={() => !isRenaming && toggleMediaExpand(media.id)}>
                     <span className="media-icon">{iconForType(media)}</span>
 
-                    <div className="media-info" onClick={(e) => e.stopPropagation()}>
+                    <div className="media-info">
                       {isRenaming ? (
-                        <div className="rename-input-group">
+                        <div className="rename-input-group" onClick={(e) => e.stopPropagation()}>
                           <input
                             type="text"
                             value={newFilename}
@@ -320,8 +320,9 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                           <button onClick={handleCancelRename} className="cancel-btn">❌</button>
                         </div>
                       ) : (
-                        <span className="media-name" onClick={() => handleStartRename(media)} title="클릭하여 이름 변경">
-                          {getDisplayName(media.filename)} <span className="rename-hint">✏️</span>
+                        <span className="media-name">
+                          {getDisplayName(media.filename)}
+                          <button className="rename-btn" onClick={(e) => { e.stopPropagation(); handleStartRename(media); }} title="이름 변경">✏️</button>
                         </span>
                       )}
                       <span className="media-size">
@@ -329,7 +330,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
                       </span>
                       {rehearsalPickerMediaId === media.id ? (
-                        <div className="rehearsal-picker">
+                        <div className="rehearsal-picker" onClick={(e) => e.stopPropagation()}>
                           <select
                             value={media.rehearsal_id || ''}
                             onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
@@ -343,11 +344,11 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         </div>
                       ) : (
                         media.rehearsal_title ? (
-                          <span className="rehearsal-badge" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                          <span className="rehearsal-badge" onClick={(e) => { e.stopPropagation(); setRehearsalPickerMediaId(media.id); }}>
                             📅 {media.rehearsal_date} {media.rehearsal_title}
                           </span>
                         ) : allRehearsals.length > 0 ? (
-                          <button className="link-rehearsal-btn" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                          <button className="link-rehearsal-btn" onClick={(e) => { e.stopPropagation(); setRehearsalPickerMediaId(media.id); }}>
                             📅 합주 연결
                           </button>
                         ) : null
