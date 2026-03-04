@@ -299,6 +299,31 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 
 ---
 
+## Gallery (`routes/gallery.py`)
+
+### `GET /gallery`
+전체 이미지 목록 (최신순)
+**Response:** `200` GalleryImage[]
+
+### `POST /gallery`
+이미지 업로드 (multipart/form-data)
+**Body:** `file` (이미지만: png, jpg, jpeg, gif, webp)
+**Response:** `201` GalleryImage | `400`
+
+### `DELETE /gallery/<id>`
+이미지 삭제 (DB + R2)
+**Response:** `200` | `404`
+
+### `PATCH /gallery/<id>/featured`
+대표 이미지로 설정 (기존 대표 자동 해제)
+**Response:** `200` GalleryImage | `404`
+
+### `GET /gallery/featured`
+대표 이미지 1장 조회 (대시보드용, 없으면 null)
+**Response:** `200` GalleryImage | `200` null
+
+---
+
 ## Dashboard (`routes/dashboard.py`)
 
 ### `GET /dashboard/stats`

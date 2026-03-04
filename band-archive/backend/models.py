@@ -198,6 +198,26 @@ class Announcement(db.Model):
         }
 
 
+class GalleryImage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(200), nullable=False)
+    original_filename = db.Column(db.String(200), nullable=True)
+    file_size = db.Column(db.Integer, nullable=True)
+    is_featured = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        from storage import storage
+        return {
+            'id': self.id,
+            'filename': self.original_filename or self.filename,
+            'file_size': self.file_size,
+            'is_featured': self.is_featured,
+            'url': storage.generate_url(f'gallery/{self.filename}'),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class Comment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)

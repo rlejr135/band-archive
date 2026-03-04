@@ -13,6 +13,7 @@ PersonalLog (1) ── (*) Comment
 Comment (1) ── (*) Comment    (self-referential, 대댓글)
 SongSuggestion (독립)
 Announcement (독립, 단일 레코드)
+GalleryImage (독립, is_featured로 대표 이미지 관리)
 ```
 
 모든 relationship은 `cascade='all, delete-orphan'` 적용.
@@ -172,6 +173,34 @@ Announcement (독립, 단일 레코드)
 | id | Integer | PK | 항상 1 (단일 레코드) |
 | content | Text | NOT NULL | - |
 | updated_at | DateTime | - | UTC now, auto-update |
+
+---
+
+## GalleryImage
+
+| 필드 | 타입 | 제약 | 기본값 |
+|------|------|------|--------|
+| id | Integer | PK | auto |
+| filename | String(200) | NOT NULL | - |
+| original_filename | String(200) | nullable | - |
+| file_size | Integer | nullable | - |
+| is_featured | Boolean | - | False |
+| created_at | DateTime | - | UTC now |
+
+**파일 경로:** `gallery/{filename}` (R2)
+**대표 이미지:** `is_featured=True`인 레코드 1개. 변경 시 기존 대표 해제 후 새로 설정.
+
+**`to_dict()` 출력:**
+```json
+{
+  "id": 1,
+  "filename": "원본파일명.jpg",
+  "file_size": 204800,
+  "is_featured": true,
+  "url": "presigned-url...",
+  "created_at": "2026-03-04T12:00:00.000000"
+}
+```
 
 ---
 

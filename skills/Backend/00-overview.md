@@ -21,7 +21,7 @@ backend/
 ├── config.py              # Dev / Test / Prod configs + S3 설정
 ├── extensions.py          # db = SQLAlchemy()
 ├── storage.py             # S3 호환 스토리지 추상화 (R2/B2)
-├── models.py              # Song, Media, SongSuggestion, Member, PersonalLog, Rehearsal, Announcement, Comment
+├── models.py              # Song, Media, SongSuggestion, Member, PersonalLog, Rehearsal, Announcement, Comment, GalleryImage
 ├── errors.py              # ValidationError(400), NotFoundError(404)
 ├── validators.py          # Input validation + secure filename generation
 ├── routes/
@@ -32,6 +32,7 @@ backend/
 │   ├── announcements.py   # 공지사항 (단일 레코드 upsert)
 │   ├── rehearsals.py      # 합주 일정 CRUD (달력 기능)
 │   ├── comments.py        # 댓글 CRUD (Media/PersonalLog 공용)
+│   ├── gallery.py         # 갤러리 이미지 CRUD + 대표 이미지
 │   └── dashboard.py       # Aggregated stats
 ├── tests/
 │   ├── conftest.py        # Fixtures (app, client, sample_song)
@@ -47,13 +48,13 @@ backend/
 1. Config 로드 (env `FLASK_CONFIG` or `DevelopmentConfig`)
 2. CORS 설정 (debug: `*`, prod: `CORS_ALLOWED_ORIGINS`)
 3. Extensions init (db, migrate, error handlers)
-4. Blueprint 등록 (8개: songs, dashboard, suggestions, members, personal_logs, announcements, rehearsals, comments)
+4. Blueprint 등록 (10개: songs, dashboard, suggestions, members, personal_logs, announcements, rehearsals, search, comments, gallery)
 5. StorageClient 초기화 (R2 연결)
 6. `db.create_all()` + `_run_migrations()`
 
 ## Key Conventions
 
-- **Blueprint 패턴**: 기능별 분리 (8개), 모두 복수형 이름
+- **Blueprint 패턴**: 기능별 분리 (10개)
 - **`_get_*_or_404(id)`**: 각 blueprint의 공통 헬퍼, 없으면 `NotFoundError` raise
 - **`to_dict()`**: 모든 모델에 JSON 직렬화 메서드, nested relationship 포함
 - **파일 저장**: Cloudflare R2 (S3 호환), UUID 기반 파일명, presigned URL로 서빙

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchDashboardStats, fetchSongs } from '../../services/api';
+import { fetchFeaturedImage } from '../../services/galleryApi';
 import RehearsalCalendar from '../calendar/RehearsalCalendar';
 import './Dashboard.css';
 
@@ -9,9 +10,11 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
   const [expandedStatus, setExpandedStatus] = useState(null);
   const [statusSongs, setStatusSongs] = useState([]);
   const [songsLoading, setSongsLoading] = useState(false);
+  const [featuredImage, setFeaturedImage] = useState(null);
 
   useEffect(() => {
     loadStats();
+    fetchFeaturedImage().then(setFeaturedImage).catch(console.error);
   }, []);
 
   const loadStats = async () => {
@@ -54,6 +57,12 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
         <h2>🎸 들뜬 대시보드</h2>
         <p className="dashboard-subtitle">밴드 활동을 한눈에 확인하세요</p>
       </div>
+
+      {featuredImage && (
+        <div className="featured-image-card">
+          <img src={featuredImage.url} alt="대표 이미지" className="featured-image" />
+        </div>
+      )}
 
       <div className="dashboard-grid">
         {/* Stats Overview */}
