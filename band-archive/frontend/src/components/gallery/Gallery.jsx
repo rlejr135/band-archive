@@ -77,12 +77,12 @@ const Gallery = () => {
         <div className="gallery-grid">
           {images.map((img) => (
             <div key={img.id} className={`gallery-card ${img.is_featured ? 'featured' : ''}`}>
-              <div className="gallery-image-wrapper">
-                <img src={img.url} alt={img.filename} className="gallery-image" />
-                {img.is_featured && <span className="featured-badge">대표</span>}
+              <div className="gallery-thumbnail">
+                <img src={img.url} alt={img.filename} />
+                {img.is_featured && <span className="gallery-featured-badge">대표</span>}
               </div>
               <div className="gallery-card-info">
-                <span className="gallery-filename">{img.filename}</span>
+                <span className="gallery-card-name">{img.filename}</span>
                 <div className="gallery-card-actions">
                   {!img.is_featured && (
                     <button className="gallery-featured-btn" onClick={() => handleSetFeatured(img.id)}>
@@ -98,7 +98,7 @@ const Gallery = () => {
           ))}
         </div>
       ) : (
-        <div className="empty-state-box">
+        <div className="gallery-empty">
           <p>등록된 이미지가 없습니다.</p>
         </div>
       )}

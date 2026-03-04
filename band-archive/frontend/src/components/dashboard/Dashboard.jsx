@@ -59,7 +59,8 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
       </div>
 
       {featuredImage && (
-        <div className="featured-image-card">
+        <div className="dashboard-card featured-image-card">
+          <h3>📷 대표 사진</h3>
           <img src={featuredImage.url} alt="대표 이미지" className="featured-image" />
         </div>
       )}
