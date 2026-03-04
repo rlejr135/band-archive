@@ -33,28 +33,6 @@
   background-color: var(--background-color);
 }
 
-.media-item-header .log-delete-btn {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  opacity: 0;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.media-item-header:hover .log-delete-btn {
-  opacity: 0.5;
-}
-
-.media-item-header .log-delete-btn:hover {
-  opacity: 1;
-  color: var(--accent-color);
-  background-color: rgba(255, 94, 87, 0.1);
-}
 
 .expand-indicator {
   margin-left: auto;
@@ -70,9 +48,31 @@
 }
 
 .media-item-body {
+  position: relative;
   padding: 12px;
   border-top: 1px solid var(--border-color);
   animation: fadeIn 0.2s ease-out;
+}
+
+.media-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  opacity: 0.5;
+  transition: all 0.2s;
+}
+
+.media-delete-btn:hover {
+  opacity: 1;
+  color: var(--accent-color);
+  background-color: rgba(255, 94, 87, 0.1);
 }
 
 .media-icon {
