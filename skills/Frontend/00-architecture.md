@@ -58,9 +58,11 @@ frontend/
     │   │   ├── SongForm.jsx/css        # 곡 생성/수정 폼
     │   │   ├── SongMedia.css           # 미디어 목록 스타일
     │   │   └── SongSuggestion.jsx      # 다음 곡 추천
-    │   └── members/                    # 멤버 관리
-    │       ├── MemberDashboard.jsx/css
-    │       └── MemberDetail.jsx/css
+    │   ├── members/                    # 멤버 관리
+    │   │   ├── MemberDashboard.jsx/css
+    │   │   └── MemberDetail.jsx/css
+    │   └── gallery/                    # 갤러리
+    │       └── Gallery.jsx/css
     ├── context/
     │   └── SongContext.jsx             # 글로벌 곡 상태 관리
     ├── hooks/
@@ -68,7 +70,8 @@ frontend/
     └── services/
         ├── api.js                      # 곡/대시보드/연습/추천/공지 API
         ├── memberApi.js                # 멤버 & 개인 로그 API
-        └── rehearsalApi.js             # 합주 일정 CRUD API
+        ├── rehearsalApi.js             # 합주 일정 CRUD API
+        └── galleryApi.js              # 갤러리 이미지 CRUD API
 ```
 
 ## 빌드 & 환경 설정

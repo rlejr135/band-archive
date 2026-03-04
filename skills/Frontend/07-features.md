@@ -171,6 +171,25 @@
 
 ---
 
+## 9. 갤러리 (Gallery)
+
+**경로**: `/gallery`
+**컴포넌트**: `components/gallery/Gallery.jsx`
+**API**: `galleryApi.js` — `fetchGalleryImages()`, `uploadGalleryImage()`, `deleteGalleryImage()`, `setFeaturedImage()`, `fetchFeaturedImage()`
+
+### 기능
+- 이미지 업로드 (FileUpload 재사용, 이미지 파일만 허용)
+- 이미지 그리드 목록 표시
+- 대표 이미지 설정 — 클릭 시 `PATCH /gallery/<id>/featured`, 현재 대표면 뱃지 표시
+- 이미지 삭제 (confirm 후)
+- **대시보드 연동**: `fetchFeaturedImage()`로 대표 이미지 1장을 대시보드 상단에 표시
+
+### 독립적 상태
+- Context 미사용 (자체 useState로 관리)
+- 대시보드의 대표 이미지는 별도 `featuredImage` state
+
+---
+
 ## 기능 확장 시 참고사항
 
 ### 새 CRUD 기능 추가 체크리스트

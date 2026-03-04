@@ -16,6 +16,7 @@
 | `src/services/api.js` | 곡, 미디어, 대시보드, 추천, 공지, 댓글 |
 | `src/services/memberApi.js` | 멤버, 개인 로그 |
 | `src/services/rehearsalApi.js` | 합주 일정 CRUD |
+| `src/services/galleryApi.js` | 갤러리 이미지 CRUD, 대표 이미지 |
 
 ## API 엔드포인트 일람
 
@@ -107,6 +108,16 @@
 | `deleteComment(commentId, password)` | DELETE | `/comments/:id` | 댓글 삭제 (비밀번호 검증) |
 
 > `targetType`은 `"media"` 또는 `"personal-logs"`
+
+### 갤러리 (Gallery) — `galleryApi.js`
+
+| 함수명 | HTTP | 엔드포인트 | 설명 |
+|--------|------|-----------|------|
+| `fetchGalleryImages()` | GET | `/gallery` | 전체 이미지 목록 |
+| `uploadGalleryImage(file, onProgress)` | POST | `/gallery` | 이미지 업로드 (XHR) |
+| `deleteGalleryImage(id)` | DELETE | `/gallery/:id` | 이미지 삭제 |
+| `setFeaturedImage(id)` | PATCH | `/gallery/:id/featured` | 대표 이미지 설정 |
+| `fetchFeaturedImage()` | GET | `/gallery/featured` | 대표 이미지 1장 조회 |
 
 ## API 호출 패턴
 

@@ -17,6 +17,7 @@
 | `/suggestions` | `SongSuggestion` | 다음 연습곡 추천/투표 |
 | `/members` | `MemberDashboard` | 멤버 목록 (그리드) |
 | `/members/:id` | `MemberDetail` | 멤버 프로필 & 개인 연습 로그 |
+| `/gallery` | `Gallery` | 갤러리 (이미지 업로드/조회/대표 설정) |
 | `*` | `Navigate to /` | 폴백 (404 → 홈으로 리다이렉트) |
 
 ## 라우트 정의 코드 (App.jsx)
@@ -42,6 +43,7 @@
   <Route path="/suggestions" element={<SongSuggestion />} />
   <Route path="/members" element={<MemberDashboard />} />
   <Route path="/members/:id" element={<MemberDetail />} />
+  <Route path="/gallery" element={<Gallery />} />
   <Route path="*" element={<Navigate to="/" replace />} />
 </Routes>
 ```
@@ -50,7 +52,7 @@
 
 ### Header 네비게이션
 - `useNavigate()` 훅 사용
-- 버튼 4개: 대시보드(`/`), 곡 관리(`/songs`), 멤버(`/members`), 추천(`/suggestions`)
+- 버튼 5개: 대시보드(`/`), 곡 관리(`/songs`), 멤버(`/members`), 추천(`/suggestions`), 갤러리(`/gallery`)
 - 현재 경로에 따라 `.active` 클래스 토글 (`useLocation()`)
 
 ### URL ↔ Context 동기화 (SongPage)

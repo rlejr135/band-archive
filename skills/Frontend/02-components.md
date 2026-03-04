@@ -7,7 +7,7 @@ App
 └── SongProvider (Context)
     └── MainContent
         ├── Header (app-header)
-        │   └── 네비게이션 버튼들 (대시보드, 곡, 멤버, 추천)
+        │   └── 네비게이션 버튼들 (대시보드, 곡, 멤버, 추천, 갤러리)
         ├── AnnouncementToast (공지 배너, 모든 페이지 상단)
         └── main (app-main)
             └── Routes
@@ -26,10 +26,12 @@ App
                 ├── SongSuggestion
                 │   └── PasswordModal
                 ├── MemberDashboard
-                └── MemberDetail
-                    ├── FileUpload
-                    ├── MediaPlayer
-                    └── CommentSection
+                ├── MemberDetail
+                │   ├── FileUpload
+                │   ├── MediaPlayer
+                │   └── CommentSection
+                └── Gallery
+                    └── FileUpload
 ```
 
 ---
@@ -231,6 +233,15 @@ App
 - 멤버 프로필 + 개인 연습 로그
 - 로그 업로드 (FileUpload, `accept="audio/*,video/*,.mp3,.wav,.m4a,.mp4,.mov,.avi"`) + 재생 (MediaPlayer)
 - API: `fetchMember()`, `fetchPersonalLogs()`, `uploadPersonalLog()`, `deletePersonalLog()`, `deleteMember()`
+
+### Gallery (`components/gallery/Gallery.jsx`)
+- 독립적 (Context 미사용, 자체 상태 관리)
+- 이미지 업로드 (FileUpload 재사용, accept: png/jpg/jpeg/gif/webp)
+- 이미지 그리드 목록 표시
+- 대표 이미지 설정 (`setFeaturedImage`) — 현재 대표면 뱃지 표시
+- 이미지 삭제 (confirm 후)
+- 내부 상태: `images`, `loading`
+- API: `fetchGalleryImages()`, `uploadGalleryImage()`, `deleteGalleryImage()`, `setFeaturedImage()`
 
 ---
 
