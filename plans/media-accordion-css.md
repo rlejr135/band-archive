@@ -34,15 +34,33 @@ JSX 로직 변경, 백엔드 API 추가는 별도 agent 담당.
 
 ### 3. Dashboard.css — 최근 미디어 카드 스타일 추가
 
+> **참고**: 계획 변경으로 Dashboard Part B가 RehearsalDetail로 교체됨. 이 스타일은 현재 미사용 상태이나 유지 중.
+
 **추가된 스타일:**
 
 - `.recent-media-card`: `grid-column: span 2` (tips-card와 동일 패턴)
-- `.recent-media-card .media-item`: Dashboard 내 배경을 `var(--background-color)` 사용 (SongMedia의 `var(--surface-color)`와 차이 — Dashboard 카드 내부이므로)
+- `.recent-media-card .media-item`: Dashboard 내 배경을 `var(--background-color)` 사용
 - `.recent-media-card .media-item-header`: 10px 12px 패딩 (약간 컴팩트)
-- `.recent-media-card .media-icon`: 1.3rem (SongMedia 1.5rem보다 약간 작게)
-- `.recent-media-card .media-name`: ellipsis 처리 (긴 파일명 대비)
+- `.recent-media-card .media-icon`: 1.3rem
+- `.recent-media-card .media-name`: ellipsis 처리
 - `.recent-media-card .media-meta`: 곡명-아티스트 표시용 보조 텍스트
 - 모바일 반응형: `grid-column: span 1`
+
+### 4. RehearsalDetail.css — 아코디언 구조 스타일 추가 + 인라인 플레이어 제거
+
+**추가된 스타일:**
+
+- `.rd-media-item`: `display: flex` 제거 → 블록 컨테이너, `border` + `border-radius` 토큰화
+- `.rd-media-item.expanded`: 확장 시 `border-color: var(--primary-color)` 강조
+- `.rd-media-item-header` (신규): 기존 `.rd-media-item` 내부 레이아웃 이동 (flex row, gap 8px, cursor pointer, hover 배경)
+- `.rd-media-item.expanded .rd-media-item-header`: 확장 시 하단 border-radius 제거
+- `.rd-media-item-body` (신규): 확장 영역 (padding, border-top, fadeIn 애니메이션)
+
+**제거된 스타일:**
+
+- `.rd-player-wrapper` — 상단 고정 플레이어 래퍼
+- `.rd-close-player` + `:hover` — 닫기 버튼
+- `.rd-play-btn` + `:hover` — 재생 버튼 (헤더 클릭으로 대체)
 
 ---
 
@@ -78,7 +96,19 @@ CSS가 준비된 상태에서 JSX agent가 적용할 구조:
 </div>
 ```
 
-Dashboard에서는 `.media-meta` span 추가:
+RehearsalDetail에서는 `rd-` 접두사 사용:
 ```jsx
-<span className="media-meta">{song_title} - {song_artist}</span>
+<div className={`rd-media-item ${isExpanded ? 'expanded' : ''}`}>
+  <div className="rd-media-item-header" onClick={...}>
+    <span className="rd-media-icon">...</span>
+    <div className="rd-media-info">...</div>
+    <span className="expand-indicator">{isExpanded ? '▲' : '▼'}</span>
+  </div>
+  {isExpanded && (
+    <div className="rd-media-item-body">
+      <MediaPlayer ... />
+      <CommentSection ... />
+    </div>
+  )}
+</div>
 ```

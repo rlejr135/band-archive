@@ -172,35 +172,6 @@
   color: var(--accent-color);
 }
 
-/* ── Inline player ── */
-.rd-player-wrapper {
-  position: relative;
-  margin-bottom: 12px;
-  background: var(--surface-color);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.rd-close-player {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 1.4rem;
-  cursor: pointer;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.rd-close-player:hover {
-  color: var(--text-primary);
-  background-color: var(--background-color);
-}
-
 /* ── Linked media list ── */
 .rd-media-list {
   margin: 8px 0;
@@ -215,13 +186,39 @@
 }
 
 .rd-media-item {
+  background-color: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-default);
+  margin-bottom: 4px;
+  transition: border-color 0.2s;
+}
+
+.rd-media-item.expanded {
+  border-color: var(--primary-color);
+}
+
+.rd-media-item-header {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  background-color: var(--background-color);
-  border-radius: 6px;
-  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-radius: var(--radius-default);
+}
+
+.rd-media-item.expanded .rd-media-item-header {
+  border-radius: var(--radius-default) var(--radius-default) 0 0;
+}
+
+.rd-media-item-header:hover {
+  background-color: var(--surface-color);
+}
+
+.rd-media-item-body {
+  padding: 12px;
+  border-top: 1px solid var(--border-color);
+  animation: fadeIn 0.2s ease-out;
 }
 
 .rd-media-icon {
@@ -247,23 +244,6 @@
 .rd-media-song {
   font-size: 0.75rem;
   color: var(--text-secondary);
-}
-
-.rd-play-btn {
-  background-color: var(--secondary-color);
-  color: white;
-  border: none;
-  padding: 4px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.8rem;
-  flex-shrink: 0;
-  transition: background-color 0.2s;
-}
-
-.rd-play-btn:hover {
-  background-color: var(--primary-color);
-  color: var(--text-on-primary);
 }
 
 /* ── Upload from rehearsal ── */
