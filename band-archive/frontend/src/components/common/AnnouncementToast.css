@@ -89,7 +89,7 @@
 
 .announcement-input:focus {
     border-color: var(--secondary-color);
-    box-shadow: 0 0 0 3px rgba(15, 188, 249, 0.15);
+    box-shadow: var(--focus-ring-secondary);
 }
 
 .announcement-input::placeholder {
@@ -116,7 +116,7 @@
 
 .announcement-save-btn {
     background-color: var(--primary-color);
-    color: #1e272e;
+    color: var(--text-on-primary);
 }
 
 .announcement-save-btn:hover:not(:disabled) {

@@ -263,7 +263,7 @@
 
 .rd-play-btn:hover {
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
 }
 
 /* ── Upload from rehearsal ── */
@@ -327,7 +327,7 @@
 
 .rd-upload-btn:hover:not(:disabled) {
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
 }
 
 .rd-upload-btn:disabled {

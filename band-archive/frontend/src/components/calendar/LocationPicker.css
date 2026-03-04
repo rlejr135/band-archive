@@ -28,7 +28,7 @@
 .location-search input:focus {
   outline: none;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(255, 211, 42, 0.2);
+  box-shadow: var(--focus-ring-primary);
 }
 
 .location-search button {
@@ -136,7 +136,7 @@
   border: none;
   border-radius: 6px;
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;

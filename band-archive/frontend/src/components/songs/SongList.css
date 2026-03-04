@@ -74,7 +74,7 @@
 }
 
 .delete-btn:hover {
-  color: #ff6b6b;
+  color: var(--accent-color);
   opacity: 1;
   background-color: rgba(255, 107, 107, 0.1);
 }

@@ -38,7 +38,7 @@
 
 .play-btn:hover {
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
 }
 
 .no-media {
@@ -64,7 +64,7 @@
 
 .upload-btn {
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
   padding: 8px 16px;
   border-radius: 6px;
   font-size: 0.9rem;

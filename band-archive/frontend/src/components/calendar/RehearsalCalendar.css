@@ -24,7 +24,7 @@
 
 .calendar-add-btn {
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
   border: none;
   padding: 8px 16px;
   border-radius: 8px;

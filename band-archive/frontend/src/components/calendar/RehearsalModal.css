@@ -194,7 +194,7 @@
   cursor: pointer;
   transition: all 0.2s;
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
 }
 
 .modal-save-btn:hover {

@@ -32,7 +32,7 @@
 /* Update Primary Button for Dark Mode */
 .primary-btn {
   background-color: var(--primary-color);
-  color: #1e272e; /* Dark text on yellow button */
+  color: var(--text-on-primary); /* Dark text on yellow button */
   font-weight: 700;
 }
 

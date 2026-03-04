@@ -58,7 +58,7 @@
 
 .play-control {
   background-color: var(--primary-color);
-  color: #1e272e;
+  color: var(--text-on-primary);
   border: none;
   padding: 12px 24px;
   border-radius: 8px;

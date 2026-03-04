@@ -185,9 +185,9 @@
 }
 
 .vote-btn:hover.vote-up {
-  border-color: #2ecc71;
+  border-color: var(--success-color);
   background-color: rgba(46, 204, 113, 0.1);
-  color: #2ecc71;
+  color: var(--success-color);
 }
 
 .vote-btn:hover.vote-down {
