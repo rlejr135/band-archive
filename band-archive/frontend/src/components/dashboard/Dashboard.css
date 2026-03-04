@@ -286,6 +286,92 @@
   color: var(--text-secondary);
 }
 
+/* Recent Media Card */
+.recent-media-card {
+  grid-column: span 2;
+}
+
+.recent-media-card .media-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.recent-media-card .media-item {
+  background-color: var(--background-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-default);
+  margin-bottom: 8px;
+  transition: border-color 0.2s;
+}
+
+.recent-media-card .media-item.expanded {
+  border-color: var(--primary-color);
+}
+
+.recent-media-card .media-item-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-radius: var(--radius-default);
+}
+
+.recent-media-card .media-item.expanded .media-item-header {
+  border-radius: var(--radius-default) var(--radius-default) 0 0;
+}
+
+.recent-media-card .media-item-header:hover {
+  background-color: var(--surface-color);
+}
+
+.recent-media-card .media-icon {
+  font-size: 1.3rem;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.recent-media-card .media-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.recent-media-card .media-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-media-card .media-meta {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.recent-media-card .expand-indicator {
+  margin-left: auto;
+  opacity: 0.5;
+  font-size: 0.8rem;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+  padding-left: 8px;
+}
+
+.recent-media-card .media-item-header:hover .expand-indicator {
+  opacity: 1;
+}
+
+.recent-media-card .media-item-body {
+  padding: 12px;
+  border-top: 1px solid var(--border-color);
+  animation: fadeIn 0.2s ease-out;
+}
+
 @media (max-width: 768px) {
   .dashboard {
     padding: 12px;
@@ -345,5 +431,9 @@
   .tips-content p {
     padding: 10px;
     font-size: 0.9rem;
+  }
+
+  .recent-media-card {
+    grid-column: span 1;
   }
 }

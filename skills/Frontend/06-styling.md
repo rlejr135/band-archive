@@ -212,6 +212,32 @@
 }
 ```
 
+### 아코디언 패턴 (미디어 항목)
+```css
+/* SongMedia.css, Dashboard.css에서 사용 */
+.media-item {                    /* 컨테이너 (block) */
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-default);
+}
+.media-item.expanded {           /* 확장 시 강조 */
+  border-color: var(--primary-color);
+}
+.media-item-header {             /* 클릭 가능 헤더 (flex row) */
+  display: flex; align-items: center;
+  cursor: pointer;
+}
+.media-item-body {               /* 확장 영역 (player + comments) */
+  padding: 12px;
+  border-top: 1px solid var(--border-color);
+  animation: fadeIn 0.2s ease-out;
+}
+.expand-indicator {              /* ▼/▲ 토글 표시자 */
+  margin-left: auto;
+  opacity: 0.5;
+}
+```
+> Dashboard에서는 `.recent-media-card .media-item`으로 스코핑하여 배경색 차이 적용.
+
 ## CSS 파일 관리 규칙
 
 1. 각 컴포넌트마다 같은 이름의 `.css` 파일 생성
