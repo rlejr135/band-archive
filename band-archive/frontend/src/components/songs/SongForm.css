@@ -45,7 +45,7 @@
 .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
   border-color: var(--primary-color);
   outline: none;
-  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.2);
+  box-shadow: var(--focus-ring-primary);
 }
 
 .form-group input[type="range"] {
@@ -94,7 +94,7 @@
 
 .save-btn:hover {
   background-color: var(--primary-hover);
-  box-shadow: 0 4px 12px rgba(108, 92, 231, 0.3);
+  box-shadow: var(--shadow-primary-glow);
   transform: translateY(-1px);
 }
 

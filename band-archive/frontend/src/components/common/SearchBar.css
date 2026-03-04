@@ -18,7 +18,7 @@
 .search-bar input:focus {
   background-color: var(--surface-color);
   border-color: var(--primary-color);
-  box-shadow: 0 4px 12px rgba(108, 92, 231, 0.15);
+  box-shadow: var(--focus-ring-primary);
 }
 
 .search-bar input::placeholder {

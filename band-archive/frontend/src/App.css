@@ -103,13 +103,13 @@
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(108, 92, 231, 0.3);
+  box-shadow: var(--shadow-primary);
 }
 
 .primary-btn:hover {
   background-color: var(--primary-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(108, 92, 231, 0.4);
+  box-shadow: var(--shadow-primary-hover);
 }
 
 .secondary-btn {
