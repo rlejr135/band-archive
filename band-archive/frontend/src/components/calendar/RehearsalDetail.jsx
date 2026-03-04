@@ -5,7 +5,7 @@ import './RehearsalDetail.css';
 
 const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [mediaMap, setMediaMap] = useState({});
-  const [playingMedia, setPlayingMedia] = useState(null);
+  const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
   const [uploadingFor, setUploadingFor] = useState(null);
   const [uploadSongId, setUploadSongId] = useState('');
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -78,12 +78,15 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     }
   };
 
-  const handlePlay = (media) => {
-    setPlayingMedia({
-      id: media.id,
-      name: media.filename,
-      url: media.url,
-      type: media.file_type,
+  const toggleMediaExpand = (mediaId) => {
+    setExpandedMediaIds(prev => {
+      const next = new Set(prev);
+      if (next.has(mediaId)) {
+        next.delete(mediaId);
+      } else {
+        next.add(mediaId);
+      }
+      return next;
     });
   };
 
@@ -95,14 +98,6 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
           {rehearsals.length > 0 ? `${rehearsals.length}건` : ''}
         </span>
       </div>
-
-      {/* Inline player */}
-      {playingMedia && (
-        <div className="rd-player-wrapper">
-          <button className="rd-close-player" onClick={() => setPlayingMedia(null)}>&times;</button>
-          <MediaPlayer file={playingMedia} />
-        </div>
-      )}
 
       {rehearsals.length === 0 ? (
         <div className="detail-empty">
@@ -164,18 +159,31 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
               {mediaMap[r.id] && mediaMap[r.id].length > 0 && (
                 <div className="rd-media-list">
                   <div className="rd-media-title">연결된 미디어</div>
-                  {mediaMap[r.id].map((m) => (
-                    <div key={m.id} className="rd-media-item">
-                      <span className="rd-media-icon">{getMediaIcon(m.file_type)}</span>
-                      <div className="rd-media-info">
-                        <span className="rd-media-name">{m.filename}</span>
-                        <span className="rd-media-song">{m.song_title} - {m.song_artist}</span>
+                  {mediaMap[r.id].map((m) => {
+                    const isExpanded = expandedMediaIds.has(m.id);
+                    return (
+                      <div key={m.id} className={`rd-media-item ${isExpanded ? 'expanded' : ''}`}>
+                        <div className="rd-media-item-header" onClick={() => toggleMediaExpand(m.id)}>
+                          <span className="rd-media-icon">{getMediaIcon(m.file_type)}</span>
+                          <div className="rd-media-info">
+                            <span className="rd-media-name">{m.filename}</span>
+                            <span className="rd-media-song">{m.song_title} - {m.song_artist}</span>
+                          </div>
+                          <span className="expand-indicator">{isExpanded ? '▲' : '▼'}</span>
+                        </div>
+                        {isExpanded && (
+                          <div className="rd-media-item-body">
+                            <MediaPlayer file={{
+                              id: m.id,
+                              name: m.filename,
+                              url: m.url,
+                              type: m.file_type,
+                            }} />
+                          </div>
+                        )}
                       </div>
-                      {(m.file_type === 'audio' || m.file_type === 'video') && (
-                        <button className="rd-play-btn" onClick={() => handlePlay(m)}>▶</button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
