@@ -46,6 +46,8 @@ ALLOWED_EXTENSIONS = {
 | `validate_string_length(value, field, max)` | 최대 길이 초과 체크 | ValidationError |
 | `allowed_file(filename)` | 확장자가 ALLOWED_EXTENSIONS에 포함되는지 | `False` 반환 |
 | `generate_secure_filename(filename)` | UUID 기반 안전한 파일명 생성 | `uuid4().hex + ext` |
+| `detect_file_type(filename)` | 확장자 기반 파일 타입 판별 (video/audio/image/document) | `'document'` 반환 |
+| `guess_content_type(filename)` | MIME 타입 추측 + `.m4a` → `audio/mp4` 예외 처리 | `'application/octet-stream'` 반환 |
 
 ### Secure Filename 생성 로직
 

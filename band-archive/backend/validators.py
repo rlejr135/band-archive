@@ -1,4 +1,5 @@
 import uuid
+import mimetypes
 
 from errors import ValidationError
 
@@ -49,3 +50,23 @@ def generate_secure_filename(filename):
     ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
     random_name = uuid.uuid4().hex
     return f"{random_name}.{ext}" if ext else random_name
+
+
+def detect_file_type(filename):
+    """Detect file type (video/audio/image/document) from extension."""
+    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+    if ext in ('mp4', 'webm', 'mov', 'avi', 'mkv'):
+        return 'video'
+    if ext in ('mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'):
+        return 'audio'
+    if ext in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
+        return 'image'
+    return 'document'
+
+
+def guess_content_type(filename):
+    """Guess MIME content type with .m4a special handling."""
+    ct, _ = mimetypes.guess_type(filename)
+    if filename.lower().endswith('.m4a'):
+        return 'audio/mp4'
+    return ct or 'application/octet-stream'

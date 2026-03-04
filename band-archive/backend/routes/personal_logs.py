@@ -1,5 +1,4 @@
 import os
-import mimetypes
 
 from flask import Blueprint, jsonify, request, redirect
 
@@ -11,6 +10,7 @@ from validators import (
     validate_required_string,
     validate_string_length,
     generate_secure_filename,
+    detect_file_type,
 )
 
 personal_logs_bp = Blueprint('personal_logs', __name__)
@@ -26,12 +26,6 @@ def _get_member_or_404(member_id):
         raise NotFoundError("Member not found")
     return member
 
-
-def _detect_file_type(filename):
-    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
-    if ext in VIDEO_EXTENSIONS:
-        return 'video'
-    return 'audio'
 
 
 @personal_logs_bp.route('/members/<int:member_id>/logs', methods=['GET'])
@@ -81,7 +75,7 @@ def create_log(member_id):
         title=title,
         filename=filename,
         original_filename=file.filename,
-        file_type=_detect_file_type(file.filename),
+        file_type=detect_file_type(file.filename),
         file_size=file_size,
     )
     db.session.add(log)

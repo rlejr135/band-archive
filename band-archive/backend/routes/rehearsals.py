@@ -1,5 +1,4 @@
 import os
-import mimetypes
 from datetime import date
 
 from flask import Blueprint, jsonify, request
@@ -13,6 +12,8 @@ from validators import (
     validate_string_length,
     allowed_file,
     generate_secure_filename,
+    detect_file_type,
+    guess_content_type,
     ALLOWED_EXTENSIONS,
 )
 
@@ -172,23 +173,6 @@ def delete_rehearsal(id):
     return jsonify({"message": "Rehearsal deleted"}), 200
 
 
-def _detect_file_type(filename):
-    ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
-    if ext in ('mp4', 'webm', 'mov', 'avi', 'mkv'):
-        return 'video'
-    if ext in ('mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'):
-        return 'audio'
-    if ext in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
-        return 'image'
-    return 'document'
-
-
-def _guess_content_type(filename):
-    ct, _ = mimetypes.guess_type(filename)
-    if filename.lower().endswith('.m4a'):
-        return 'audio/mp4'
-    return ct or 'application/octet-stream'
-
 
 @rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['GET'])
 def get_rehearsal_media(id):
@@ -218,7 +202,7 @@ def upload_rehearsal_media(id):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     filename = generate_secure_filename(file.filename)
-    content_type = _guess_content_type(filename)
+    content_type = guess_content_type(filename)
 
     file.seek(0, os.SEEK_END)
     file_size = file.tell()
@@ -231,7 +215,7 @@ def upload_rehearsal_media(id):
         rehearsal_id=id,
         filename=filename,
         original_filename=file.filename,
-        file_type=_detect_file_type(filename),
+        file_type=detect_file_type(filename),
         file_size=file_size,
     )
     db.session.add(media)
