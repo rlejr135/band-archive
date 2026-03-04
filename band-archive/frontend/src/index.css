@@ -13,6 +13,29 @@
   --shadow-lg: 0 10px 20px rgba(0,0,0,0.5);
   --radius-md: 12px;
   --font-family: 'Outfit', 'Inter', sans-serif; /* More modern font */
+
+  /* Text on bright backgrounds */
+  --text-on-primary: #1e272e;
+
+  /* Semantic colors */
+  --success-color: #2ecc71;
+  --accent-hover: #e04540;
+
+  /* Radius scale */
+  --radius-sm: 4px;
+  --radius-default: 8px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* Focus rings */
+  --focus-ring-primary: 0 0 0 3px rgba(255, 211, 42, 0.2);
+  --focus-ring-secondary: 0 0 0 3px rgba(15, 188, 249, 0.15);
+
+  /* Primary shadows (yellow-based) */
+  --shadow-primary: 0 2px 4px rgba(255, 211, 42, 0.3);
+  --shadow-primary-hover: 0 4px 8px rgba(255, 211, 42, 0.4);
+  --shadow-primary-glow: 0 4px 12px rgba(255, 211, 42, 0.3);
+  --shadow-accent: 0 4px 12px rgba(255, 94, 87, 0.3);
 }
 
 *, *::before, *::after {
@@ -44,6 +67,11 @@ button {
   animation: fadeIn 0.3s ease-out forwards;
 }
 
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
@@ -52,11 +80,11 @@ button {
   background: var(--background-color); 
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e0; 
+  background: var(--text-secondary);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #a0aec0;
+  background: var(--border-color);
 }
 
 /* Common utility classes */
