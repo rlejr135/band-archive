@@ -286,6 +286,24 @@
   color: var(--text-secondary);
 }
 
+/* Featured Image Card */
+.featured-image-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.featured-image-card h3 {
+  padding: 20px 20px 0;
+}
+
+.featured-image {
+  width: 100%;
+  max-height: 300px;
+  object-fit: cover;
+  display: block;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
 /* Recent Media Card */
 .recent-media-card {
   grid-column: span 2;
