@@ -11,23 +11,23 @@
   gap: 14px;
 }
 
-/* ── Form Groups ── */
-.form-group {
+/* ── Form Groups (scoped to rehearsal-modal to avoid SongForm conflict) ── */
+.rehearsal-modal .form-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.form-group label {
+.rehearsal-modal .form-group label {
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-secondary);
 }
 
-.form-group input[type="text"],
-.form-group input[type="date"],
-.form-group input[type="time"],
-.form-group textarea {
+.rehearsal-modal .form-group input[type="text"],
+.rehearsal-modal .form-group input[type="date"],
+.rehearsal-modal .form-group input[type="time"],
+.rehearsal-modal .form-group textarea {
   width: 100%;
   padding: 10px 12px;
   border: 2px solid var(--border-color);
@@ -40,31 +40,31 @@
   box-sizing: border-box;
 }
 
-.form-group input:focus,
-.form-group textarea:focus {
+.rehearsal-modal .form-group input:focus,
+.rehearsal-modal .form-group textarea:focus {
   outline: none;
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(255, 211, 42, 0.2);
+  box-shadow: var(--focus-ring-primary);
 }
 
-.form-group textarea {
+.rehearsal-modal .form-group textarea {
   resize: vertical;
   min-height: 60px;
 }
 
 /* date/time input color-scheme for dark mode */
-.form-group input[type="date"],
-.form-group input[type="time"] {
+.rehearsal-modal .form-group input[type="date"],
+.rehearsal-modal .form-group input[type="time"] {
   color-scheme: dark;
 }
 
-/* ── Form Row (side by side) ── */
-.form-row {
+/* ── Form Row (side by side, scoped) ── */
+.rehearsal-modal .form-row {
   display: flex;
   gap: 12px;
 }
 
-.form-row .form-group {
+.rehearsal-modal .form-row .form-group {
   flex: 1;
 }
 
@@ -216,7 +216,7 @@
     max-height: 90vh;
   }
 
-  .form-row {
+  .rehearsal-modal .form-row {
     flex-direction: column;
     gap: 14px;
   }
