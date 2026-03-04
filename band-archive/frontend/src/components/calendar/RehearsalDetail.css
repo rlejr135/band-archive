@@ -330,6 +330,99 @@
   border-color: var(--text-secondary);
 }
 
+/* ── Upload queue ── */
+.rd-upload-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.rd-upload-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background-color: var(--surface-color);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  transition: opacity 0.2s;
+}
+
+.rd-upload-queue-item.done {
+  opacity: 0.5;
+}
+
+.rd-upload-queue-item.error {
+  border-color: var(--accent-color);
+}
+
+.rd-queue-filename {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.rd-upload-queue-item .rd-song-select {
+  flex-shrink: 0;
+  width: auto;
+  min-width: 120px;
+}
+
+.rd-queue-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.rd-queue-remove:hover {
+  color: var(--accent-color);
+}
+
+.rd-queue-progress {
+  width: 60px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  appearance: none;
+  flex-shrink: 0;
+}
+
+.rd-queue-progress::-webkit-progress-bar {
+  background-color: var(--border-color);
+  border-radius: 3px;
+}
+
+.rd-queue-progress::-webkit-progress-value {
+  background-color: var(--secondary-color);
+  border-radius: 3px;
+}
+
+.rd-queue-progress::-moz-progress-bar {
+  background-color: var(--secondary-color);
+  border-radius: 3px;
+}
+
+.rd-queue-status.done {
+  color: var(--success-color);
+  flex-shrink: 0;
+}
+
+.rd-queue-status.error {
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .rehearsal-detail {
