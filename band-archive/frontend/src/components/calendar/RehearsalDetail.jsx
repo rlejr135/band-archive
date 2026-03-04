@@ -46,27 +46,25 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     }
   };
 
-  const handleUpload = async (rehearsalId) => {
-    const fileInput = document.getElementById(`rehearsal-file-${rehearsalId}`);
-    const file = fileInput?.files[0];
-    if (!file || !uploadSongId) return;
+  const handleFilesSelected = (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    setPendingFiles(files.map(f => ({
+      file: f,
+      songId: '',
+      progress: 0,
+      status: 'pending',
+    })));
+  };
 
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      await uploadRehearsalMedia(rehearsalId, uploadSongId, file, (p) => setUploadProgress(p));
-      // Refresh media for this rehearsal
-      const media = await fetchRehearsalMedia(rehearsalId);
-      setMediaMap(prev => ({ ...prev, [rehearsalId]: media }));
-      setUploadingFor(null);
-      setUploadSongId('');
-      fileInput.value = '';
-    } catch (err) {
-      alert('업로드 실패: ' + err.message);
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-    }
+  const updatePendingFile = (index, key, value) => {
+    setPendingFiles(prev => prev.map((item, i) =>
+      i === index ? { ...item, [key]: value } : item
+    ));
+  };
+
+  const removePendingFile = (index) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const getMediaIcon = (type) => {
