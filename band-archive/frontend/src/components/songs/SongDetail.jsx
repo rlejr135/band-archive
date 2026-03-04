@@ -355,14 +355,12 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                       )}
                     </div>
 
-                    {!isRenaming && (
-                      <button className="log-delete-btn" onClick={(e) => { e.stopPropagation(); handleDeleteMedia(media.id); }}>🗑️</button>
-                    )}
                     <span className="expand-indicator">{isExpanded ? '▲' : '▼'}</span>
                   </div>
 
                   {isExpanded && (
                     <div className="media-item-body">
+                      <button className="media-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️ 삭제</button>
                       <MediaPlayer file={{
                         id: media.id,
                         name: getDisplayName(media.filename),
