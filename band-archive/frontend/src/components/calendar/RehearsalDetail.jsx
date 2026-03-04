@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia, uploadRehearsalMedia } from '../../services/rehearsalApi';
 import MediaPlayer from '../common/MediaPlayer';
+import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
 
 const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
@@ -179,6 +180,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                               url: m.url,
                               type: m.file_type,
                             }} />
+                            <CommentSection targetType="media" targetId={m.id} />
                           </div>
                         )}
                       </div>
