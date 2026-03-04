@@ -67,6 +67,46 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     setPendingFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleBatchUpload = async (rehearsalId) => {
+    setUploading(true);
+    try {
+      for (let i = 0; i < pendingFiles.length; i++) {
+        const item = pendingFiles[i];
+        if (item.status === 'done' || !item.songId) continue;
+
+        setPendingFiles(prev => prev.map((f, idx) =>
+          idx === i ? { ...f, status: 'uploading', progress: 0 } : f
+        ));
+
+        try {
+          await uploadRehearsalMedia(rehearsalId, item.songId, item.file, (p) => {
+            setPendingFiles(prev => prev.map((f, idx) =>
+              idx === i ? { ...f, progress: p } : f
+            ));
+          });
+          setPendingFiles(prev => prev.map((f, idx) =>
+            idx === i ? { ...f, status: 'done', progress: 100 } : f
+          ));
+        } catch (err) {
+          setPendingFiles(prev => prev.map((f, idx) =>
+            idx === i ? { ...f, status: 'error' } : f
+          ));
+        }
+      }
+
+      const media = await fetchRehearsalMedia(rehearsalId);
+      setMediaMap(prev => ({ ...prev, [rehearsalId]: media }));
+
+      const hasError = pendingFiles.some(f => f.status === 'error');
+      if (!hasError) {
+        setUploadingFor(null);
+        setPendingFiles([]);
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const getMediaIcon = (type) => {
     switch (type) {
       case 'video': return '🎬';
