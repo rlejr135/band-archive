@@ -69,6 +69,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
 
   const handleBatchUpload = async (rehearsalId) => {
     setUploading(true);
+    let hasError = false;
     try {
       for (let i = 0; i < pendingFiles.length; i++) {
         const item = pendingFiles[i];
@@ -88,6 +89,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
             idx === i ? { ...f, status: 'done', progress: 100 } : f
           ));
         } catch (err) {
+          hasError = true;
           setPendingFiles(prev => prev.map((f, idx) =>
             idx === i ? { ...f, status: 'error' } : f
           ));
@@ -97,7 +99,6 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
       const media = await fetchRehearsalMedia(rehearsalId);
       setMediaMap(prev => ({ ...prev, [rehearsalId]: media }));
 
-      const hasError = pendingFiles.some(f => f.status === 'error');
       if (!hasError) {
         setUploadingFor(null);
         setPendingFiles([]);
