@@ -1,4 +1,4 @@
-<!-- Last synced commit: 42358e9 -->
+<!-- Last synced commit: da54c54 -->
 
 ---
 name: Frontend Architecture
@@ -31,6 +31,7 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
         - `LocationPicker.jsx` + `.css`: Naver Map 기반 장소 검색/선택 (geocoder 연동)
     - `songs/`: Song list, details, forms, and suggestion components
     - `members/`: Member list and detail views
+    - `gallery/`: 갤러리 (Gallery.jsx + Gallery.css)
     - `common/`: Reusable components
         - `SearchBar.jsx` + `.css`: 검색 바
         - `AnnouncementToast.jsx` + `.css`: 토스트형 공지 알림 (헤더 아래 항상 표시, 인라인 편집)
@@ -45,6 +46,7 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
     - `api.js`: Core API functions for songs, logs, suggestions, announcements.
     - `memberApi.js`: API functions specific to member management.
     - `rehearsalApi.js`: 합주 일정 CRUD API 함수.
+    - `galleryApi.js`: 갤러리 이미지 CRUD + 대표 이미지 API.
 - **`hooks/`**: Custom hooks
     - `useAsyncData.js`: 비동기 데이터 로딩 훅
 - **`assets/`**: Static assets (`logo.png`)
@@ -92,6 +94,13 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
 - 일정 추가/수정 모달(RehearsalModal): 제목, 날짜, 기간, 시간, 장소, 색상 선택, 곡 연결, 메모.
 - 월 이동 시 해당 월 데이터 자동 재조회.
 
+### 7. Gallery (`/gallery`)
+- 이미지 업로드 (FileUpload 재사용, 이미지 파일만 허용).
+- 이미지 그리드 목록 표시.
+- 대표 이미지 설정 (PATCH) — 대시보드 상단에 표시.
+- 이미지 삭제.
+- 독립적 상태 (Context 미사용).
+
 ## API Integration (`src/services`)
 - **`api.js`**:
     - `fetchSongs`, `getSong`, `createSong`, `updateSong`, `deleteSong`
@@ -107,6 +116,9 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
 - **`rehearsalApi.js`**:
     - `fetchRehearsals(year, month)`, `getRehearsal(id)`
     - `createRehearsal(data)`, `updateRehearsal(id, data)`, `deleteRehearsal(id)`
+- **`galleryApi.js`**:
+    - `fetchGalleryImages`, `uploadGalleryImage` (XHR with progress)
+    - `deleteGalleryImage`, `setFeaturedImage`, `fetchFeaturedImage`
 
 ## CSS Design System (`index.css`)
 ```css
