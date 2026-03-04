@@ -186,24 +186,26 @@
 }
 
 /* Renaming Styles */
-.media-name {
+.rename-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
     cursor: pointer;
-    transition: color 0.2s;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+    opacity: 0;
+    transition: all 0.2s;
+    margin-left: 4px;
 }
 
-.media-name:hover {
-    color: var(--primary-color);
-}
-
-.rename-hint {
-    font-size: 0.8rem;
+.media-item-header:hover .rename-btn {
     opacity: 0.5;
-    margin-left: 5px;
-    visibility: hidden;
 }
 
-.media-name:hover .rename-hint {
-    visibility: visible;
+.rename-btn:hover {
+    opacity: 1;
+    color: var(--primary-color);
 }
 
 .rename-input-group {
