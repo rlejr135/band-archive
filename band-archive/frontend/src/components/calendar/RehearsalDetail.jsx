@@ -230,33 +230,54 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
               {r.songs && r.songs.length > 0 && (
                 uploadingFor === r.id ? (
                   <div className="rd-upload-form">
-                    <select
-                      value={uploadSongId}
-                      onChange={(e) => setUploadSongId(e.target.value)}
-                      className="rd-song-select"
-                    >
-                      <option value="">곡 선택</option>
-                      {r.songs.map((s) => (
-                        <option key={s.id} value={s.id}>{s.title} - {s.artist}</option>
-                      ))}
-                    </select>
                     <input
-                      id={`rehearsal-file-${r.id}`}
                       type="file"
+                      multiple
                       accept="audio/*,video/*,image/*,.pdf,.mp3,.wav,.m4a,.mp4,.mov"
                       className="rd-file-input"
+                      onChange={handleFilesSelected}
                     />
+
+                    {pendingFiles.length > 0 && (
+                      <div className="rd-upload-queue">
+                        {pendingFiles.map((item, i) => (
+                          <div key={i} className={`rd-upload-queue-item ${item.status}`}>
+                            <span className="rd-queue-filename">{item.file.name}</span>
+                            <select
+                              value={item.songId}
+                              onChange={(e) => updatePendingFile(i, 'songId', e.target.value)}
+                              disabled={item.status !== 'pending'}
+                              className="rd-song-select"
+                            >
+                              <option value="">곡 선택</option>
+                              {r.songs.map((s) => (
+                                <option key={s.id} value={s.id}>{s.title} - {s.artist}</option>
+                              ))}
+                            </select>
+                            {item.status === 'pending' && (
+                              <button className="rd-queue-remove" onClick={() => removePendingFile(i)}>✕</button>
+                            )}
+                            {item.status === 'uploading' && (
+                              <progress value={item.progress} max="100" className="rd-queue-progress" />
+                            )}
+                            {item.status === 'done' && <span className="rd-queue-status done">✓</span>}
+                            {item.status === 'error' && <span className="rd-queue-status error">✕</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="rd-upload-actions">
                       <button
                         className="rd-upload-btn"
-                        onClick={() => handleUpload(r.id)}
-                        disabled={!uploadSongId || uploading}
+                        onClick={() => handleBatchUpload(r.id)}
+                        disabled={pendingFiles.length === 0 || pendingFiles.some(f => !f.songId && f.status === 'pending') || uploading}
                       >
-                        {uploading ? `${Math.round(uploadProgress)}%` : '업로드'}
+                        {uploading ? '업로드 중...' : `업로드 (${pendingFiles.filter(f => f.songId).length}개)`}
                       </button>
                       <button
                         className="rd-upload-cancel"
-                        onClick={() => { setUploadingFor(null); setUploadSongId(''); }}
+                        onClick={() => { setUploadingFor(null); setPendingFiles([]); }}
                         disabled={uploading}
                       >
                         취소
