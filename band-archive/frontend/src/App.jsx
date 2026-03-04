@@ -193,7 +193,7 @@ const MainContent = () => {
             className={`nav-btn ${currentView === 'gallery' ? 'active' : ''}`}
             onClick={() => navigate('/gallery')}
           >
-            갤러리
+            📷 갤러리
           </button>
         </div>
       </header>
