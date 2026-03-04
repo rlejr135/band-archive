@@ -22,7 +22,7 @@
 }
 
 .search-bar input::placeholder {
-  color: #b2bec3;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {
