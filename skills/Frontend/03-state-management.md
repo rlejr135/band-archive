@@ -161,10 +161,9 @@ loading: boolean         // 로딩 상태
 ### RehearsalDetail
 ```javascript
 mediaMap: { [rehearsalId]: Media[] } // 합주별 연결된 미디어 목록
-playingMedia: object | null          // 현재 재생 중인 미디어
+expandedMediaIds: Set                // 확장된 미디어 ID 세트 (아코디언)
 uploadingFor: number | null          // 업로드 폼 표시 중인 합주 ID
-uploadSongId: string                 // 업로드 시 선택된 곡 ID
-uploadProgress: number               // 업로드 진행률 (0-100)
+pendingFiles: array                  // [{ file, songId, progress, status }] 일괄 업로드 큐
 uploading: boolean                   // 업로드 중 여부
 ```
 

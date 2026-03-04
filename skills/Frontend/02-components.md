@@ -146,10 +146,14 @@ App
 
 ### RehearsalDetail (`components/calendar/RehearsalDetail.jsx`)
 - 선택 날짜의 일정 목록 표시 및 삭제
-- **연결된 미디어 표시**: 합주에 연동된 미디어 목록 (아이콘 + 파일명 + 곡 정보 + 재생 버튼)
-- **인라인 미디어 플레이어**: MediaPlayer 컴포넌트로 오디오/비디오 재생
-- **합주에서 미디어 업로드**: 곡 선택 + 파일 업로드 (진행률 표시)
-- 상태: `mediaMap` (합주별 미디어), `playingMedia`, `uploadingFor`, `uploadSongId`, `uploadProgress`, `uploading`
+- **미디어 아코디언**: 각 미디어 항목이 확장/축소 방식으로 열림 (여러 개 동시 확장 가능)
+  - `expandedMediaIds` (Set)로 확장 상태 관리
+  - 확장 시 MediaPlayer + CommentSection 인라인 표시
+- **일괄 미디어 업로드**: 여러 파일 선택 → 파일별 곡 태그 → 순차 업로드
+  - `pendingFiles` 배열: `[{ file, songId, progress, status }]`
+  - status: `'pending'` | `'uploading'` | `'done'` | `'error'`
+  - 파일별 progress bar, 개별 제거, 상태 표시
+- 상태: `mediaMap`, `expandedMediaIds`, `uploadingFor`, `pendingFiles`, `uploading`
 - API: `deleteRehearsal(id)`, `fetchRehearsalMedia(id)`, `uploadRehearsalMedia(id, songId, file, onProgress)`
 
 ### LocationPicker (`components/calendar/LocationPicker.jsx`)
