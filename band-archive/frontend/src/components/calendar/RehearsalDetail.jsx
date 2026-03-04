@@ -8,8 +8,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [mediaMap, setMediaMap] = useState({});
   const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
   const [uploadingFor, setUploadingFor] = useState(null);
-  const [uploadSongId, setUploadSongId] = useState('');
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [pendingFiles, setPendingFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
 
   const dateStr = date.toLocaleDateString('ko-KR', {
