@@ -10,6 +10,7 @@ import SongSuggestion from './components/songs/SongSuggestion';
 import MemberDashboard from './components/members/MemberDashboard';
 import MemberDetail from './components/members/MemberDetail';
 import AnnouncementToast from './components/common/AnnouncementToast';
+import Gallery from './components/gallery/Gallery';
 import './App.css';
 import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
 // Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
@@ -146,6 +147,7 @@ const MainContent = () => {
     if (location.pathname.startsWith('/songs')) return 'songs';
     if (location.pathname === '/suggestions') return 'suggestions';
     if (location.pathname.startsWith('/members')) return 'members';
+    if (location.pathname === '/gallery') return 'gallery';
     return '';
   };
 
@@ -187,6 +189,12 @@ const MainContent = () => {
           >
             🗳️ 다음 곡 추천
           </button>
+          <button
+            className={`nav-btn ${currentView === 'gallery' ? 'active' : ''}`}
+            onClick={() => navigate('/gallery')}
+          >
+            갤러리
+          </button>
         </div>
       </header>
 
@@ -201,6 +209,7 @@ const MainContent = () => {
           <Route path="/suggestions" element={<SongSuggestion />} />
           <Route path="/members" element={<MemberDashboard />} />
           <Route path="/members/:id" element={<MemberDetail />} />
+          <Route path="/gallery" element={<Gallery />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
