@@ -290,18 +290,20 @@
 .featured-image-card {
   padding: 0;
   overflow: hidden;
+  margin-bottom: 20px;
 }
 
 .featured-image-card h3 {
-  padding: 20px 20px 0;
+  padding: 16px 20px;
+  margin: 0;
+  border-bottom: none;
 }
 
 .featured-image {
   width: 100%;
-  max-height: 300px;
+  max-height: 280px;
   object-fit: cover;
   display: block;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 /* Recent Media Card */
