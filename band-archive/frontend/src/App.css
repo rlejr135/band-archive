@@ -159,8 +159,16 @@
 
   .header-actions {
     width: 100%;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .header-actions::-webkit-scrollbar {
+    display: none;
   }
 
   .nav-btn {
