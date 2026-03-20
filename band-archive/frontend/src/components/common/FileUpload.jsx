@@ -3,7 +3,7 @@ import './FileUpload.css';
 
 const FileUpload = ({ 
   onUpload, 
-  accept = ".mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp,.pdf", 
+  accept = "audio/*,video/*,image/*,.pdf,.mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp",
   multiple = true 
 }) => {
   const [isDragging, setIsDragging] = useState(false);

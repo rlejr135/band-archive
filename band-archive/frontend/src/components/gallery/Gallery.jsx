@@ -70,7 +70,7 @@ const Gallery = () => {
 
       <FileUpload
         onUpload={handleUpload}
-        accept=".png,.jpg,.jpeg,.gif,.webp"
+        accept="image/*,.png,.jpg,.jpeg,.gif,.webp"
       />
 
       {images.length > 0 ? (
