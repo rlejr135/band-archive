@@ -315,6 +315,7 @@ def rename_media(media_id):
     storage.delete(old_key)
 
     media.filename = new_filename
+    media.original_filename = new_name
     db.session.commit()
 
     return jsonify(media.to_dict()), 200
