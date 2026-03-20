@@ -53,6 +53,13 @@
   color: var(--text-secondary);
 }
 
+.upload-hint-ios {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
 .file-input-hidden {
   position: absolute;
   top: 0;
