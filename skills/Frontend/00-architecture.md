@@ -71,7 +71,8 @@ frontend/
         ├── api.js                      # 곡/대시보드/연습/추천/공지 API
         ├── memberApi.js                # 멤버 & 개인 로그 API
         ├── rehearsalApi.js             # 합주 일정 CRUD API
-        └── galleryApi.js              # 갤러리 이미지 CRUD API
+        ├── galleryApi.js              # 갤러리 이미지 CRUD API
+        └── uploadApi.js               # Presigned URL 업로드 공통 유틸
 ```
 
 ## 빌드 & 환경 설정

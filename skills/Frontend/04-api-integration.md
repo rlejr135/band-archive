@@ -6,7 +6,7 @@
 - **Base URL**: `import.meta.env.VITE_API_URL`
   - 개발: `http://localhost:5000`
   - 운영: `https://band-archive.fly.dev`
-- **파일 업로드**: XMLHttpRequest (진행률 추적용)
+- **파일 업로드**: Presigned URL → R2 직접 업로드 (XHR, 진행률 추적)
 - **Naver Map Client ID**: `import.meta.env.VITE_NAVER_MAP_CLIENT_ID` (LocationPicker에서 사용)
 
 ## 서비스 파일
@@ -17,6 +17,7 @@
 | `src/services/memberApi.js` | 멤버, 개인 로그 |
 | `src/services/rehearsalApi.js` | 합주 일정 CRUD |
 | `src/services/galleryApi.js` | 갤러리 이미지 CRUD, 대표 이미지 |
+| `src/services/uploadApi.js` | Presigned URL 발급, R2 직접 업로드, 메타데이터 등록 |
 
 ## API 엔드포인트 일람
 
@@ -34,7 +35,7 @@
 
 | 함수명 | HTTP | 엔드포인트 | 설명 |
 |--------|------|-----------|------|
-| `uploadMedia(songId, file, onProgress, rehearsalId)` | POST | `/songs/:id/media` | 미디어 업로드 (FormData, 선택적 합주 연동) |
+| `uploadMedia(songId, file, onProgress, rehearsalId)` | presigned | R2 직접 업로드 | 미디어 업로드 (3단계: presign → R2 PUT → complete) |
 | `deleteMedia(mediaId)` | DELETE | `/media/:id` | 미디어 삭제 |
 | `renameMedia(mediaId, newFilename)` | PUT | `/media/:id/rename` | 미디어 이름 변경 |
 | `linkMediaToRehearsal(mediaId, rehearsalId)` | PATCH | `/media/:id/rehearsal` | 미디어-합주 연동 변경/해제 |
@@ -95,7 +96,7 @@
 | `updateRehearsal(id, data)` | PUT | `/rehearsals/:id` | 일정 수정 |
 | `deleteRehearsal(id)` | DELETE | `/rehearsals/:id` | 일정 삭제 |
 | `fetchRehearsalMedia(rehearsalId)` | GET | `/rehearsals/:id/media` | 합주 연결 미디어 조회 |
-| `uploadRehearsalMedia(rehearsalId, songId, file, onProgress)` | POST | `/rehearsals/:id/media` | 합주에서 미디어 업로드 (XHR) |
+| `uploadRehearsalMedia(rehearsalId, songId, file, onProgress)` | presigned | R2 직접 업로드 | 합주에서 미디어 업로드 (3단계) |
 
 ### 댓글 (Comments) — `api.js`
 
@@ -114,10 +115,19 @@
 | 함수명 | HTTP | 엔드포인트 | 설명 |
 |--------|------|-----------|------|
 | `fetchGalleryImages()` | GET | `/gallery` | 전체 이미지 목록 |
-| `uploadGalleryImage(file, onProgress)` | POST | `/gallery` | 이미지 업로드 (XHR) |
+| `uploadGalleryImage(file, onProgress)` | presigned | R2 직접 업로드 | 이미지 업로드 (3단계) |
 | `deleteGalleryImage(id)` | DELETE | `/gallery/:id` | 이미지 삭제 |
 | `setFeaturedImage(id)` | PATCH | `/gallery/:id/featured` | 대표 이미지 설정 |
 | `fetchFeaturedImage()` | GET | `/gallery/featured` | 대표 이미지 1장 조회 |
+
+### 업로드 공통 (Presigned URL) — `uploadApi.js`
+
+| 함수명 | HTTP | 엔드포인트 | 설명 |
+|--------|------|-----------|------|
+| `getPresignedUrl(filename, contentType, uploadType)` | POST | `/uploads/presign` | presigned PUT URL 발급 |
+| `uploadToStorage(uploadUrl, file, contentType, onProgress)` | PUT | R2 presigned URL | R2 직접 업로드 (XHR) |
+| `completeMediaUpload(data)` | POST | `/uploads/complete/media` | 미디어 메타데이터 등록 |
+| `completeGalleryUpload(data)` | POST | `/uploads/complete/gallery` | 갤러리 메타데이터 등록 |
 
 ## API 호출 패턴
 
@@ -161,36 +171,23 @@ export const deleteSong = async (id) => {
 > 곡 삭제 비밀번호는 프론트엔드 PasswordModal에서 클라이언트 검증 (기본값 `'admin'`).
 > 추천곡 삭제(`deleteSuggestion`)만 백엔드에 password를 전송.
 
-### 파일 업로드 (진행률 추적)
+### 파일 업로드 (Presigned URL + 진행률 추적)
 ```javascript
-export function uploadMedia(songId, file, onProgress) {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append('file', file);
+// 3단계: presign → R2 직접 PUT → complete
+export const uploadMedia = async (songId, file, onProgress, rehearsalId) => {
+  const { getPresignedUrl, uploadToStorage, completeMediaUpload } = await import('./uploadApi');
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_URL}/songs/${songId}/media`);
-
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && onProgress) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        onProgress(percent);
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(JSON.parse(xhr.responseText));
-      } else {
-        reject(new Error('Upload failed'));
-      }
-    };
-
-    xhr.onerror = () => reject(new Error('Network error'));
-    xhr.send(formData);
+  const contentType = file.type || 'application/octet-stream';
+  const { upload_url, filename } = await getPresignedUrl(file.name, contentType, 'media');
+  await uploadToStorage(upload_url, file, contentType, onProgress);  // XHR PUT, raw file
+  return completeMediaUpload({
+    filename, original_filename: file.name, file_size: file.size,
+    song_id: songId, rehearsal_id: rehearsalId || null,
   });
-}
+};
 ```
+> R2 PUT 시 `FormData`가 아닌 **raw file** (`xhr.send(file)`)을 보내야 함.
+> `file.type`이 빈 문자열일 수 있으므로 `'application/octet-stream'` fallback 사용.
 
 ## 에러 처리 패턴
 
@@ -212,8 +209,8 @@ try {
 
 ## 새 API 추가 가이드
 
-1. `src/services/api.js`, `memberApi.js`, 또는 `rehearsalApi.js`에 함수 추가
+1. `src/services/api.js`, `memberApi.js`, `rehearsalApi.js`, 또는 `galleryApi.js`에 함수 추가
 2. `API_URL` 기반으로 엔드포인트 구성
-3. 파일 업로드면 XHR + onProgress 패턴 사용
+3. 파일 업로드면 `uploadApi.js`의 3단계 패턴 사용 (presign → R2 PUT → complete)
 4. JSON 요청이면 `Content-Type: application/json` 헤더 설정
 5. 에러 시 `throw new Error()` 패턴 유지

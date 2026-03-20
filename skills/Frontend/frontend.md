@@ -16,7 +16,7 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
 - **Build Tool**: Vite 7.2.4
 - **State Management**: React Context API (`SongContext`)
 - **Styling**: Vanilla CSS (`App.css`, `index.css`, and modular CSS)
-- **HTTP Client**: Native `fetch` API & `XMLHttpRequest` (for progress tracking)
+- **HTTP Client**: Native `fetch` API & `XMLHttpRequest` (R2 직접 업로드 시 진행률 추적)
 - **Calendar**: react-calendar 5.0.0
 
 ## Project Structure
@@ -47,6 +47,7 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
     - `memberApi.js`: API functions specific to member management.
     - `rehearsalApi.js`: 합주 일정 CRUD API 함수.
     - `galleryApi.js`: 갤러리 이미지 CRUD + 대표 이미지 API.
+    - `uploadApi.js`: Presigned URL 발급 + R2 직접 업로드 + 메타데이터 등록.
 - **`hooks/`**: Custom hooks
     - `useAsyncData.js`: 비동기 데이터 로딩 훅
 - **`assets/`**: Static assets (`logo.png`)
@@ -117,8 +118,11 @@ The frontend is a **React 19** application built with **Vite 7**, designed to ma
     - `fetchRehearsals(year, month)`, `getRehearsal(id)`
     - `createRehearsal(data)`, `updateRehearsal(id, data)`, `deleteRehearsal(id)`
 - **`galleryApi.js`**:
-    - `fetchGalleryImages`, `uploadGalleryImage` (XHR with progress)
+    - `fetchGalleryImages`, `uploadGalleryImage` (presigned 3단계)
     - `deleteGalleryImage`, `setFeaturedImage`, `fetchFeaturedImage`
+- **`uploadApi.js`**:
+    - `getPresignedUrl`, `uploadToStorage` (XHR PUT to R2)
+    - `completeMediaUpload`, `completeGalleryUpload`
 
 ## CSS Design System (`index.css`)
 ```css
