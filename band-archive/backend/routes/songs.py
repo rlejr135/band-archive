@@ -272,11 +272,15 @@ def rename_media(media_id):
     if not media:
         raise NotFoundError("Media not found")
 
-    new_name = request.json.get('filename')
+    data = request.get_json()
+    if not data:
+        raise ValidationError("Request body is required")
+
+    new_name = data.get('filename', '').strip()
     if not new_name:
         raise ValidationError("New filename is required")
 
-    if not allowed_file(new_name) and '.' in new_name:
+    if '.' in new_name and not allowed_file(new_name):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
     # If no extension provided, append the original extension

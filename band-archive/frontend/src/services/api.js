@@ -83,14 +83,20 @@ export const deleteMedia = async (mediaId) => {
 
 // Rename media
 export const renameMedia = async (mediaId, newFilename) => {
+  const payload = JSON.stringify({ filename: newFilename });
+  console.log('[renameMedia] mediaId:', mediaId, 'payload:', payload);
   const response = await fetch(`${API_URL}/media/${mediaId}/rename`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ filename: newFilename }),
+    body: payload,
   });
-  if (!response.ok) throw new Error('Failed to rename media');
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[renameMedia] status:', response.status, 'body:', errorText);
+    throw new Error('Failed to rename media');
+  }
   return await response.json();
 };
 
