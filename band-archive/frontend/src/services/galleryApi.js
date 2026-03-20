@@ -6,35 +6,16 @@ export const fetchGalleryImages = async () => {
   return await response.json();
 };
 
-export const uploadGalleryImage = (file, onProgress) => {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append('file', file);
+export const uploadGalleryImage = async (file, onProgress) => {
+  const { getPresignedUrl, uploadToStorage, completeGalleryUpload } = await import('./uploadApi');
 
-    const xhr = new XMLHttpRequest();
-
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable && onProgress) {
-        const percentComplete = (e.loaded / e.total) * 100;
-        onProgress(percentComplete);
-      }
-    });
-
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch (e) {
-          reject(new Error('Invalid response format'));
-        }
-      } else {
-        reject(new Error(`Upload failed: ${xhr.statusText}`));
-      }
-    });
-
-    xhr.addEventListener('error', () => reject(new Error('Network error')));
-    xhr.open('POST', `${API_URL}/gallery`);
-    xhr.send(formData);
+  const contentType = file.type || 'application/octet-stream';
+  const { upload_url, filename } = await getPresignedUrl(file.name, contentType, 'gallery');
+  await uploadToStorage(upload_url, file, contentType, onProgress);
+  return completeGalleryUpload({
+    filename,
+    original_filename: file.name,
+    file_size: file.size,
   });
 };
 

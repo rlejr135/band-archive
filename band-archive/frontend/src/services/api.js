@@ -45,42 +45,19 @@ export const deleteSong = async (id) => {
   return await response.json();
 };
 
-// Upload media with progress tracking
+// Upload media with progress tracking (presigned URL → R2 직접 업로드)
 export const uploadMedia = async (songId, file, onProgress, rehearsalId) => {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (rehearsalId) formData.append('rehearsal_id', rehearsalId);
+  const { getPresignedUrl, uploadToStorage, completeMediaUpload } = await import('./uploadApi');
 
-    const xhr = new XMLHttpRequest();
-
-    // Track upload progress
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable && onProgress) {
-        const percentComplete = (e.loaded / e.total) * 100;
-        onProgress(percentComplete);
-      }
-    });
-
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const response = JSON.parse(xhr.responseText);
-          resolve(response);
-        } catch (e) {
-          reject(new Error('Invalid response format'));
-        }
-      } else {
-        reject(new Error(`Upload failed: ${xhr.statusText}`));
-      }
-    });
-
-    xhr.addEventListener('error', () => {
-      reject(new Error('Upload failed'));
-    });
-
-    xhr.open('POST', `${API_URL}/songs/${songId}/media`);
-    xhr.send(formData);
+  const contentType = file.type || 'application/octet-stream';
+  const { upload_url, filename } = await getPresignedUrl(file.name, contentType, 'media');
+  await uploadToStorage(upload_url, file, contentType, onProgress);
+  return completeMediaUpload({
+    filename,
+    original_filename: file.name,
+    file_size: file.size,
+    song_id: songId,
+    rehearsal_id: rehearsalId || null,
   });
 };
 

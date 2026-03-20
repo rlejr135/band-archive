@@ -48,35 +48,18 @@ export const fetchRehearsalMedia = async (rehearsalId) => {
   return await response.json();
 };
 
-// Upload media from rehearsal (XHR with progress)
+// Upload media from rehearsal (presigned URL → R2 직접 업로드)
 export const uploadRehearsalMedia = async (rehearsalId, songId, file, onProgress) => {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('song_id', songId);
+  const { getPresignedUrl, uploadToStorage, completeMediaUpload } = await import('./uploadApi');
 
-    const xhr = new XMLHttpRequest();
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable && onProgress) onProgress((e.loaded / e.total) * 100);
-    });
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch (e) {
-          reject(new Error('Invalid response format'));
-        }
-      } else {
-        let message = `Upload failed: ${xhr.statusText}`;
-        try {
-          const errorData = JSON.parse(xhr.responseText);
-          if (errorData.error) message = errorData.error;
-        } catch (e) { /* use default */ }
-        reject(new Error(message));
-      }
-    });
-    xhr.addEventListener('error', () => reject(new Error('Upload failed')));
-    xhr.open('POST', `${API_URL}/rehearsals/${rehearsalId}/media`);
-    xhr.send(formData);
+  const contentType = file.type || 'application/octet-stream';
+  const { upload_url, filename } = await getPresignedUrl(file.name, contentType, 'media');
+  await uploadToStorage(upload_url, file, contentType, onProgress);
+  return completeMediaUpload({
+    filename,
+    original_filename: file.name,
+    file_size: file.size,
+    song_id: songId,
+    rehearsal_id: rehearsalId,
   });
 };
