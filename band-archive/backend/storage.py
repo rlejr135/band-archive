@@ -42,6 +42,17 @@ class StorageClient:
             ExpiresIn=expires_in or self._presign_expires,
         )
 
+    def generate_upload_url(self, key, content_type=None, expires_in=600):
+        """presigned PUT URL 생성 (클라이언트 직접 업로드용)"""
+        params = {'Bucket': self._bucket, 'Key': key}
+        if content_type:
+            params['ContentType'] = content_type
+        return self._client.generate_presigned_url(
+            'put_object',
+            Params=params,
+            ExpiresIn=expires_in,
+        )
+
     def exists(self, key):
         """오브젝트 존재 여부 확인"""
         try:
