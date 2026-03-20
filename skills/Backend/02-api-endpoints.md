@@ -324,6 +324,52 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 
 ---
 
+## Uploads (`routes/uploads.py`)
+
+### `POST /uploads/presign`
+presigned PUT URL 발급 (클라이언트 → R2 직접 업로드용)
+```json
+{
+  "filename": "concert.mp4",
+  "content_type": "video/mp4",
+  "upload_type": "media"
+}
+```
+- `upload_type`: `"media"` 또는 `"gallery"`
+- `content_type` 생략 시 `guess_content_type`으로 자동 결정
+- 확장자 검증: media는 `allowed_file`, gallery는 이미지만 허용
+
+**Response:** `200` `{ upload_url, key, filename, content_type }` | `400`
+
+### `POST /uploads/complete/media`
+R2 직접 업로드 후 미디어 메타데이터 DB 등록
+```json
+{
+  "filename": "abc123.mp4",
+  "original_filename": "concert.mp4",
+  "file_size": 52428800,
+  "song_id": 7,
+  "rehearsal_id": null
+}
+```
+- `storage.exists()` 로 실제 업로드 확인
+- `detect_file_type`으로 file_type 자동 결정
+
+**Response:** `201` Media | `400` | `404`
+
+### `POST /uploads/complete/gallery`
+R2 직접 업로드 후 갤러리 이미지 메타데이터 DB 등록
+```json
+{
+  "filename": "abc123.jpg",
+  "original_filename": "band_photo.jpg",
+  "file_size": 2048000
+}
+```
+**Response:** `201` GalleryImage | `400`
+
+---
+
 ## Dashboard (`routes/dashboard.py`)
 
 ### `GET /dashboard/stats`

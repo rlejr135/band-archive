@@ -70,7 +70,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN mkdir -p /data/uploads
 EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:create_app()"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "120", "app:create_app()"]
 ```
 
 ---
