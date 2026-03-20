@@ -18,6 +18,7 @@ from routes.rehearsals import rehearsals_bp
 from routes.search import search_bp
 from routes.comments import comments_bp
 from routes.gallery import gallery_bp
+from routes.uploads import uploads_bp
 from config import DevelopmentConfig
 
 load_dotenv()
@@ -108,6 +109,7 @@ def create_app(config_class=None):
     app.register_blueprint(search_bp)
     app.register_blueprint(comments_bp)
     app.register_blueprint(gallery_bp)
+    app.register_blueprint(uploads_bp)
 
     storage.init_app(app)
 
