@@ -305,7 +305,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
         {/* Media List */}
         {song.media?.length > 0 ? (
           <div className="media-list">
-            {song.media.map((media) => {
+            {[...song.media].sort((a, b) => (b.is_featured ? 1 : 0) - (a.is_featured ? 1 : 0)).map((media) => {
               const type = getMediaType(media);
               const isRenaming = renamingMediaId === media.id;
               const isExpanded = expandedMediaIds.has(media.id);
