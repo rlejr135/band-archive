@@ -47,6 +47,7 @@ GalleryImage (독립, is_featured로 대표 이미지 관리)
   "id": 1, "title": "Be I", "artist": "Hebi",
   "status": "Practice", "chords": "", "link": "...",
   "memo": "", "genre": "", "difficulty": 3, "sheet_music": null,
+  "has_featured_media": false,
   "media": [{ ... }],
   "created_at": "2026-02-08T16:26:31.322338",
   "updated_at": "2026-02-08T16:26:31.322345"
@@ -66,9 +67,11 @@ GalleryImage (독립, is_featured로 대표 이미지 관리)
 | original_filename | String(200) | nullable | - |
 | file_type | String(20) | nullable | - |
 | file_size | Integer | nullable | - |
+| is_featured | Boolean | - | False |
 | created_at | DateTime | - | UTC now |
 
 **Relationships:** `song` (N:1), `rehearsal` (N:1, nullable)
+**대표 미디어:** 곡당 1개. 설정 시 같은 곡의 기존 대표 자동 해제.
 
 **file_type 값:** `'video'`, `'audio'`, `'image'`, `'document'`
 
@@ -81,6 +84,7 @@ GalleryImage (독립, is_featured로 대표 이미지 관리)
   "filename": "원본파일명.m4a",
   "file_type": "audio", "file_size": 2090804,
   "url": "/uploads/1_20260208_162641_uuid.m4a",
+  "is_featured": false,
   "comment_count": 2,
   "created_at": "2026-02-08T16:26:41.345637"
 }

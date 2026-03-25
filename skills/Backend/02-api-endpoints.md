@@ -72,6 +72,10 @@ Base URL: `https://band-archive.fly.dev` (prod) / `http://localhost:5000` (dev)
 ```
 **Response:** `200` Media | `400` | `404`
 
+### `PATCH /media/<media_id>/featured`
+대표 미디어로 설정 (같은 곡 내 기존 대표 자동 해제, 곡당 1개)
+**Response:** `200` Media | `404`
+
 ### `PATCH /media/<media_id>/rehearsal`
 미디어-합주 연동 변경/해제
 ```json

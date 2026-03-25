@@ -31,6 +31,7 @@ class Song(db.Model):
             'genre': self.genre,
             'difficulty': self.difficulty,
             'sheet_music': self.sheet_music,
+            'has_featured_media': any(m.is_featured for m in self.media_files),
             'media': [media.to_dict() for media in self.media_files],
             'rehearsals': [{'id': r.id, 'title': r.title, 'date': r.date.isoformat()} for r in self.rehearsals],
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -46,6 +47,7 @@ class Media(db.Model):
     original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
+    is_featured = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     song = db.relationship('Song', backref=db.backref('media_files', lazy=True, cascade='all, delete-orphan'))
@@ -67,6 +69,7 @@ class Media(db.Model):
             'file_type': self.file_type,
             'file_size': self.file_size,
             'url': storage.generate_url(f'media/{self.filename}'),
+            'is_featured': self.is_featured,
             'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
