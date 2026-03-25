@@ -39,6 +39,7 @@
 | `deleteMedia(mediaId)` | DELETE | `/media/:id` | 미디어 삭제 |
 | `renameMedia(mediaId, newFilename)` | PUT | `/media/:id/rename` | 미디어 이름 변경 |
 | `linkMediaToRehearsal(mediaId, rehearsalId)` | PATCH | `/media/:id/rehearsal` | 미디어-합주 연동 변경/해제 |
+| `setFeaturedMedia(mediaId)` | PATCH | `/media/:id/featured` | 대표 미디어 설정 (같은 곡 내 기존 대표 자동 해제) |
 
 ### 대시보드 (Dashboard)
 

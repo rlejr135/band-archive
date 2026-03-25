@@ -27,6 +27,7 @@
 
 ### 곡 목록 (SongList)
 - 전체 곡 목록 표시 (순수 props 컴포넌트)
+- **대표 미디어 정렬**: `has_featured_media === true` 곡이 최상단, ⭐ 뱃지 + `.has-featured` 강조
 - 검색은 SongPage에서 SearchBar + 클라이언트 사이드 필터링 후 props 전달
 - 곡 클릭 → `onSelectSong(song)` → URL 변경
 - 새 곡 추가 버튼 → `onAddSong()`
@@ -45,6 +46,7 @@
   - 인라인 합주 연결 피커로 연동 변경/해제 가능 (`linkMediaToRehearsal`)
   - 미디어 이름 변경 (인라인 편집)
   - 미디어 삭제
+  - **대표 미디어 설정**: 아코디언 바디에 "⭐ 대표로 설정" 버튼, 헤더에 ⭐ 뱃지 (곡당 1개)
 ### 곡 생성/수정 (SongForm)
 - 순수 props 컴포넌트 (Props: `song`, `onSave`, `onCancel`)
 - 폼 필드: title*, artist*, status, genre, difficulty(1-5), link (YouTube URL 전용, 검증), chords, memo
