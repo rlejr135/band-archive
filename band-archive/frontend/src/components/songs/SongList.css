@@ -59,6 +59,17 @@
   margin-top: 2px;
 }
 
+/* Featured song */
+.song-item.has-featured {
+  border-left: 3px solid var(--primary-color);
+  background-color: rgba(255, 211, 42, 0.05);
+}
+
+.featured-badge {
+  font-size: 0.75rem;
+  margin-right: 4px;
+}
+
 .delete-btn {
   background-color: transparent;
   color: var(--text-secondary);

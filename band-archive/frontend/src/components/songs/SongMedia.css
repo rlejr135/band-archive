@@ -54,30 +54,58 @@
   animation: fadeIn 0.2s ease-out;
 }
 
-.media-delete-btn {
+/* Featured media badge */
+.media-featured-badge {
+  font-size: 0.6rem;
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: -2px;
+  right: -2px;
+}
+
+/* Media body actions */
+.media-body-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.media-featured-btn {
   background: none;
-  border: none;
+  border: 1px solid var(--border-color);
   color: var(--text-secondary);
   font-size: 0.8rem;
   cursor: pointer;
-  padding: 4px 6px;
+  padding: 4px 10px;
   border-radius: var(--radius-sm);
-  opacity: 0.5;
+  transition: all 0.2s;
+}
+
+.media-featured-btn:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.media-delete-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
   transition: all 0.2s;
 }
 
 .media-delete-btn:hover {
-  opacity: 1;
+  border-color: var(--accent-color);
   color: var(--accent-color);
-  background-color: rgba(255, 94, 87, 0.1);
 }
 
 .media-icon {
   font-size: 1.5rem;
   margin-right: 15px;
+  position: relative;
 }
 
 .media-name {
