@@ -31,10 +31,9 @@ const SongList = ({ songs, onSelectSong, onDeleteSong, onAddSong }) => {
       
       {songs.length > 0 ? (
         <ul className="song-list-ul">
-          {[...songs].sort((a, b) => (b.has_featured_media ? 1 : 0) - (a.has_featured_media ? 1 : 0)).map((song) => (
-            <li key={song.id} className={`song-item ${song.has_featured_media ? 'has-featured' : ''}`}>
+          {songs.map((song) => (
+            <li key={song.id} className="song-item">
               <span onClick={() => onSelectSong(song)} className="song-title-span">
-                {song.has_featured_media && <span className="featured-badge">⭐</span>}
                 {song.title} <span className="song-artist-span">- {song.artist}</span>
               </span>
               <button onClick={() => handleDeleteClick(song)} className="delete-btn" title="삭제">×</button>
