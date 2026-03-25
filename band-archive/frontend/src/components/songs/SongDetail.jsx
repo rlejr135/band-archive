@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSongs } from '../../context/SongContext';
-import { linkMediaToRehearsal } from '../../services/api';
+import { linkMediaToRehearsal, setFeaturedMedia } from '../../services/api';
 import { fetchRehearsals } from '../../services/rehearsalApi';
 import './SongDetail.css';
 import './SongMedia.css';
@@ -76,6 +76,15 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       setNewFilename('');
     } catch (err) {
       alert('파일 이름 변경에 실패했습니다.');
+    }
+  };
+
+  const handleSetFeatured = async (mediaId) => {
+    try {
+      await setFeaturedMedia(mediaId);
+      await refreshSong(song.id);
+    } catch (err) {
+      alert('대표 미디어 설정에 실패했습니다.');
     }
   };
 
@@ -304,7 +313,10 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
               return (
                 <div key={media.id} className={`media-item ${isExpanded ? 'expanded' : ''}`}>
                   <div className="media-item-header" onClick={() => !isRenaming && toggleMediaExpand(media.id)}>
-                    <span className="media-icon">{iconForType(media)}</span>
+                    <span className="media-icon">
+                      {media.is_featured && <span className="media-featured-badge">⭐</span>}
+                      {iconForType(media)}
+                    </span>
 
                     <div className="media-info">
                       {isRenaming ? (
@@ -360,7 +372,12 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
 
                   {isExpanded && (
                     <div className="media-item-body">
-                      <button className="media-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️ 삭제</button>
+                      <div className="media-body-actions">
+                        {!media.is_featured && (
+                          <button className="media-featured-btn" onClick={() => handleSetFeatured(media.id)}>⭐ 대표로 설정</button>
+                        )}
+                        <button className="media-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️ 삭제</button>
+                      </div>
                       <MediaPlayer file={{
                         id: media.id,
                         name: getDisplayName(media.filename),

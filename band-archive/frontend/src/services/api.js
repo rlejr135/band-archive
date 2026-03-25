@@ -94,6 +94,13 @@ export const renameMedia = async (mediaId, newFilename) => {
   return await response.json();
 };
 
+// Set featured media
+export const setFeaturedMedia = async (mediaId) => {
+  const response = await fetch(`${API_URL}/media/${mediaId}/featured`, { method: 'PATCH' });
+  if (!response.ok) throw new Error('Failed to set featured media');
+  return response.json();
+};
+
 // Dashboard stats
 export const fetchDashboardStats = async () => {
   const response = await fetch(`${API_URL}/dashboard/stats`);
