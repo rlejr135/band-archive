@@ -96,6 +96,9 @@ const FileUpload = ({
           <p className="upload-hint">
             음원, 영상, 이미지, 문서 (최대 200MB)
           </p>
+          <p className="upload-hint-ios">
+            iOS에서 영상 선택 시 변환에 시간이 걸릴 수 있습니다
+          </p>
         </div>
         <input
           id="hidden-file-input"
