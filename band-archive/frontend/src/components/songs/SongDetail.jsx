@@ -383,6 +383,8 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         name: getDisplayName(media.filename),
                         url: media.url,
                         type: type,
+                        qualities: media.qualities,
+                        transcoding_status: media.transcoding_status,
                       }} />
                       <CommentSection targetType="media" targetId={media.id} />
                     </div>

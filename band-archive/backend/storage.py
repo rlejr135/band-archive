@@ -67,9 +67,12 @@ class StorageClient:
 
     def copy(self, src_key, dst_key):
         """오브젝트 복사 (rename 대체)"""
+        import urllib.parse
+        # Boto3 copy_object's CopySource requires URL-encoded key if it contains non-ASCII characters
+        encoded_src_key = urllib.parse.quote(src_key)
         self._client.copy_object(
             Bucket=self._bucket,
-            CopySource={'Bucket': self._bucket, 'Key': src_key},
+            CopySource={'Bucket': self._bucket, 'Key': encoded_src_key},
             Key=dst_key,
         )
 

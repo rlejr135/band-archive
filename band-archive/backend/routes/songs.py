@@ -331,6 +331,27 @@ def rename_media(media_id):
     storage.copy(old_key, new_key)
     storage.delete(old_key)
 
+    # If it's a video and has been transcoded, rename the transcoded files too
+    if media.file_type == 'video' and media.transcoding_status == 'completed':
+        old_base = media.filename.rsplit('.', 1)[0]
+        new_base = new_filename.rsplit('.', 1)[0]
+        
+        transcoded_files = [
+            (f'{old_base}_720p.mp4', f'{new_base}_720p.mp4'),
+            (f'{old_base}_480p.mp4', f'{new_base}_480p.mp4'),
+            (f'{old_base}_audio.m4a', f'{new_base}_audio.m4a')
+        ]
+        
+        for old_t_file, new_t_file in transcoded_files:
+            old_t_key = f'media/{old_t_file}'
+            new_t_key = f'media/{new_t_file}'
+            try:
+                if storage.exists(old_t_key):
+                    storage.copy(old_t_key, new_t_key)
+                    storage.delete(old_t_key)
+            except Exception as e:
+                current_app.logger.error(f"Error renaming transcoded file {old_t_key}: {e}")
+
     media.filename = new_filename
     media.original_filename = new_name
     db.session.commit()
@@ -345,6 +366,20 @@ def delete_media(media_id):
         raise NotFoundError("Media not found")
 
     storage.delete(f'media/{media.filename}')
+
+    # Delete transcoded files if any
+    if media.file_type == 'video':
+        base_name = media.filename.rsplit('.', 1)[0]
+        transcoded_files = [
+            f'{base_name}_720p.mp4',
+            f'{base_name}_480p.mp4',
+            f'{base_name}_audio.m4a'
+        ]
+        for t_file in transcoded_files:
+            try:
+                storage.delete(f'media/{t_file}')
+            except Exception as e:
+                current_app.logger.error(f"Error deleting transcoded file {t_file}: {e}")
 
     db.session.delete(media)
     db.session.commit()
