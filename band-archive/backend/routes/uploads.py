@@ -93,6 +93,12 @@ def complete_media():
     )
     db.session.add(media)
     db.session.commit()
+
+    if media.file_type == 'video':
+        from flask import current_app
+        from transcoder import transcode_video_async
+        transcode_video_async(current_app._get_current_object(), media.filename)
+
     return jsonify(media.to_dict()), 201
 
 

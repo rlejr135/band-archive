@@ -47,6 +47,7 @@ class Media(db.Model):
     original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
+    transcoding_status = db.Column(db.String(20), default='pending')  # pending, processing, completed, failed
     is_featured = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -57,6 +58,15 @@ class Media(db.Model):
 
     def to_dict(self):
         from storage import storage
+        qualities = None
+        if self.file_type == 'video' and self.transcoding_status == 'completed':
+            qualities = {
+                'original': storage.generate_url(f'media/{self.filename}'),
+                '720p': storage.generate_url(f'media/{self.filename.rsplit(".", 1)[0]}_720p.mp4'),
+                '480p': storage.generate_url(f'media/{self.filename.rsplit(".", 1)[0]}_480p.mp4'),
+                'audio': storage.generate_url(f'media/{self.filename.rsplit(".", 1)[0]}_audio.m4a'),
+            }
+        
         return {
             'id': self.id,
             'song_id': self.song_id,
@@ -68,7 +78,9 @@ class Media(db.Model):
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
+            'transcoding_status': self.transcoding_status,
             'url': storage.generate_url(f'media/{self.filename}'),
+            'qualities': qualities,
             'is_featured': self.is_featured,
             'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,

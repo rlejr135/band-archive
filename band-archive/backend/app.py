@@ -70,6 +70,9 @@ def _run_migrations(app):
         if 'is_featured' not in columns:
             conn.execute('ALTER TABLE media ADD COLUMN is_featured BOOLEAN DEFAULT 0')
             app.logger.info('Migration: added is_featured column to media table')
+        if 'transcoding_status' not in columns:
+            conn.execute("ALTER TABLE media ADD COLUMN transcoding_status VARCHAR(20) DEFAULT 'pending'")
+            app.logger.info('Migration: added transcoding_status column to media table')
 
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')

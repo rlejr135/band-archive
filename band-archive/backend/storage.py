@@ -30,6 +30,10 @@ class StorageClient:
             extra['ContentType'] = content_type
         self._client.upload_fileobj(file_obj, self._bucket, key, ExtraArgs=extra)
 
+    def download(self, key, file_obj):
+        """파일 다운로드"""
+        self._client.download_fileobj(self._bucket, key, file_obj)
+
     def delete(self, key):
         """파일 삭제"""
         self._client.delete_object(Bucket=self._bucket, Key=key)
