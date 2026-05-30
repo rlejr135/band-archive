@@ -108,15 +108,22 @@ const MediaPlayer = ({ file }) => {
           <span className="player-title">{file.name}</span>
         </div>
         
-        {(isVideo || isAudio) && hasQualities && (
+        {(isVideo || isAudio) && (hasQualities || (file.transcoding_status === 'pending' || file.transcoding_status === 'processing')) && (
           <div className="settings-wrapper" ref={settingsRef}>
-            <button 
-              className={`settings-toggle ${showSettings ? 'active' : ''}`}
-              onClick={() => setShowSettings(!showSettings)}
-              title="설정"
-            >
-              ⚙️
-            </button>
+            {hasQualities ? (
+              <button 
+                className={`settings-toggle ${showSettings ? 'active' : ''}`}
+                onClick={() => setShowSettings(!showSettings)}
+                title="설정"
+              >
+                ⚙️
+              </button>
+            ) : (
+              <div className="transcoding-indicator" title="트랜스코딩 중...">
+                <div className="loading-spinner-small"></div>
+                <span className="transcoding-text">트랜스코딩 중...</span>
+              </div>
+            )}
             {showSettings && (
               <div className="settings-menu">
                 {isVideo && (

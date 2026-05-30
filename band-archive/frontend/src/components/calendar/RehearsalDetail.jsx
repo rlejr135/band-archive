@@ -220,6 +220,8 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                               name: m.filename,
                               url: m.url,
                               type: m.file_type,
+                              qualities: m.qualities,
+                              transcoding_status: m.transcoding_status,
                             }} />
                             <CommentSection targetType="media" targetId={m.id} />
                           </div>

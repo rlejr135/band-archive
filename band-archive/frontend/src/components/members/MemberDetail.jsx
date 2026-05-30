@@ -92,9 +92,12 @@ const MemberDetail = () => {
             <button className="close-player-btn" onClick={() => setPlayingLog(null)}>&times;</button>
             <MediaPlayer
               file={{
+                id: playingLog.id,
                 url: playingLog.url,
                 name: playingLog.title,
                 type: playingLog.file_type,
+                qualities: playingLog.qualities,
+                transcoding_status: playingLog.transcoding_status,
               }}
             />
             <CommentSection targetType="personal-logs" targetId={playingLog.id} />
