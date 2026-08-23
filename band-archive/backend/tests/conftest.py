@@ -33,6 +33,8 @@ def mock_object_storage(monkeypatch):
     monkeypatch.setattr(storage, 'delete', lambda key: objects.pop(key, None))
     monkeypatch.setattr(storage, 'copy', lambda src, dst: objects.__setitem__(dst, objects.get(src, b'')))
     monkeypatch.setattr(storage, 'generate_url', lambda key, expires_in=None: f'https://storage.test/{key}')
+    monkeypatch.setattr(storage, 'generate_upload_url',
+                        lambda key, content_type=None, expires_in=600: f'https://storage.test/upload/{key}')
     monkeypatch.setattr(storage, 'head', head)
     monkeypatch.setattr(storage, 'create_multipart_upload', lambda key, content_type: 'mock-upload-id')
     monkeypatch.setattr(storage, 'generate_upload_part_url',

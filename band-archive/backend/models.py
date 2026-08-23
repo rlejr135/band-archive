@@ -176,6 +176,13 @@ class PersonalLog(db.Model):
     original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=False)
     file_size = db.Column(db.Integer, nullable=True)
+    transcoding_status = db.Column(db.String(20), default='not_required', nullable=False)
+    audio_filename = db.Column(db.String(200), nullable=True)
+    processing_error = db.Column(db.String(500), nullable=True)
+    processing_started_at = db.Column(db.DateTime, nullable=True)
+    processing_completed_at = db.Column(db.DateTime, nullable=True)
+    processing_attempts = db.Column(db.Integer, default=0, nullable=False)
+    processing_heartbeat_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     member = db.relationship('Member', backref=db.backref('personal_logs', lazy=True, cascade='all, delete-orphan'))
@@ -184,6 +191,10 @@ class PersonalLog(db.Model):
 
     def to_dict(self):
         from storage import storage
+        original_url = storage.generate_url(f'personal_logs/{self.filename}')
+        audio_url = None
+        if self.file_type == 'video' and self.transcoding_status == 'completed' and self.audio_filename:
+            audio_url = storage.generate_url(f'personal_logs/{self.audio_filename}')
         return {
             'id': self.id,
             'member_id': self.member_id,
@@ -192,10 +203,45 @@ class PersonalLog(db.Model):
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
-            'url': storage.generate_url(f'personal_logs/{self.filename}'),
+            'url': original_url,
+            'audio_url': audio_url,
+            'transcoding_status': self.transcoding_status,
+            'audio_filename': self.audio_filename,
+            'processing_error': self.processing_error,
+            'processing_started_at': self.processing_started_at.isoformat() if self.processing_started_at else None,
+            'processing_completed_at': self.processing_completed_at.isoformat() if self.processing_completed_at else None,
+            'processing_attempts': self.processing_attempts,
+            'processing_heartbeat_at': self.processing_heartbeat_at.isoformat() if self.processing_heartbeat_at else None,
             'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class PersonalLogMultipartUploadSession(db.Model):
+    """Server-owned multipart session for a member's personal log."""
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    r2_upload_id = db.Column(db.String(200), nullable=False)
+    object_key = db.Column(db.String(300), nullable=False)
+    original_filename = db.Column(db.String(200), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content_type = db.Column(db.String(100), nullable=False)
+    declared_bytes = db.Column(db.BigInteger, nullable=False)
+    member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='initiated')
+    personal_log_id = db.Column(db.Integer, db.ForeignKey('personal_log.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(hours=24), nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    parts = db.relationship('PersonalLogMultipartUploadPart', backref='session', lazy=True,
+                            cascade='all, delete-orphan', order_by='PersonalLogMultipartUploadPart.part_number')
+
+
+class PersonalLogMultipartUploadPart(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(36), db.ForeignKey('personal_log_multipart_upload_session.id'), nullable=False)
+    part_number = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    __table_args__ = (db.UniqueConstraint('session_id', 'part_number', name='uq_personal_log_multipart_session_part'),)
 
 
 rehearsal_songs = db.Table('rehearsal_songs',

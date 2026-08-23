@@ -53,6 +53,20 @@ def _run_migrations(app):
         if 'file_size' not in columns:
             conn.execute('ALTER TABLE personal_log ADD COLUMN file_size INTEGER')
             app.logger.info('Migration: added file_size column to personal_log table')
+        personal_log_columns = [row[1] for row in conn.execute('PRAGMA table_info(personal_log)').fetchall()]
+        personal_log_additions = {
+            'transcoding_status': "VARCHAR(20) DEFAULT 'not_required'",
+            'audio_filename': 'VARCHAR(200)',
+            'processing_error': 'VARCHAR(500)',
+            'processing_started_at': 'DATETIME',
+            'processing_completed_at': 'DATETIME',
+            'processing_attempts': 'INTEGER DEFAULT 0',
+            'processing_heartbeat_at': 'DATETIME',
+        }
+        for column, definition in personal_log_additions.items():
+            if column not in personal_log_columns:
+                conn.execute(f'ALTER TABLE personal_log ADD COLUMN {column} {definition}')
+                app.logger.info('Migration: added %s column to personal_log table', column)
             
         # Check rehearsal table
         columns = [row[1] for row in conn.execute('PRAGMA table_info(rehearsal)').fetchall()]
@@ -103,6 +117,13 @@ def _run_migrations(app):
                      "WHERE (file_type IS NULL OR file_type != 'video') "
                      "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
         conn.execute('UPDATE media SET processing_attempts = 0 WHERE processing_attempts IS NULL')
+        conn.execute("UPDATE personal_log SET transcoding_status = 'queued' "
+                     "WHERE file_type = 'video' AND "
+                     "(transcoding_status IS NULL OR transcoding_status IN ('pending', 'not_required'))")
+        conn.execute("UPDATE personal_log SET transcoding_status = 'not_required' "
+                     "WHERE (file_type IS NULL OR file_type != 'video') "
+                     "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
+        conn.execute('UPDATE personal_log SET processing_attempts = 0 WHERE processing_attempts IS NULL')
 
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')

@@ -12,7 +12,7 @@ import time
 from sqlalchemy import func
 
 from extensions import db
-from models import Media
+from models import Media, PersonalLog
 from storage import storage
 
 SAFE_ERRORS = {
@@ -56,9 +56,13 @@ class AudioWorker:
         poll_seconds = self.app.config['AUDIO_WORKER_POLL_SECONDS']
         while not self.stop_event.is_set():
             with self.app.app_context():
-                media_id = claim_next_queued_media()
-                if media_id is not None:
-                    process_claimed_media(media_id, self.app.config)
+                item = claim_next_queued_item()
+                if item is not None:
+                    kind, item_id = item
+                    if kind == 'media':
+                        process_claimed_media(item_id, self.app.config)
+                    else:
+                        process_claimed_personal_log(item_id, self.app.config)
                     continue
             self.wake_event.wait(poll_seconds)
             self.wake_event.clear()
@@ -81,6 +85,11 @@ def create_media(**kwargs):
     return Media(**kwargs)
 
 
+def create_personal_log(**kwargs):
+    kwargs['transcoding_status'] = initial_processing_status(kwargs.get('file_type'))
+    return PersonalLog(**kwargs)
+
+
 def save_media_and_start(app, media):
     """Persist a queued media record, then wake (never create) the process worker."""
     db.session.add(media)
@@ -88,6 +97,14 @@ def save_media_and_start(app, media):
     if media.file_type == 'video':
         start_audio_processing(app, media.id)
     return media
+
+
+def save_personal_log_and_start(app, log):
+    db.session.add(log)
+    db.session.commit()
+    if log.file_type == 'video':
+        start_audio_processing(app, log.id)
+    return log
 
 
 def start_worker(app):
@@ -146,6 +163,14 @@ def recover_stale_processing(stale_seconds):
         'processing_started_at': None,
         'processing_heartbeat_at': None,
     }, synchronize_session=False)
+    recovered += PersonalLog.query.filter(
+        PersonalLog.file_type == 'video',
+        PersonalLog.transcoding_status == 'processing',
+        (PersonalLog.processing_heartbeat_at.is_(None)) | (PersonalLog.processing_heartbeat_at < cutoff),
+    ).update({
+        'transcoding_status': 'queued', 'processing_error': None,
+        'processing_started_at': None, 'processing_heartbeat_at': None,
+    }, synchronize_session=False)
     db.session.commit()
     return recovered
 
@@ -182,8 +207,49 @@ def claim_next_queued_media():
         return None
 
 
+def _claim_personal_log(log_id=None):
+    now = utcnow()
+    query = PersonalLog.query.filter_by(transcoding_status='queued', file_type='video')
+    if log_id is not None:
+        query = query.filter_by(id=log_id)
+    else:
+        candidate = query.order_by(PersonalLog.created_at.asc(), PersonalLog.id.asc()).with_entities(PersonalLog.id).first()
+        if not candidate:
+            return None
+        log_id = candidate.id
+        query = query.filter_by(id=log_id)
+    claimed = query.update({
+        'transcoding_status': 'processing', 'processing_started_at': now,
+        'processing_completed_at': None, 'processing_heartbeat_at': now,
+        'processing_error': None,
+        'processing_attempts': func.coalesce(PersonalLog.processing_attempts, 0) + 1,
+    }, synchronize_session=False)
+    db.session.commit()
+    return log_id if claimed else None
+
+
+def claim_next_queued_item():
+    """Claim the oldest queued video from either Media or PersonalLog."""
+    media = Media.query.filter_by(transcoding_status='queued', file_type='video').order_by(Media.created_at.asc(), Media.id.asc()).first()
+    log = PersonalLog.query.filter_by(transcoding_status='queued', file_type='video').order_by(PersonalLog.created_at.asc(), PersonalLog.id.asc()).first()
+    if not media and not log:
+        return None
+    if log is None or (media is not None and media.created_at <= log.created_at):
+        item_id = _claim_media(media.id)
+        return ('media', item_id) if item_id else None
+    item_id = _claim_personal_log(log.id)
+    return ('personal_log', item_id) if item_id else None
+
+
 def _heartbeat(media_id):
     Media.query.filter_by(id=media_id, transcoding_status='processing').update({
+        'processing_heartbeat_at': utcnow(),
+    }, synchronize_session=False)
+    db.session.commit()
+
+
+def _personal_log_heartbeat(log_id):
+    PersonalLog.query.filter_by(id=log_id, transcoding_status='processing').update({
         'processing_heartbeat_at': utcnow(),
     }, synchronize_session=False)
     db.session.commit()
@@ -229,6 +295,38 @@ def process_claimed_media(media_id, config):
         logging.exception('Audio extraction failed for media id %s', media_id)
 
 
+def process_claimed_personal_log(log_id, config):
+    log = db.session.get(PersonalLog, log_id)
+    if not log or log.transcoding_status != 'processing':
+        return
+    try:
+        audio_filename = extract_m4a_audio(
+            log.filename, source_prefix='personal_logs',
+            timeout_seconds=config['AUDIO_PROCESSING_TIMEOUT_SECONDS'],
+            heartbeat=lambda: _personal_log_heartbeat(log_id),
+            heartbeat_seconds=config['AUDIO_PROCESSING_HEARTBEAT_SECONDS'],
+        )
+        if not storage.exists(f'personal_logs/{audio_filename}'):
+            raise AudioProcessingError('output_missing')
+        log = db.session.get(PersonalLog, log_id)
+        log.audio_filename = audio_filename
+        log.transcoding_status = 'completed'
+        log.processing_error = None
+        log.processing_completed_at = utcnow()
+        log.processing_heartbeat_at = utcnow()
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        log = db.session.get(PersonalLog, log_id)
+        if log:
+            log.transcoding_status = 'failed'
+            log.processing_error = _safe_error(exc)
+            log.processing_completed_at = utcnow()
+            log.processing_heartbeat_at = utcnow()
+            db.session.commit()
+        logging.exception('Audio extraction failed for personal log id %s', log_id)
+
+
 def _safe_error(exc):
     return SAFE_ERRORS.get(str(exc), SAFE_ERRORS['processing_failed'])
 
@@ -268,19 +366,19 @@ def _audio_codec(input_path, timeout_seconds):
     return codec
 
 
-def extract_m4a_audio(filename, timeout_seconds=1800, heartbeat=None, heartbeat_seconds=15):
+def extract_m4a_audio(filename, source_prefix='media', timeout_seconds=1800, heartbeat=None, heartbeat_seconds=15):
     """Download one source video and upload exactly one M4A derivative to R2."""
     output_filename = audio_filename_for(filename)
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = os.path.join(tmpdir, filename)
         output_path = os.path.join(tmpdir, output_filename)
         with open(input_path, 'wb') as source:
-            storage.download(f'media/{filename}', source)
+            storage.download(f'{source_prefix}/{filename}', source)
         codec = _audio_codec(input_path, timeout_seconds)
         command = ['ffmpeg', '-y', '-i', input_path, '-vn', '-map', '0:a:0']
         command.extend(['-c:a', 'copy'] if codec == 'aac' else ['-c:a', 'aac', '-b:a', '128k'])
         command.append(output_path)
         _run_command(command, timeout_seconds, heartbeat, heartbeat_seconds)
         with open(output_path, 'rb') as output:
-            storage.upload(f'media/{output_filename}', output, content_type='audio/mp4')
+            storage.upload(f'{source_prefix}/{output_filename}', output, content_type='audio/mp4')
     return output_filename

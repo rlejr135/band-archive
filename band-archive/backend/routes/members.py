@@ -76,6 +76,8 @@ def delete_member(id):
 
     for log in member.personal_logs:
         storage.delete(f'personal_logs/{log.filename}')
+        if log.audio_filename:
+            storage.delete(f'personal_logs/{log.audio_filename}')
 
     db.session.delete(member)
     db.session.commit()
