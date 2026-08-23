@@ -89,6 +89,12 @@ def _run_migrations(app):
         if 'processing_completed_at' not in columns:
             conn.execute('ALTER TABLE media ADD COLUMN processing_completed_at DATETIME')
             app.logger.info('Migration: added processing_completed_at column to media table')
+        if 'processing_attempts' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN processing_attempts INTEGER DEFAULT 0')
+            app.logger.info('Migration: added processing_attempts column to media table')
+        if 'processing_heartbeat_at' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN processing_heartbeat_at DATETIME')
+            app.logger.info('Migration: added processing_heartbeat_at column to media table')
 
         # Legacy rows predate the explicit lifecycle. Never leave non-video rows pending.
         conn.execute("UPDATE media SET transcoding_status = 'queued' "
@@ -96,6 +102,7 @@ def _run_migrations(app):
         conn.execute("UPDATE media SET transcoding_status = 'not_required' "
                      "WHERE (file_type IS NULL OR file_type != 'video') "
                      "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
+        conn.execute('UPDATE media SET processing_attempts = 0 WHERE processing_attempts IS NULL')
 
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')
@@ -106,7 +113,7 @@ def _run_migrations(app):
         app.logger.warning(f'Startup migration failed: {e}')
 
 
-def create_app(config_class=None):
+def create_app(config_class=None, start_worker=None):
     if config_class is None:
         config_name = os.getenv('FLASK_CONFIG', 'config.DevelopmentConfig')
         module_name, class_name = config_name.rsplit('.', 1)
@@ -145,6 +152,12 @@ def create_app(config_class=None):
     with app.app_context():
         db.create_all()
         _run_migrations(app)
+
+    if start_worker is None:
+        start_worker = not app.testing
+    if start_worker:
+        from media_processing import start_worker as start_audio_worker
+        start_audio_worker(app)
 
     return app
 

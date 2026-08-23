@@ -378,7 +378,9 @@ def get_media_processing(media_id):
         'audio_url': (storage.generate_url(f'media/{media.audio_filename}')
                       if media.transcoding_status == 'completed' and media.audio_filename else None),
         'error': media.processing_error,
+        'attempts': media.processing_attempts,
         'started_at': media.processing_started_at.isoformat() if media.processing_started_at else None,
+        'heartbeat_at': media.processing_heartbeat_at.isoformat() if media.processing_heartbeat_at else None,
         'completed_at': media.processing_completed_at.isoformat() if media.processing_completed_at else None,
     })
 

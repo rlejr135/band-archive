@@ -53,6 +53,8 @@ class Media(db.Model):
     processing_error = db.Column(db.String(500), nullable=True)
     processing_started_at = db.Column(db.DateTime, nullable=True)
     processing_completed_at = db.Column(db.DateTime, nullable=True)
+    processing_attempts = db.Column(db.Integer, default=0, nullable=False)
+    processing_heartbeat_at = db.Column(db.DateTime, nullable=True)
     is_featured = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -87,6 +89,8 @@ class Media(db.Model):
             'processing_error': self.processing_error,
             'processing_started_at': self.processing_started_at.isoformat() if self.processing_started_at else None,
             'processing_completed_at': self.processing_completed_at.isoformat() if self.processing_completed_at else None,
+            'processing_attempts': self.processing_attempts,
+            'processing_heartbeat_at': self.processing_heartbeat_at.isoformat() if self.processing_heartbeat_at else None,
             'url': original_url,
             'audio_url': audio_url,
             'qualities': qualities,

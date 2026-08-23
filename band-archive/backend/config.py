@@ -11,6 +11,12 @@ class Config:
     S3_SECRET_KEY = os.getenv('S3_SECRET_KEY')
     S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
     S3_PRESIGN_EXPIRES = 3600  # presigned URL 유효시간 (초)
+    # Large source videos can legitimately exceed five minutes. Workers send a
+    # heartbeat while FFmpeg runs; stale jobs are recovered on next startup.
+    AUDIO_PROCESSING_TIMEOUT_SECONDS = int(os.getenv('AUDIO_PROCESSING_TIMEOUT_SECONDS', '1800'))
+    AUDIO_PROCESSING_HEARTBEAT_SECONDS = int(os.getenv('AUDIO_PROCESSING_HEARTBEAT_SECONDS', '15'))
+    AUDIO_PROCESSING_STALE_SECONDS = int(os.getenv('AUDIO_PROCESSING_STALE_SECONDS', '3600'))
+    AUDIO_WORKER_POLL_SECONDS = float(os.getenv('AUDIO_WORKER_POLL_SECONDS', '5'))
 
 
 class DevelopmentConfig(Config):

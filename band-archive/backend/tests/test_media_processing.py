@@ -1,6 +1,6 @@
 import io
 import subprocess
-from datetime import datetime, timezone
+from datetime import timedelta
 
 import pytest
 
@@ -10,6 +10,12 @@ from media_processing import (
     create_media,
     extract_m4a_audio,
     _process_audio_job,
+    claim_next_queued_media,
+    recover_stale_processing,
+    process_claimed_media,
+    _run_command,
+    stop_worker,
+    utcnow,
 )
 from models import Media
 from storage import storage
@@ -97,7 +103,7 @@ def test_timeout_marks_video_failed_with_safe_error(app, monkeypatch):
         db.session.add(media)
         db.session.commit()
         media_id = media.id
-    monkeypatch.setattr('media_processing.extract_m4a_audio', lambda filename: (_ for _ in ()).throw(AudioProcessingError('timeout')))
+    monkeypatch.setattr('media_processing.extract_m4a_audio', lambda filename, **kwargs: (_ for _ in ()).throw(AudioProcessingError('timeout')))
     _process_audio_job(app, media_id)
     with app.app_context():
         media = db.session.get(Media, media_id)
@@ -149,3 +155,109 @@ def test_retry_rejects_non_video(client, app):
         media_id = media.id
     response = client.post(f'/media/{media_id}/retry-audio')
     assert response.status_code == 400
+
+
+def test_worker_claims_queued_media_sequentially_and_increments_attempts(app):
+    with app.app_context():
+        first = create_media(song_id=1, filename='first.mp4', file_type='video')
+        second = create_media(song_id=1, filename='second.mp4', file_type='video')
+        db.session.add_all([first, second])
+        db.session.commit()
+        assert claim_next_queued_media() == first.id
+        assert claim_next_queued_media() == second.id
+        first = db.session.get(Media, first.id)
+        second = db.session.get(Media, second.id)
+        assert first.transcoding_status == second.transcoding_status == 'processing'
+        assert first.processing_attempts == second.processing_attempts == 1
+
+
+def test_startup_recovery_requeues_only_stale_processing(app):
+    with app.app_context():
+        stale = create_media(song_id=1, filename='stale.mp4', file_type='video')
+        stale.transcoding_status = 'processing'
+        stale.processing_heartbeat_at = utcnow() - timedelta(hours=2)
+        live = create_media(song_id=1, filename='live.mp4', file_type='video')
+        live.transcoding_status = 'processing'
+        live.processing_heartbeat_at = utcnow()
+        db.session.add_all([stale, live])
+        db.session.commit()
+        assert recover_stale_processing(60) == 1
+        assert db.session.get(Media, stale.id).transcoding_status == 'queued'
+        assert db.session.get(Media, live.id).transcoding_status == 'processing'
+
+
+def test_processing_heartbeats_while_ffmpeg_runs(app, monkeypatch):
+    with app.app_context():
+        media = create_media(song_id=1, filename='clip.mp4', file_type='video')
+        db.session.add(media)
+        db.session.commit()
+        media_id = claim_next_queued_media()
+    calls = []
+    app.config['AUDIO_PROCESSING_HEARTBEAT_SECONDS'] = 7
+    monkeypatch.setattr('media_processing.extract_m4a_audio', lambda filename, **kwargs: calls.append(kwargs['heartbeat']) or 'clip_audio.m4a')
+    monkeypatch.setattr(storage, 'exists', lambda key: True)
+    with app.app_context():
+        process_claimed_media(media_id, app.config)
+        calls[0]()
+        updated = db.session.get(Media, media_id)
+        assert updated.transcoding_status == 'completed'
+        assert updated.processing_heartbeat_at is not None
+
+
+def test_worker_passes_configured_heartbeat_interval(app, monkeypatch):
+    with app.app_context():
+        media = create_media(song_id=1, filename='configured.mp4', file_type='video')
+        db.session.add(media)
+        db.session.commit()
+        media_id = claim_next_queued_media()
+    app.config['AUDIO_PROCESSING_HEARTBEAT_SECONDS'] = 9
+    received = {}
+
+    def fake_extract(filename, **kwargs):
+        received.update(kwargs)
+        return 'configured_audio.m4a'
+
+    monkeypatch.setattr('media_processing.extract_m4a_audio', fake_extract)
+    monkeypatch.setattr(storage, 'exists', lambda key: True)
+    with app.app_context():
+        process_claimed_media(media_id, app.config)
+    assert received['heartbeat_seconds'] == 9
+
+
+def test_ffmpeg_command_emits_heartbeat_while_running(monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self):
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            return None if self.polls == 1 else 0
+
+        def communicate(self):
+            return '', ''
+
+    monkeypatch.setattr('media_processing.subprocess.Popen', lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr('media_processing.time.sleep', lambda seconds: None)
+    heartbeats = []
+    _run_command(['ffmpeg', '-version'], 10, heartbeat=lambda: heartbeats.append(True))
+    assert heartbeats == [True]
+
+
+def test_testing_config_never_starts_worker(app):
+    assert 'audio_worker' not in app.extensions
+
+
+def test_stop_worker_allows_test_or_process_teardown(app):
+    class FakeWorker:
+        def __init__(self):
+            self.timeout = None
+
+        def stop(self, timeout):
+            self.timeout = timeout
+
+    worker = FakeWorker()
+    app.extensions['audio_worker'] = worker
+    stop_worker(app, timeout=2)
+    assert worker.timeout == 2
