@@ -1,23 +1,22 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import useMediaUpload from '../../hooks/useMediaUpload';
 import './MediaPlayer.css';
 
-const MediaPlayer = ({ file }) => {
+const MediaPlayer = ({ file, onMediaUpdate }) => {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentQuality, setCurrentQuality] = useState('original');
   const [isRadioMode, setIsRadioMode] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const mediaRef = useRef(null);
-  const settingsRef = useRef(null);
+  const restoreRef = useRef(null);
+  const onMediaUpdateRef = useRef(onMediaUpdate);
+  const { retryAudio, watch } = useMediaUpload();
+  const watchMedia = useMemo(() => ({ id: file?.id, transcoding_status: file?.transcoding_status }), [file?.id, file?.transcoding_status]);
 
+  useEffect(() => { onMediaUpdateRef.current = onMediaUpdate; }, [onMediaUpdate]);
+  const watchable = watchMedia.id && file?.type === 'video' && ['queued', 'pending', 'processing'].includes(watchMedia.transcoding_status);
   useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (settingsRef.current && !settingsRef.current.contains(event.target)) {
-        setShowSettings(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    if (!watchable) return undefined;
+    return watch(watchMedia, (media) => onMediaUpdateRef.current?.(media));
+  }, [watch, watchMedia, watchable]);
 
   if (!file) return null;
 
@@ -36,20 +35,10 @@ const MediaPlayer = ({ file }) => {
   const isImage = mediaType === 'image';
   const isDocument = mediaType === 'document';
 
-  // Quality and Source Logic
-  const hasQualities = file.qualities && Object.keys(file.qualities).length > 0;
-  
-  const getMediaUrl = () => {
-    if (!hasQualities) return file.url;
-    
-    if (isRadioMode && file.qualities.audio) {
-      return file.qualities.audio;
-    }
-    
-    return file.qualities[currentQuality] || file.qualities.original || file.url;
-  };
-
-  const mediaUrl = getMediaUrl();
+  const radioReady = isVideo && file.transcoding_status === 'completed' && Boolean(file.audio_url);
+  const radioModeActive = isRadioMode && radioReady;
+  const mediaUrl = radioModeActive ? file.audio_url : file.url;
+  const processing = ['queued', 'pending', 'processing'].includes(file.transcoding_status);
 
   const togglePlay = () => {
     if (mediaRef.current) {
@@ -62,143 +51,77 @@ const MediaPlayer = ({ file }) => {
     }
   };
 
-  const handleSourceChange = (changeFn) => {
+  const changeMode = (radio) => {
     if (mediaRef.current) {
-      const currentTime = mediaRef.current.currentTime;
-      const wasPlaying = !mediaRef.current.paused;
-      
-      changeFn();
-      setShowSettings(false);
-
-      const restore = () => {
-        if (mediaRef.current) {
-          mediaRef.current.currentTime = currentTime;
-          if (wasPlaying) {
-            mediaRef.current.play().catch(e => console.log('Auto-play blocked or failed', e));
-          }
-        }
-        mediaRef.current?.removeEventListener('loadedmetadata', restore);
-      };
-      
-      // Set timeout as fallback or use loadedmetadata
-      mediaRef.current.addEventListener('loadedmetadata', restore);
-      // Fallback for some browsers or scenarios where loadedmetadata might not fire as expected
-      setTimeout(() => {
-        if (mediaRef.current && Math.abs(mediaRef.current.currentTime - currentTime) > 0.5 && currentTime > 0) {
-           // already handled or need manual check
-        }
-      }, 1000);
-    } else {
-      changeFn();
-      setShowSettings(false);
+      restoreRef.current = { time: mediaRef.current.currentTime, playing: !mediaRef.current.paused, volume: mediaRef.current.volume };
     }
+    setIsRadioMode(radio);
   };
 
-  const availableQualities = hasQualities 
-    ? Object.keys(file.qualities).filter(q => q !== 'audio') 
-    : [];
+  const restorePlayback = () => {
+    const restore = restoreRef.current;
+    if (!restore || !mediaRef.current) return;
+    mediaRef.current.currentTime = restore.time;
+    mediaRef.current.volume = restore.volume;
+    if (restore.playing) mediaRef.current.play().catch(() => {});
+    restoreRef.current = null;
+  };
+
+  const handleRetry = async () => {
+    try { await retryAudio(file.id, () => {}, onMediaUpdate); }
+    catch (error) { window.alert(error.message || '음원 추출 재시도에 실패했습니다.'); }
+  };
 
   return (
     <div className="media-player">
       <div className="player-header">
         <div className="player-info">
           <span className="player-icon">
-            {isRadioMode ? '📻' : (isVideo ? '🎬' : (isAudio ? '🎵' : (isImage ? '🖼️' : '📄')))}
+            {radioModeActive ? '📻' : (isVideo ? '🎬' : (isAudio ? '🎵' : (isImage ? '🖼️' : '📄')))}
           </span>
           <span className="player-title">{file.name}</span>
         </div>
         
-        {(isVideo || isAudio) && (hasQualities || (file.transcoding_status === 'pending' || file.transcoding_status === 'processing')) && (
-          <div className="settings-wrapper" ref={settingsRef}>
-            {hasQualities ? (
-              <button 
-                className={`settings-toggle ${showSettings ? 'active' : ''}`}
-                onClick={() => setShowSettings(!showSettings)}
-                title="설정"
-              >
-                ⚙️
-              </button>
-            ) : (
-              <div className="transcoding-indicator" title="트랜스코딩 중...">
-                <div className="loading-spinner-small"></div>
-                <span className="transcoding-text">트랜스코딩 중...</span>
-              </div>
-            )}
-            {showSettings && (
-              <div className="settings-menu">
-                {isVideo && (
-                  <div className="settings-section">
-                    <div className="settings-label">재생 모드</div>
-                    <button 
-                      className={`settings-item ${!isRadioMode ? 'selected' : ''}`}
-                      onClick={() => handleSourceChange(() => setIsRadioMode(false))}
-                    >
-                      비디오 모드
-                    </button>
-                    <button 
-                      className={`settings-item ${isRadioMode ? 'selected' : ''}`}
-                      onClick={() => handleSourceChange(() => setIsRadioMode(true))}
-                    >
-                      라디오 모드
-                    </button>
-                  </div>
-                )}
-                
-                {!isRadioMode && availableQualities.length > 1 && (
-                  <div className="settings-section">
-                    <div className="settings-label">화질 선택</div>
-                    {availableQualities.map(q => (
-                      <button 
-                        key={q}
-                        className={`settings-item ${currentQuality === q ? 'selected' : ''}`}
-                        onClick={() => handleSourceChange(() => setCurrentQuality(q))}
-                      >
-                        {q === 'original' ? '원본 화질' : q}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        {isVideo && <div className="media-mode-controls" role="group" aria-label="재생 모드"><button type="button" className={!radioModeActive ? 'selected' : ''} onClick={() => changeMode(false)}>영상</button><button type="button" className={radioModeActive ? 'selected' : ''} onClick={() => changeMode(true)} disabled={!radioReady}>라디오 (데이터 절약)</button></div>}
       </div>
       
       <div className="player-content">
-        {!isRadioMode && isVideo && mediaUrl && (
+        {!radioModeActive && isVideo && mediaUrl && (
           <video 
-            key={`video-${currentQuality}`}
+            key="video"
             ref={mediaRef}
             src={mediaUrl}
             controls
             className="video-player"
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
+            onLoadedMetadata={restorePlayback}
           >
             Your browser does not support the video tag.
           </video>
         )}
         
-        {(isRadioMode || isAudio) && mediaUrl && (
+        {(radioModeActive || isAudio) && mediaUrl && (
           <div className="audio-player-container">
             <div className="audio-visualizer">
               <div className="album-art">
-                {isRadioMode ? '📻' : '🎵'}
+                {radioModeActive ? '📻' : '🎵'}
               </div>
               <div className="audio-info">
-                <div className="audio-mode-badge">{isRadioMode ? 'RADIO MODE' : 'AUDIO'}</div>
+                <div className="audio-mode-badge">{radioModeActive ? 'RADIO MODE' : 'AUDIO'}</div>
                 <div className="audio-filename">{file.name}</div>
               </div>
             </div>
             
             <audio 
-              key={`audio-${isRadioMode}-${currentQuality}`}
+              key={`audio-${radioModeActive}`}
               ref={mediaRef}
               src={mediaUrl}
               controls
               className="audio-element"
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
+              onLoadedMetadata={restorePlayback}
             >
               Your browser does not support the audio tag.
             </audio>
@@ -210,6 +133,9 @@ const MediaPlayer = ({ file }) => {
             </div>
           </div>
         )}
+
+        {isVideo && processing && <p className="media-processing" role="status">{file.transcoding_status === 'processing' ? '음원을 추출 중입니다. 완료되면 라디오 모드를 사용할 수 있습니다.' : '업로드 완료 · 음원 대기 중입니다.'}</p>}
+        {isVideo && file.transcoding_status === 'failed' && <div className="media-processing error" role="alert"><p>음원 추출에 실패했습니다: {file.transcoding_error || '서버 오류'}</p><button type="button" onClick={handleRetry}>음원 추출 재시도</button></div>}
 
         {isImage && mediaUrl && (
           <div className="image-preview">

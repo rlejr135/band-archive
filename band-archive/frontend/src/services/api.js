@@ -47,17 +47,10 @@ export const deleteSong = async (id) => {
 
 // Upload media with progress tracking (presigned URL → R2 직접 업로드)
 export const uploadMedia = async (songId, file, onProgress, rehearsalId) => {
-  const { getPresignedUrl, uploadToStorage, completeMediaUpload } = await import('./uploadApi');
-
-  const contentType = file.type || 'application/octet-stream';
-  const { upload_url, filename } = await getPresignedUrl(file.name, contentType, 'media');
-  await uploadToStorage(upload_url, file, contentType, onProgress);
-  return completeMediaUpload({
-    filename,
-    original_filename: file.name,
-    file_size: file.size,
-    song_id: songId,
-    rehearsal_id: rehearsalId || null,
+  const { uploadMediaFile } = await import('./mediaUploadManager');
+  return uploadMediaFile({
+    file, songId, rehearsalId,
+    onProgress: (loaded, total) => onProgress?.(total ? (loaded / total) * 100 : 0),
   });
 };
 

@@ -1,13 +1,18 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useId } from 'react';
+import useMediaUpload from '../../hooks/useMediaUpload';
 import './FileUpload.css';
 
 const FileUpload = ({ 
-  onUpload, 
+  songId,
+  rehearsalId,
+  onMediaComplete,
   accept = "audio/*,video/*,image/*,.pdf,.mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp",
   multiple = true 
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
+  const { upload, cancel } = useMediaUpload();
+  const inputId = useId();
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
@@ -26,54 +31,36 @@ const FileUpload = ({
     e.stopPropagation();
   }, []);
 
+  const handleFiles = useCallback(async (files) => {
+    for (const file of files) {
+      const uniqueId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+      const fileId = `${file.name}-${file.lastModified}-${uniqueId}`;
+      setUploadProgress(prev => ({ ...prev, [fileId]: { name: file.name, progress: 0, status: 'preparing' } }));
+
+      try {
+        const media = await upload({
+          key: fileId, file, songId, rehearsalId,
+          onProgress: (loaded, total) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } })),
+          onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
+          onMediaUpdate: onMediaComplete,
+        });
+        onMediaComplete?.(media);
+      } catch (error) {
+        if (error.name !== 'AbortError') setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'failed', error: error.message } }));
+      }
+    }
+  }, [onMediaComplete, rehearsalId, songId, upload]);
+
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-
-    const files = Array.from(e.dataTransfer.files);
-    handleFiles(files);
-  }, []);
+    handleFiles(Array.from(e.dataTransfer.files));
+  }, [handleFiles]);
 
   const handleFileInput = (e) => {
-    const files = Array.from(e.target.files);
-    handleFiles(files);
-    // Reset inputs to allow selecting same file again
+    handleFiles(Array.from(e.target.files));
     e.target.value = '';
-  };
-
-  const handleFiles = async (files) => {
-    for (const file of files) {
-      if (file.size > 200 * 1024 * 1024) { // 200MB limit
-        alert(`'${file.name}' 파일의 크기가 200MB를 초과합니다.`);
-        continue;
-      }
-
-      const fileId = `${file.name}-${Date.now()}`;
-      setUploadProgress(prev => ({ ...prev, [fileId]: 0 }));
-
-      try {
-        await onUpload(file, (progress) => {
-          setUploadProgress(prev => ({ ...prev, [fileId]: progress }));
-        });
-        
-        // Remove progress after completion
-        setTimeout(() => {
-          setUploadProgress(prev => {
-            const newProgress = { ...prev };
-            delete newProgress[fileId];
-            return newProgress;
-          });
-        }, 2000);
-      } catch (error) {
-        console.error('Upload failed:', error);
-        setUploadProgress(prev => {
-          const newProgress = { ...prev };
-          delete newProgress[fileId];
-          return newProgress;
-        });
-      }
-    }
   };
 
   const hasActiveUploads = Object.keys(uploadProgress).length > 0;
@@ -86,7 +73,10 @@ const FileUpload = ({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => document.getElementById('hidden-file-input').click()}
+        onClick={() => document.getElementById(inputId).click()}
+        role="button"
+        tabIndex="0"
+        onKeyDown={(e) => e.key === 'Enter' && document.getElementById(inputId).click()}
       >
         <div className="drop-zone-content">
           <div className="upload-icon">📁</div>
@@ -94,14 +84,14 @@ const FileUpload = ({
             파일을 드래그하여 놓거나 클릭하여 선택하세요
           </p>
           <p className="upload-hint">
-            음원, 영상, 이미지, 문서 (최대 200MB)
+            영상 최대 1GiB · 100MiB 이상은 분할 업로드
           </p>
           <p className="upload-hint-ios">
             iOS에서 영상 선택 시 변환에 시간이 걸릴 수 있습니다
           </p>
         </div>
         <input
-          id="hidden-file-input"
+          id={inputId}
           type="file"
           accept={accept}
           multiple={multiple}
@@ -113,18 +103,15 @@ const FileUpload = ({
 
       {hasActiveUploads && (
         <div className="upload-progress-list">
-          {Object.entries(uploadProgress).map(([fileId, progress]) => (
+          {Object.entries(uploadProgress).map(([fileId, item]) => (
             <div key={fileId} className="progress-item">
-              <span className="progress-filename">
-                {fileId.split('-')[0]}
-              </span>
-              <div className="progress-bar">
-                <div 
-                  className="progress-fill" 
-                  style={{ width: `${progress}%` }}
-                />
+              <div className="progress-main">
+                <span className="progress-filename">{item.name}</span>
+                <span className="progress-status">{{ preparing: '준비 중', uploading: '업로드 중', queued: '업로드 완료 · 음원 대기', processing: '음원 추출 중', completed: '음원 추출 완료', failed: '실패' }[item.status]}{item.status === 'uploading' ? ` (${item.progress}%)` : ''}</span>
+                {item.status === 'uploading' && <div className="progress-bar"><div className="progress-fill" style={{ width: `${item.progress}%` }} /></div>}
+                {item.error && <span className="progress-error">{item.error}</span>}
               </div>
-              <span className="progress-percent">{Math.round(progress)}%</span>
+              {['preparing', 'uploading', 'queued', 'processing'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
             </div>
           ))}
         </div>

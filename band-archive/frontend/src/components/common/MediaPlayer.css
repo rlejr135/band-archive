@@ -37,6 +37,14 @@
   text-overflow: ellipsis;
 }
 
+.media-mode-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.media-mode-controls button { min-height: 36px; border: 1px solid var(--border-color); border-radius: 18px; padding: 6px 10px; background: transparent; color: var(--text-primary); cursor: pointer; }
+.media-mode-controls button.selected { background: var(--primary-color); color: #000; border-color: var(--primary-color); }
+.media-mode-controls button:disabled { opacity: .5; cursor: not-allowed; }
+.media-processing { margin: 12px 0 0; font-size: .9rem; color: var(--text-secondary); }
+.media-processing.error { color: var(--accent-color); }
+.media-processing.error button { min-height: 36px; padding: 6px 10px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+
 /* Settings Styles */
 .settings-wrapper {
   position: relative;

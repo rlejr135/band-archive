@@ -8,7 +8,7 @@ import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 
-const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
+const SongDetail = ({ song, onEdit, onBack }) => {
   const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
   const { removeMediaFromSong, renameMediaInSong, editSong, refreshSong } = useSongs();
 
@@ -130,10 +130,6 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
     } finally {
       setMemoSaving(false);
     }
-  };
-
-  const handleUpload = async (file, onProgress) => {
-    await onUploadMedia(song.id, file, onProgress);
   };
 
   const handleLinkRehearsal = async (mediaId, rehearsalId) => {
@@ -299,7 +295,7 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
       <div className="song-media">
         {/* Upload with optional rehearsal link */}
         <div className="upload-with-rehearsal">
-          <FileUpload onUpload={handleUpload} />
+          <FileUpload songId={song.id} onMediaComplete={() => refreshSong(song.id)} />
         </div>
 
         {/* Media List */}
@@ -383,9 +379,11 @@ const SongDetail = ({ song, onEdit, onUploadMedia, onBack }) => {
                         name: getDisplayName(media.filename),
                         url: media.url,
                         type: type,
-                        qualities: media.qualities,
+                        audio_url: media.audio_url,
+                        audio_filename: media.audio_filename,
                         transcoding_status: media.transcoding_status,
-                      }} />
+                        transcoding_error: media.transcoding_error || media.error,
+                      }} onMediaUpdate={() => refreshSong(song.id)} />
                       <CommentSection targetType="media" targetId={media.id} />
                     </div>
                   )}

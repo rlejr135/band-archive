@@ -423,6 +423,9 @@
   flex-shrink: 0;
 }
 
+.rd-queue-status-text { color: var(--text-secondary); font-size: 0.75rem; flex-shrink: 0; }
+.rd-queue-error { color: var(--accent-color); font-size: 0.75rem; word-break: break-word; }
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .rehearsal-detail {

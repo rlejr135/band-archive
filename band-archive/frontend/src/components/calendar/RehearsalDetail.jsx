@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { deleteRehearsal, fetchRehearsalMedia, uploadRehearsalMedia } from '../../services/rehearsalApi';
+import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
+import useMediaUpload from '../../hooks/useMediaUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -10,6 +11,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [uploadingFor, setUploadingFor] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const { upload } = useMediaUpload();
 
   const dateStr = date.toLocaleDateString('ko-KR', {
     year: 'numeric',
@@ -83,13 +85,16 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         ));
 
         try {
-          await uploadRehearsalMedia(rehearsalId, item.songId, item.file, (p) => {
+          await upload({ key: `rehearsal-${rehearsalId}-${i}-${item.file.lastModified}`, file: item.file, songId: item.songId, rehearsalId,
+            onProgress: (loaded, total) => {
             setPendingFiles(prev => prev.map((f, idx) =>
-              idx === i ? { ...f, progress: p } : f
+              idx === i ? { ...f, status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } : f
             ));
+            },
+            onStatus: (status, media) => setPendingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status, error: media?.error } : f)),
           });
           setPendingFiles(prev => prev.map((f, idx) =>
-            idx === i ? { ...f, status: 'done', progress: 100 } : f
+            idx === i ? { ...f, status: 'completed', progress: 100 } : f
           ));
         } catch (err) {
           hasError = true;
@@ -220,8 +225,13 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                               name: m.filename,
                               url: m.url,
                               type: m.file_type,
-                              qualities: m.qualities,
+                              audio_url: m.audio_url,
+                              audio_filename: m.audio_filename,
                               transcoding_status: m.transcoding_status,
+                              transcoding_error: m.transcoding_error || m.error,
+                            }} onMediaUpdate={async () => {
+                              const updated = await fetchRehearsalMedia(r.id);
+                              setMediaMap((prev) => ({ ...prev, [r.id]: updated }));
                             }} />
                             <CommentSection targetType="media" targetId={m.id} />
                           </div>
@@ -263,11 +273,9 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                             {item.status === 'pending' && (
                               <button className="rd-queue-remove" onClick={() => removePendingFile(i)}>✕</button>
                             )}
-                            {item.status === 'uploading' && (
-                              <progress value={item.progress} max="100" className="rd-queue-progress" />
-                            )}
-                            {item.status === 'done' && <span className="rd-queue-status done">✓</span>}
-                            {item.status === 'error' && <span className="rd-queue-status error">✕</span>}
+                            {item.status === 'uploading' && <progress value={item.progress} max="100" className="rd-queue-progress" aria-label={`${item.file.name} 업로드 ${item.progress}%`} />}
+                            <span className="rd-queue-status-text">{{ pending: '준비', uploading: `업로드 ${item.progress}%`, queued: '음원 대기', processing: '음원 추출 중', completed: '완료', failed: '실패' }[item.status]}</span>
+                            {item.error && <span className="rd-queue-error">{item.error}</span>}
                           </div>
                         ))}
                       </div>

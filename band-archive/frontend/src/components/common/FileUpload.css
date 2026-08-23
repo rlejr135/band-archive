@@ -87,6 +87,11 @@
   border-radius: 8px;
 }
 
+.progress-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.progress-status { font-size: 0.8rem; color: var(--text-secondary); }
+.progress-error { font-size: 0.8rem; color: var(--accent-color); word-break: break-word; }
+.upload-cancel { flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); border-radius: 6px; cursor: pointer; }
+
 .progress-item:last-child {
   margin-bottom: 0;
 }
