@@ -1,12 +1,13 @@
 import os
 from datetime import date
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 
 from extensions import db
 from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
 from storage import storage
+from media_processing import create_media, save_media_and_start
 from validators import (
     validate_required_string,
     validate_string_length,
@@ -210,7 +211,7 @@ def upload_rehearsal_media(id):
 
     storage.upload(f'media/{filename}', file, content_type=content_type)
 
-    media = Media(
+    media = create_media(
         song_id=song_id,
         rehearsal_id=id,
         filename=filename,
@@ -218,6 +219,5 @@ def upload_rehearsal_media(id):
         file_type=detect_file_type(filename),
         file_size=file_size,
     )
-    db.session.add(media)
-    db.session.commit()
+    save_media_and_start(current_app._get_current_object(), media)
     return jsonify(media.to_dict()), 201

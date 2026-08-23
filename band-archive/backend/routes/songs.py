@@ -8,6 +8,7 @@ from extensions import db
 from models import Song, Media, Rehearsal
 from errors import ValidationError, NotFoundError
 from storage import storage
+from media_processing import create_media, save_media_and_start, retry_audio_processing
 from validators import (
     validate_status,
     validate_difficulty,
@@ -185,14 +186,14 @@ def upload_sheet_music(id):
 
     storage.upload(f'media/{filename}', file, content_type=content_type)
 
-    media = Media(
+    media = create_media(
         song_id=id,
         filename=filename,
         original_filename=file.filename,
         file_type=detect_file_type(filename),
         file_size=file_size,
     )
-    db.session.add(media)
+    save_media_and_start(current_app._get_current_object(), media)
 
     song.sheet_music = filename
     db.session.commit()
@@ -234,7 +235,7 @@ def add_media(id):
         if not rehearsal:
             raise ValidationError("Rehearsal not found")
 
-    media = Media(
+    media = create_media(
         song_id=id,
         filename=filename,
         original_filename=file.filename,
@@ -242,12 +243,7 @@ def add_media(id):
         file_size=file_size,
         rehearsal_id=rehearsal_id,
     )
-    db.session.add(media)
-    db.session.commit()
-
-    if media.file_type == 'video':
-        from transcoder import transcode_video_async
-        transcode_video_async(current_app._get_current_object(), media.filename)
+    save_media_and_start(current_app._get_current_object(), media)
 
     return jsonify(media.to_dict()), 201
 
@@ -331,26 +327,17 @@ def rename_media(media_id):
     storage.copy(old_key, new_key)
     storage.delete(old_key)
 
-    # If it's a video and has been transcoded, rename the transcoded files too
-    if media.file_type == 'video' and media.transcoding_status == 'completed':
-        old_base = media.filename.rsplit('.', 1)[0]
-        new_base = new_filename.rsplit('.', 1)[0]
-        
-        transcoded_files = [
-            (f'{old_base}_720p.mp4', f'{new_base}_720p.mp4'),
-            (f'{old_base}_480p.mp4', f'{new_base}_480p.mp4'),
-            (f'{old_base}_audio.m4a', f'{new_base}_audio.m4a')
-        ]
-        
-        for old_t_file, new_t_file in transcoded_files:
-            old_t_key = f'media/{old_t_file}'
-            new_t_key = f'media/{new_t_file}'
-            try:
-                if storage.exists(old_t_key):
-                    storage.copy(old_t_key, new_t_key)
-                    storage.delete(old_t_key)
-            except Exception as e:
-                current_app.logger.error(f"Error renaming transcoded file {old_t_key}: {e}")
+    if media.audio_filename:
+        old_audio_key = f'media/{media.audio_filename}'
+        new_audio_filename = f'{new_filename.rsplit(".", 1)[0]}_audio.m4a'
+        new_audio_key = f'media/{new_audio_filename}'
+        try:
+            if storage.exists(old_audio_key):
+                storage.copy(old_audio_key, new_audio_key)
+                storage.delete(old_audio_key)
+                media.audio_filename = new_audio_filename
+        except Exception:
+            current_app.logger.exception('Error renaming audio derivative for media %s', media_id)
 
     media.filename = new_filename
     media.original_filename = new_name
@@ -367,23 +354,47 @@ def delete_media(media_id):
 
     storage.delete(f'media/{media.filename}')
 
-    # Delete transcoded files if any
-    if media.file_type == 'video':
-        base_name = media.filename.rsplit('.', 1)[0]
-        transcoded_files = [
-            f'{base_name}_720p.mp4',
-            f'{base_name}_480p.mp4',
-            f'{base_name}_audio.m4a'
-        ]
-        for t_file in transcoded_files:
-            try:
-                storage.delete(f'media/{t_file}')
-            except Exception as e:
-                current_app.logger.error(f"Error deleting transcoded file {t_file}: {e}")
+    if media.audio_filename:
+        try:
+            storage.delete(f'media/{media.audio_filename}')
+        except Exception:
+            current_app.logger.exception('Error deleting audio derivative for media %s', media_id)
 
     db.session.delete(media)
     db.session.commit()
     return jsonify({"message": "Media deleted"}), 200
+
+
+@songs_bp.route('/media/<int:media_id>/processing', methods=['GET'])
+def get_media_processing(media_id):
+    media = db.session.get(Media, media_id)
+    if not media:
+        raise NotFoundError("Media not found")
+    return jsonify({
+        'id': media.id,
+        'file_type': media.file_type,
+        'status': media.transcoding_status,
+        'audio_filename': media.audio_filename,
+        'audio_url': (storage.generate_url(f'media/{media.audio_filename}')
+                      if media.transcoding_status == 'completed' and media.audio_filename else None),
+        'error': media.processing_error,
+        'started_at': media.processing_started_at.isoformat() if media.processing_started_at else None,
+        'completed_at': media.processing_completed_at.isoformat() if media.processing_completed_at else None,
+    })
+
+
+@songs_bp.route('/media/<int:media_id>/retry-audio', methods=['POST'])
+def retry_media_audio(media_id):
+    media = db.session.get(Media, media_id)
+    if not media:
+        raise NotFoundError("Media not found")
+    try:
+        retry_audio_processing(current_app._get_current_object(), media)
+    except ValueError as exc:
+        raise ValidationError(str(exc))
+    except RuntimeError as exc:
+        raise ValidationError(str(exc), status_code=409)
+    return jsonify({'id': media.id, 'status': media.transcoding_status}), 202
 
 
 @songs_bp.route('/uploads/<filename>')

@@ -47,7 +47,12 @@ class Media(db.Model):
     original_filename = db.Column(db.String(200), nullable=True)
     file_type = db.Column(db.String(20), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
-    transcoding_status = db.Column(db.String(20), default='pending')  # pending, processing, completed, failed
+    # Video: queued -> processing -> completed/failed. Other media: not_required.
+    transcoding_status = db.Column(db.String(20), default='not_required', nullable=False)
+    audio_filename = db.Column(db.String(200), nullable=True)
+    processing_error = db.Column(db.String(500), nullable=True)
+    processing_started_at = db.Column(db.DateTime, nullable=True)
+    processing_completed_at = db.Column(db.DateTime, nullable=True)
     is_featured = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -58,14 +63,13 @@ class Media(db.Model):
 
     def to_dict(self):
         from storage import storage
-        qualities = None
-        if self.file_type == 'video' and self.transcoding_status == 'completed':
-            qualities = {
-                'original': storage.generate_url(f'media/{self.filename}'),
-                '720p': storage.generate_url(f'media/{self.filename.rsplit(".", 1)[0]}_720p.mp4'),
-                '480p': storage.generate_url(f'media/{self.filename.rsplit(".", 1)[0]}_480p.mp4'),
-                'audio': storage.generate_url(f'media/{self.filename.rsplit(".", 1)[0]}_audio.m4a'),
-            }
+        original_url = storage.generate_url(f'media/{self.filename}')
+        audio_url = None
+        if self.file_type == 'video' and self.transcoding_status == 'completed' and self.audio_filename:
+            audio_url = storage.generate_url(f'media/{self.audio_filename}')
+        qualities = {'original': original_url}
+        if audio_url:
+            qualities['audio'] = audio_url
         
         return {
             'id': self.id,
@@ -79,7 +83,12 @@ class Media(db.Model):
             'file_type': self.file_type,
             'file_size': self.file_size,
             'transcoding_status': self.transcoding_status,
-            'url': storage.generate_url(f'media/{self.filename}'),
+            'audio_filename': self.audio_filename,
+            'processing_error': self.processing_error,
+            'processing_started_at': self.processing_started_at.isoformat() if self.processing_started_at else None,
+            'processing_completed_at': self.processing_completed_at.isoformat() if self.processing_completed_at else None,
+            'url': original_url,
+            'audio_url': audio_url,
             'qualities': qualities,
             'is_featured': self.is_featured,
             'comment_count': len(self.comments),

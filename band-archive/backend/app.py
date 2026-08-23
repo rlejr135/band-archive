@@ -33,6 +33,10 @@ def _run_migrations(app):
     db_path = db_uri.replace('sqlite:///', '')
     try:
         conn = sqlite3.connect(db_path)
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'media' not in tables:
+            conn.close()
+            return
         
         # Check media table
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
@@ -71,8 +75,27 @@ def _run_migrations(app):
             conn.execute('ALTER TABLE media ADD COLUMN is_featured BOOLEAN DEFAULT 0')
             app.logger.info('Migration: added is_featured column to media table')
         if 'transcoding_status' not in columns:
-            conn.execute("ALTER TABLE media ADD COLUMN transcoding_status VARCHAR(20) DEFAULT 'pending'")
+            conn.execute("ALTER TABLE media ADD COLUMN transcoding_status VARCHAR(20) DEFAULT 'not_required'")
             app.logger.info('Migration: added transcoding_status column to media table')
+        if 'audio_filename' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN audio_filename VARCHAR(200)')
+            app.logger.info('Migration: added audio_filename column to media table')
+        if 'processing_error' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN processing_error VARCHAR(500)')
+            app.logger.info('Migration: added processing_error column to media table')
+        if 'processing_started_at' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN processing_started_at DATETIME')
+            app.logger.info('Migration: added processing_started_at column to media table')
+        if 'processing_completed_at' not in columns:
+            conn.execute('ALTER TABLE media ADD COLUMN processing_completed_at DATETIME')
+            app.logger.info('Migration: added processing_completed_at column to media table')
+
+        # Legacy rows predate the explicit lifecycle. Never leave non-video rows pending.
+        conn.execute("UPDATE media SET transcoding_status = 'queued' "
+                     "WHERE file_type = 'video' AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
+        conn.execute("UPDATE media SET transcoding_status = 'not_required' "
+                     "WHERE (file_type IS NULL OR file_type != 'video') "
+                     "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
 
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')

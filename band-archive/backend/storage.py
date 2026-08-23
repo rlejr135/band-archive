@@ -15,6 +15,11 @@ class StorageClient:
     def init_app(self, app):
         self._bucket = app.config['S3_BUCKET_NAME']
         self._presign_expires = app.config.get('S3_PRESIGN_EXPIRES', 3600)
+        # Tests replace the public methods with a local fake.  Do not let boto3
+        # discover credentials or contact a metadata service while building the app.
+        if app.testing:
+            self._client = None
+            return
         self._client = boto3.client(
             's3',
             endpoint_url=app.config['S3_ENDPOINT_URL'],

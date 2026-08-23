@@ -1,9 +1,10 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 
 from extensions import db
 from models import Media, Song, GalleryImage
 from errors import ValidationError, NotFoundError
 from storage import storage
+from media_processing import create_media, save_media_and_start
 from validators import (
     allowed_file,
     generate_secure_filename,
@@ -83,7 +84,7 @@ def complete_media():
     if not storage.exists(f'media/{filename}'):
         raise ValidationError("File not found in storage. Upload may have failed.")
 
-    media = Media(
+    media = create_media(
         song_id=song_id,
         rehearsal_id=rehearsal_id,
         filename=filename,
@@ -91,13 +92,7 @@ def complete_media():
         file_type=detect_file_type(filename),
         file_size=file_size,
     )
-    db.session.add(media)
-    db.session.commit()
-
-    if media.file_type == 'video':
-        from flask import current_app
-        from transcoder import transcode_video_async
-        transcode_video_async(current_app._get_current_object(), media.filename)
+    save_media_and_start(current_app._get_current_object(), media)
 
     return jsonify(media.to_dict()), 201
 

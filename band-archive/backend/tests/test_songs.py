@@ -231,7 +231,7 @@ class TestFileUpload:
         assert resp.status_code == 200
         result = resp.get_json()
         assert result['sheet_music'] is not None
-        assert 'sheet.pdf' in result['sheet_music']
+        assert result['sheet_music'].endswith('.pdf')
 
     def test_upload_image(self, client, sample_song):
         song_id = sample_song['id']
@@ -244,7 +244,7 @@ class TestFileUpload:
             content_type='multipart/form-data',
         )
         assert resp.status_code == 200
-        assert 'score.png' in resp.get_json()['sheet_music']
+        assert resp.get_json()['sheet_music'].endswith('.png')
 
     def test_upload_disallowed_extension(self, client, sample_song):
         song_id = sample_song['id']
@@ -292,8 +292,8 @@ class TestFileUpload:
         )
         filename = resp.get_json()['sheet_music']
         resp = client.get(f'/uploads/{filename}')
-        assert resp.status_code == 200
-        assert resp.data == content
+        assert resp.status_code == 302
+        assert resp.headers['Location'].endswith(f'/media/{filename}')
 
 
 # ── Home route test ──

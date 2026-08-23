@@ -9,6 +9,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from extensions import db as _db
 from app import create_app
 from config import TestingConfig
+from storage import storage
+
+
+@pytest.fixture(autouse=True)
+def mock_object_storage(monkeypatch):
+    """Keep every test local; routes must never contact R2."""
+    objects = {}
+
+    def upload(key, file_obj, content_type=None):
+        objects[key] = file_obj.read()
+        file_obj.seek(0)
+
+    def download(key, file_obj):
+        file_obj.write(objects.get(key, b'video-source'))
+
+    monkeypatch.setattr(storage, 'upload', upload)
+    monkeypatch.setattr(storage, 'download', download)
+    monkeypatch.setattr(storage, 'exists', lambda key: True)
+    monkeypatch.setattr(storage, 'delete', lambda key: objects.pop(key, None))
+    monkeypatch.setattr(storage, 'copy', lambda src, dst: objects.__setitem__(dst, objects.get(src, b'')))
+    monkeypatch.setattr(storage, 'generate_url', lambda key, expires_in=None: f'https://storage.test/{key}')
 
 
 @pytest.fixture
