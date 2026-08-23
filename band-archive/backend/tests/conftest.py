@@ -24,12 +24,21 @@ def mock_object_storage(monkeypatch):
     def download(key, file_obj):
         file_obj.write(objects.get(key, b'video-source'))
 
+    def head(key):
+        return {'ContentLength': len(objects.get(key, b''))}
+
     monkeypatch.setattr(storage, 'upload', upload)
     monkeypatch.setattr(storage, 'download', download)
     monkeypatch.setattr(storage, 'exists', lambda key: True)
     monkeypatch.setattr(storage, 'delete', lambda key: objects.pop(key, None))
     monkeypatch.setattr(storage, 'copy', lambda src, dst: objects.__setitem__(dst, objects.get(src, b'')))
     monkeypatch.setattr(storage, 'generate_url', lambda key, expires_in=None: f'https://storage.test/{key}')
+    monkeypatch.setattr(storage, 'head', head)
+    monkeypatch.setattr(storage, 'create_multipart_upload', lambda key, content_type: 'mock-upload-id')
+    monkeypatch.setattr(storage, 'generate_upload_part_url',
+                        lambda key, upload_id, part_number: f'https://storage.test/{upload_id}/{part_number}')
+    monkeypatch.setattr(storage, 'complete_multipart_upload', lambda key, upload_id, parts: {'Key': key})
+    monkeypatch.setattr(storage, 'abort_multipart_upload', lambda key, upload_id: None)
 
 
 @pytest.fixture

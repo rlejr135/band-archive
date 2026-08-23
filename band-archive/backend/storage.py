@@ -62,6 +62,35 @@ class StorageClient:
             ExpiresIn=expires_in,
         )
 
+    def head(self, key):
+        """Return object metadata, including ContentLength, or raise provider errors."""
+        return self._client.head_object(Bucket=self._bucket, Key=key)
+
+    def create_multipart_upload(self, key, content_type):
+        response = self._client.create_multipart_upload(
+            Bucket=self._bucket, Key=key, ContentType=content_type,
+        )
+        return response['UploadId']
+
+    def generate_upload_part_url(self, key, upload_id, part_number, expires_in=3600):
+        return self._client.generate_presigned_url(
+            'upload_part',
+            Params={
+                'Bucket': self._bucket, 'Key': key, 'UploadId': upload_id,
+                'PartNumber': part_number,
+            },
+            ExpiresIn=expires_in,
+        )
+
+    def complete_multipart_upload(self, key, upload_id, parts):
+        return self._client.complete_multipart_upload(
+            Bucket=self._bucket, Key=key, UploadId=upload_id,
+            MultipartUpload={'Parts': parts},
+        )
+
+    def abort_multipart_upload(self, key, upload_id):
+        self._client.abort_multipart_upload(Bucket=self._bucket, Key=key, UploadId=upload_id)
+
     def exists(self, key):
         """오브젝트 존재 여부 확인"""
         try:

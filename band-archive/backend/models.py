@@ -1,5 +1,6 @@
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
@@ -98,6 +99,35 @@ class Media(db.Model):
             'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class MultipartUploadSession(db.Model):
+    """Server-owned authorization boundary for one R2 multipart media upload."""
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    r2_upload_id = db.Column(db.String(200), nullable=False)
+    object_key = db.Column(db.String(300), nullable=False)
+    original_filename = db.Column(db.String(200), nullable=False)
+    content_type = db.Column(db.String(100), nullable=False)
+    declared_bytes = db.Column(db.BigInteger, nullable=False)
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)
+    rehearsal_id = db.Column(db.Integer, db.ForeignKey('rehearsal.id'), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='initiated')
+    media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(hours=24), nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    parts = db.relationship('MultipartUploadPart', backref='session', lazy=True,
+                            cascade='all, delete-orphan', order_by='MultipartUploadPart.part_number')
+
+
+class MultipartUploadPart(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(36), db.ForeignKey('multipart_upload_session.id'), nullable=False)
+    part_number = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (db.UniqueConstraint('session_id', 'part_number', name='uq_multipart_session_part'),)
 
 
 class SongSuggestion(db.Model):
