@@ -52,49 +52,6 @@ export const fetchMemberLogs = async (memberId) => {
   return await response.json();
 };
 
-// Upload personal log
-export const uploadPersonalLog = async (memberId, file, title, onProgress) => {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('title', title);
-
-    const xhr = new XMLHttpRequest();
-
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable && onProgress) {
-        const percentComplete = (e.loaded / e.total) * 100;
-        onProgress(percentComplete);
-      }
-    });
-
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const response = JSON.parse(xhr.responseText);
-          resolve(response);
-        } catch (e) {
-          reject(new Error('Invalid response format'));
-        }
-      } else {
-        let message = `Upload failed: ${xhr.statusText}`;
-        try {
-          const errorData = JSON.parse(xhr.responseText);
-          if (errorData.error) message = errorData.error;
-        } catch (e) { /* 파싱 실패 시 기본 메시지 사용 */ }
-        reject(new Error(message));
-      }
-    });
-
-    xhr.addEventListener('error', () => {
-      reject(new Error('Upload failed'));
-    });
-
-    xhr.open('POST', `${API_URL}/members/${memberId}/logs`);
-    xhr.send(formData);
-  });
-};
-
 // Delete personal log
 export const deletePersonalLog = async (logId) => {
   const response = await fetch(`${API_URL}/personal-logs/${logId}`, {

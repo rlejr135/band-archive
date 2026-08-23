@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
 import './MediaPlayer.css';
 
-const MediaPlayer = ({ file, onMediaUpdate }) => {
+const MediaPlayer = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRadioMode, setIsRadioMode] = useState(false);
   const mediaRef = useRef(null);
@@ -15,8 +15,8 @@ const MediaPlayer = ({ file, onMediaUpdate }) => {
   const watchable = watchMedia.id && file?.type === 'video' && ['queued', 'pending', 'processing'].includes(watchMedia.transcoding_status);
   useEffect(() => {
     if (!watchable) return undefined;
-    return watch(watchMedia, (media) => onMediaUpdateRef.current?.(media));
-  }, [watch, watchMedia, watchable]);
+    return watch(watchMedia, (media) => onMediaUpdateRef.current?.(media), mediaKind);
+  }, [mediaKind, watch, watchMedia, watchable]);
 
   if (!file) return null;
 
@@ -68,7 +68,7 @@ const MediaPlayer = ({ file, onMediaUpdate }) => {
   };
 
   const handleRetry = async () => {
-    try { await retryAudio(file.id, () => {}, onMediaUpdate); }
+    try { await retryAudio(file.id, () => {}, onMediaUpdate, mediaKind); }
     catch (error) { window.alert(error.message || '음원 추출 재시도에 실패했습니다.'); }
   };
 

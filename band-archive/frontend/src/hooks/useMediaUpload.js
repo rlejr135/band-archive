@@ -17,13 +17,13 @@ export default function useMediaUpload() {
   }, []);
   useEffect(() => () => [...activeRef.current.keys()].forEach(cancel), [cancel]);
 
-  const poll = useCallback(async (media, active, onStatus, onMediaUpdate) => {
+  const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media') => {
     let failures = 0;
     while (!active.cancelled && media?.id && processingStates.has(media.transcoding_status)) {
       onStatus(media.transcoding_status === 'processing' ? 'processing' : 'queued', media);
       await wait(Math.min(8000, 1000 * (2 ** failures)));
       try {
-        const next = normalizeMedia(await fetchMediaProcessing(media.id));
+        const next = normalizeMedia(await fetchMediaProcessing(media.id, kind));
         const updated = normalizeMedia({ ...media, ...next });
         failures = 0;
         if (processingChanged(media, updated)) onMediaUpdate?.(updated);
@@ -40,34 +40,35 @@ export default function useMediaUpload() {
     return media;
   }, []);
 
-  const upload = useCallback(async ({ key, file, songId, rehearsalId, onProgress, onStatus, onMediaUpdate }) => {
+  const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, onProgress, onStatus, onMediaUpdate }) => {
     const active = { cancelled: false, xhrs: new Set(), sessionId: null };
     activeRef.current.set(key, active);
     try {
       onStatus('preparing');
-      const media = normalizeMedia(await uploadMediaFile({ file, songId, rehearsalId, onProgress, setSessionId: (id) => { active.sessionId = id; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
+      const kind = memberId !== undefined && memberId !== null ? 'personal_log' : 'media';
+      const media = normalizeMedia(await uploadMediaFile({ file, songId, rehearsalId, memberId, title, onProgress, setSessionId: (id) => { active.sessionId = id; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       onProgress(file.size, file.size); onStatus('queued', media); onMediaUpdate?.(media);
-      return await poll(media, active, onStatus, onMediaUpdate);
+      return await poll(media, active, onStatus, onMediaUpdate, kind);
     } catch (error) {
       if (!active.cancelled) onStatus('failed', { error: error.message });
       throw error;
     } finally { activeRef.current.delete(key); }
   }, [poll]);
 
-  const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate) => {
-    const media = normalizeMedia(await retryMediaAudio(mediaId));
+  const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media') => {
+    const media = normalizeMedia(await retryMediaAudio(mediaId, kind));
     const active = { cancelled: false, xhrs: new Set(), sessionId: null };
     const key = `retry-${mediaId}`; activeRef.current.set(key, active);
-    try { onStatus('queued', media); return await poll(media, active, onStatus, onMediaUpdate); }
+    try { onStatus('queued', media); return await poll(media, active, onStatus, onMediaUpdate, kind); }
     finally { activeRef.current.delete(key); }
   }, [poll]);
 
-  const watch = useCallback((media, onMediaUpdate) => {
+  const watch = useCallback((media, onMediaUpdate, kind = 'media') => {
     const key = `watch-${media.id}`;
     const active = { cancelled: false, xhrs: new Set(), sessionId: null };
     activeRef.current.set(key, active);
-    poll(normalizeMedia(media), active, () => {}, onMediaUpdate).finally(() => {
+    poll(normalizeMedia(media), active, () => {}, onMediaUpdate, kind).finally(() => {
       if (activeRef.current.get(key) === active) activeRef.current.delete(key);
     });
     return () => cancel(key);

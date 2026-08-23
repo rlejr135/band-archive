@@ -5,6 +5,7 @@ import './FileUpload.css';
 const FileUpload = ({ 
   songId,
   rehearsalId,
+  memberId,
   onMediaComplete,
   accept = "audio/*,video/*,image/*,.pdf,.mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp",
   multiple = true 
@@ -39,7 +40,7 @@ const FileUpload = ({
 
       try {
         const media = await upload({
-          key: fileId, file, songId, rehearsalId,
+          key: fileId, file, songId, rehearsalId, memberId,
           onProgress: (loaded, total) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } })),
           onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
           onMediaUpdate: onMediaComplete,
@@ -49,7 +50,7 @@ const FileUpload = ({
         if (error.name !== 'AbortError') setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'failed', error: error.message } }));
       }
     }
-  }, [onMediaComplete, rehearsalId, songId, upload]);
+  }, [memberId, onMediaComplete, rehearsalId, songId, upload]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();

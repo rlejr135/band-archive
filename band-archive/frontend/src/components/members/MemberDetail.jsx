@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getMember, fetchMemberLogs, uploadPersonalLog, deletePersonalLog, deleteMember } from '../../services/memberApi';
+import { getMember, fetchMemberLogs, deletePersonalLog, deleteMember } from '../../services/memberApi';
 import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
@@ -14,7 +14,7 @@ const MemberDetail = () => {
   const { data: member, loading: memberLoading, error: memberError } = useAsyncData(
     () => getMember(id), [id]
   );
-  const { data: logs, setData: setLogs, loading: logsLoading, error: logsError, reload: reloadLogs } = useAsyncData(
+  const { data: logs, setData: setLogs, loading: logsLoading, error: logsError } = useAsyncData(
     () => fetchMemberLogs(id), [id]
   );
 
@@ -23,19 +23,17 @@ const MemberDetail = () => {
   const loading = memberLoading || logsLoading;
   const error = memberError || logsError;
 
-  const handleUpload = async (file, onProgress) => {
-    try {
-      // Fix: Handle filenames with multiple dots correctly (e.g. "My.Song.mp3" -> "My.Song")
-      const lastDotIndex = file.name.lastIndexOf('.');
-      const title = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
-
-      await uploadPersonalLog(id, file, title, onProgress);
-      reloadLogs();
-    } catch (err) {
-      alert('업로드 실패: ' + err.message);
-      throw err; // Re-throw to let FileUpload know it failed
-    }
-  };
+  const handleLogUpdate = useCallback((updated) => {
+    if (!updated?.id) return;
+    setLogs((previous) => {
+      const current = previous || [];
+      const exists = current.some((log) => log.id === updated.id);
+      return exists
+        ? current.map((log) => log.id === updated.id ? { ...log, ...updated } : log)
+        : [updated, ...current];
+    });
+    setPlayingLog((previous) => previous?.id === updated.id ? { ...previous, ...updated } : previous);
+  }, [setLogs]);
 
   const handleDeleteLog = async (logId) => {
     if (!window.confirm('정말 삭제하시겠습니까?')) return;
@@ -78,7 +76,8 @@ const MemberDetail = () => {
       <div className="personal-log-upload">
         <h3>개인 연습 기록 업로드</h3>
         <FileUpload
-          onUpload={handleUpload}
+          memberId={id}
+          onMediaComplete={handleLogUpdate}
           accept="audio/*,video/*,.mp3,.wav,.m4a,.mp4,.mov,.avi"
           multiple={false}
         />
@@ -96,9 +95,14 @@ const MemberDetail = () => {
                 url: playingLog.url,
                 name: playingLog.title,
                 type: playingLog.file_type,
-                qualities: playingLog.qualities,
+                audio_url: playingLog.audio_url,
+                audio_filename: playingLog.audio_filename,
                 transcoding_status: playingLog.transcoding_status,
+                processing_error: playingLog.processing_error,
+                transcoding_error: playingLog.transcoding_error || playingLog.processing_error || playingLog.error,
               }}
+              mediaKind="personal_log"
+              onMediaUpdate={handleLogUpdate}
             />
             <CommentSection targetType="personal-logs" targetId={playingLog.id} />
           </div>
