@@ -1,54 +1,35 @@
-# 인프라 및 운영 아키텍처
+# 인프라 및 운영
 
-## 현재 운영 구성
+## 현재 운영
 
-현재 운영의 기준은 다음과 같다. 이 문서는 코드 설정과 운영자가 확인한 배포 사실을 함께 기록하며, 실제 공개 URL·계정·키 값은 다루지 않는다.
-
-| 영역 | 현재 서비스 | 역할 |
+| 구성요소 | 서비스 | 책임 |
 | --- | --- | --- |
-| 프런트엔드 | Cloudflare | Vite로 빌드한 React 정적 자산 제공 |
-| API·미디어 처리 | Fly.io | Flask/Gunicorn API, FFmpeg 트랜스코딩, R2 접근 권한 발급 |
-| 관계형 데이터 | Fly.io 볼륨의 SQLite | 애플리케이션 메타데이터 보관 |
-| 오브젝트 스토리지 | Cloudflare R2 | 업로드 원본 및 생성된 미디어 객체 보관 |
-| 지도·장소 UI | NAVER Maps | 브라우저용 지도 클라이언트 설정으로 연동 |
-| 장소 검색 | NAVER Search API | 서버 환경변수로 설정하는 검색 연동 |
+| FE | Cloudflare | Vite 정적 파일 |
+| BE | Fly.io | Flask API, Gunicorn, FFmpeg, M4A queue worker |
+| DB | Fly Volume SQLite | 서비스 및 multipart session 메타데이터 |
+| Object storage | Cloudflare R2 | 원본 video와 M4A |
+| 지도/검색 | NAVER | 브라우저 지도 SDK / 서버 Local Search |
 
+Fly는 autostop off, min machine 1이다. 머신이 계속 살아 queue를 진행시키지만 유휴 비용이 발생한다. 프로세스별 worker 하나라는 전제에서 Gunicorn worker 수는 FFmpeg 동시성의 상한에도 영향을 준다.
+
+## 현재 위험과 이전 평가
+
+SQLite 단일 볼륨, API 프로세스와 FFmpeg의 자원 공유, DB/R2 비원자성은 장애 복구의 핵심 위험이다. 백엔드의 Cloudflare 또는 타 고성능 호스팅 이전은 아직 결정되지 않았다. 후보는 장시간 FFmpeg 실행/큐, cold start, R2 지연·비용, 관리형 DB 전환, observability, backup/restore, rollback을 동일 부하로 평가한다. 짧은 API에 적합한 serverless runtime만으로 현재 worker 요구사항을 충족한다고 가정하지 않는다.
+
+## R2 CORS 기준
+
+프로덕션 FE origin만 정확히 넣고 실제 도메인으로 대체한다. multipart와 single PUT, 처리 상태 확인에 필요한 예시는 다음과 같다.
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://<production-frontend-origin>"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "x-amz-*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
 ```
-브라우저
-  ├─ 정적 화면 ───────────────► Cloudflare (FE)
-  ├─ 업무 API ────────────────► Fly.io (Flask API) ─► SQLite 볼륨
-  └─ 파일 전송 ─► Fly.io가 발급한 제한 시간 URL ─► Cloudflare R2
-                                                ▲
-                              Fly.io의 트랜스코딩 작업 ─┘
-```
 
-R2는 S3 호환 endpoint와 버킷·자격증명으로 백엔드에 연결된다. 미디어 바이트는 R2에 두고, 곡·일정·댓글 등 애플리케이션 데이터는 SQLite에 두는 것이 현재 서비스 경계다. 지도 클라이언트 식별자는 Vite 빌드 시 브라우저 번들에 포함되는 공개 설정으로 취급하고, NAVER Search의 서버 자격증명은 API 서버에만 둔다.
-
-## 코드로 확인되는 배포 경계
-
-- 백엔드 `fly.toml`은 일본 리전을 기본 리전으로 두며, `/data`에 1 GiB 볼륨을 마운트하고 HTTPS 서비스를 8080 포트로 공개한다.
-- 백엔드 컨테이너는 Gunicorn과 FFmpeg를 함께 실행한다. 즉, 요청 처리와 트랜스코딩의 CPU·메모리 예산이 같은 머신에 묶여 있다.
-- 프런트엔드 컨테이너 정의는 Vite 산출물을 Nginx가 제공하는 형태다. Cloudflare에 올릴 때에는 이 이미지가 아니라 정적 산출물을 배포할 수도 있으므로, 실제 Cloudflare 배포 방식은 배포 설정에서 일관되게 고정해야 한다.
-- 저장소의 GitHub Actions 워크플로는 GitHub Pages 배포용이다. 현재 Cloudflare 프런트엔드 운영 사실과 다르므로, 현행 Cloudflare 배포 파이프라인의 근거가 아니라 이전 또는 대체 경로로 간주한다.
-
-## 주요 운영 위험
-
-- SQLite와 단일 Fly 볼륨은 단일 장애 지점이며, 다중 인스턴스·다중 리전 확장에 맞지 않는다. 볼륨과 DB 파일의 복구 가능한 백업을 별도로 검증해야 한다.
-- 자동 중지된 머신의 첫 요청 지연과, 같은 프로세스에서 실행되는 트랜스코딩의 장시간 CPU 사용이 사용자 API 지연으로 이어질 수 있다.
-- Fly의 로컬 디스크가 아닌 R2 객체와 SQLite 메타데이터가 분리되어 있으므로, 업로드·트랜스코딩 실패 시 고아 객체와 누락 레코드를 점검·정리하는 절차가 필요하다.
-- Vite 환경변수는 빌드 타임 값이다. 런타임 컨테이너 환경변수만 바꾸어도 이미 빌드된 프런트엔드의 API URL·지도 식별자는 바뀌지 않는다.
-- k3s 매니페스트에는 예시 레지스트리·도메인과 `latest` 이미지 태그가 남아 있고 readiness/liveness probe가 없다. 이 상태로는 재현 가능한 실운영 배포 근거가 부족하다.
-
-## 백엔드 이전 검토
-
-백엔드는 Cloudflare 환경 또는 성능이 더 좋은 호스팅으로 옮기는 것을 검토 중이며, 아직 이전 결정은 아니다. 평가 시 아래 항목을 동일한 부하 시나리오로 비교한다.
-
-| 기준 | 확인 내용 |
-| --- | --- |
-| 실행 적합성 | Flask/Gunicorn, FFmpeg, 장시간 작업, 임시 디스크 및 백그라운드 작업을 안정적으로 지원하는가 |
-| 성능 | 한국 사용자 기준 API 지연, cold start, 트랜스코딩 처리량·대기열 지연 |
-| 데이터 | SQLite를 관리형 DB로 이전할 계획, 백업·복구 목표, R2와의 지연·egress 비용 |
-| 신뢰성 | 헬스체크, 자동 재시작, 관측성, 장애 조치와 롤백 가능성 |
-| 보안·운영 | 비밀 관리, 최소 권한 R2 접근, CORS, 로그 보존, 비용 한도와 알림 |
-
-Cloudflare Workers 계열은 짧은 API 요청에는 적합할 수 있지만, 현재처럼 FFmpeg 기반 트랜스코딩과 지속 실행이 필요한 작업은 별도 워커/큐 또는 컨테이너 실행 환경을 전제로 적합성을 검증한다. 어느 호스팅을 선택하든 API를 무상태화하고, 미디어 작업을 요청 경로에서 분리하며, SQLite 의존성을 먼저 해소하는 순서가 안전하다.
+`ETag`가 없으면 browser는 multipart complete에 필요한 값을 읽을 수 없다. 프리뷰 origin을 허용해야 한다면 별도로 명시하며 wildcard origin으로 대체하지 않는다. Cloudflare 계정의 현재 UI/API에서 multipart upload lifecycle과 abandoned upload 자동 정리 정책을 확인하고 설정한다. 이 문서는 해당 기능의 콘솔/API 명칭을 단정하지 않는다.

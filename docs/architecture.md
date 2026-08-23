@@ -1,106 +1,43 @@
 # 전체 아키텍처
 
-기준일: 2026-08-23
+기준일: 2026-08-23. 이 문서는 구현 커밋 `79785e0`, `d068982`, `405adab`, `623d024`과 당시 운영 관측을 기준으로 한다.
 
-## 시스템 목적
-
-Band Archive는 밴드 활동에 필요한 곡 정보, 합주 일정, 멤버별 연습 기록, 추천곡, 공지, 댓글과 미디어를 한곳에서 관리한다. 브라우저가 대부분의 업무 화면을 제공하고, Flask API가 메타데이터·권한이 필요한 작업·외부 API 연동·R2 업로드 승인을 담당한다.
-
-## 현재 운영 구성
+## 현재 구성
 
 ```text
-사용자 브라우저
-  │
-  ├─ React/Vite 정적 화면 ─────────────► Cloudflare (Frontend)
-  │
-  ├─ REST API ─────────────────────────► Fly.io
-  │                                      ├─ Flask / Gunicorn
-  │                                      ├─ SQLite /data 볼륨
-  │                                      ├─ NAVER Local Search
-  │                                      └─ FFmpeg 트랜스코딩
-  │
-  ├─ NAVER Maps JavaScript SDK ────────► NAVER Maps
-  │
-  └─ Presigned PUT/GET ────────────────► Cloudflare R2
-                                           ├─ 원본 미디어
-                                           ├─ 720p / 480p 영상
-                                           └─ 오디오 전용 파일
+브라우저 ── 정적 React/Vite ──► Cloudflare (FE)
+    │                                  │
+    ├─ REST API ───────────────────────► Fly.io Flask/Gunicorn ─► SQLite (/data)
+    │                                      ├─ 프로세스당 M4A worker 1개
+    │                                      └─ NAVER Local Search
+    ├─ NAVER Maps JS SDK ──────────────► NAVER Maps
+    └─ presigned PUT/GET ──────────────► Cloudflare R2
+                                           ├─ 원본 video
+                                           └─ 추출 M4A
 ```
 
-| 계층 | 현재 책임 | 상세 문서 |
-| --- | --- | --- |
-| 프론트엔드 | 화면, 라우팅, UI 상태, API 호출, R2 직접 업로드, 지도 표시 | [frontend.md](frontend.md) |
-| 백엔드 | REST API, 데이터 모델, R2 presign, 외부 검색, 트랜스코딩 | [backend.md](backend.md) |
-| 관계형 데이터 | Fly.io 볼륨의 SQLite에 서비스 메타데이터 저장 | [infrastructure.md](infrastructure.md) |
-| 오브젝트 데이터 | Cloudflare R2에 원본·파생 미디어 저장 | [infrastructure.md](infrastructure.md) |
-| 배포 | Cloudflare FE, Fly.io BE; k3s는 초안 | [deployment.md](deployment.md) |
+R2에 저장하는 영상 산출물은 **원본 video와 M4A 하나뿐**이다. 720p/480p 파생 영상은 더 이상 생성·보관하지 않는다. SQLite에는 곡·합주·미디어 메타데이터와 처리 상태를, R2에는 미디어 바이트를 둔다.
 
-## 프론트엔드 경계
+## 미디어 처리 경계
 
-`band-archive/frontend`는 React Router 기반 단일 페이지 애플리케이션이다. 곡 화면은 `SongContext`가 전역 상태를 관리하며, 합주·멤버·갤러리 등은 화면별 로컬 상태를 사용한다. 서비스 모듈은 Flask API와 통신하고, 대용량 미디어와 갤러리 파일은 백엔드가 발급한 presigned URL을 사용해 R2로 직접 전송한다.
+영상은 `queued → processing → completed | failed` 상태를 따른다. 영상 이외 미디어는 `not_required`다. 행에는 시작/완료 시각, heartbeat, 시도 횟수, 안전한 오류 메시지를 남긴다. worker는 프로세스마다 하나이며 DB의 조건부 claim으로 여러 프로세스가 같은 작업을 집지 않게 한다. 시작 시 stale heartbeat의 `processing` 행은 `queued`로 되돌린다.
 
-브라우저에 포함되는 `VITE_API_URL`과 `VITE_NAVER_MAP_CLIENT_ID`는 공개 설정이다. R2 자격증명이나 NAVER Search Secret 같은 서버 비밀을 프론트엔드 빌드에 포함하면 안 된다.
+원인은 이전 구현이 HTTP 요청 안에서 background thread를 시작한 데 있다. Fly의 autostop 및 최소 머신 0 구성과 합쳐져 작업이 중단될 수 있었고, 상태와 R2 파일이 불일치했으며 과거 720p/480p migration도 남았다. 현재는 별도 폴링 worker와 DB queue를 쓰지만, FFmpeg는 여전히 API 프로세스와 같은 머신에서 실행한다.
 
-## 백엔드 경계
+## 대용량 업로드 경계
 
-`band-archive/backend`는 Flask 앱 팩토리와 도메인별 Blueprint로 구성된다. SQLAlchemy 모델은 곡, 미디어, 합주, 멤버, 개인 기록, 갤러리, 댓글, 공지와 추천곡을 표현한다.
+영상 최대 크기는 1 GiB다. 100 MiB 이상 영상은 16 MiB part의 R2 multipart를 사용한다. 계약은 `initiate`, `parts`, `complete`, `abort` 네 API이며, 프런트엔드는 최대 3개 part를 병렬 전송하고 각 PUT을 최대 3회 재시도한다. part별 진행률을 합산해 전체 진행률을 표시하며 취소 시 XHR abort와 multipart abort를 시도한다.
 
-백엔드는 다음과 같은 외부 경계를 가진다.
+이전 iPhone의 200 MiB 초과 성공은 `RehearsalDetail` 경로가 Flask의 200 MiB body guard를 거치지 않고 R2 single PUT을 직접 수행했고 파일이 R2 single PUT 한계 안에 있었기 때문이다. 이는 서버 업로드 한도가 R2 직접 업로드 한도가 아님을 뜻한다.
 
-- Cloudflare R2: S3 호환 API로 객체 확인·복사·삭제와 presigned URL 발급
-- NAVER Local Search: 장소명 검색을 서버 자격증명으로 호출
-- Fly.io Volume: SQLite DB 영속 저장
-- FFmpeg: 업로드된 영상을 720p, 480p, 오디오로 변환
+## UI 처리 계약
 
-## 핵심 데이터 흐름
+처리 상태 API의 `status`는 일반 media 응답의 `transcoding_status`로 정규화한다. 새 업로드와 이미 펼쳐진 미디어 모두 `queued`/`processing`을 감시하며, terminal 상태·unmount·연속 네트워크 실패 5회에서 감시를 중단한다. 라디오 모드는 `completed`이고 `audio_url`이 있을 때만 활성화하며, video/audio 전환 때 현재 재생 상태를 보존하려고 시도한다.
 
-### 일반 업무 요청
+## 당시 사전 감사
 
-1. 브라우저가 Fly.io의 Flask API를 호출한다.
-2. Blueprint가 요청을 검증하고 SQLAlchemy 모델을 조회·변경한다.
-3. SQLite에 반영한 결과를 JSON으로 반환한다.
-4. 프론트엔드가 Context 또는 화면 상태를 갱신한다.
+이 문서 작성 전 관측된 상태는 video 55개, `completed` 0개, `pending` 28개, `processing` 23개, `failed` 4개, M4A 0개였다. 200 MiB 초과 영상 44개는 모두 R2 원본 존재와 DB 파일 크기 일치를 확인했다. 이는 당시 관측값이며, 운영 명령을 실행한 결과가 아니다.
 
-### R2 직접 업로드
+## 배포 상태
 
-1. 프론트엔드가 파일 메타데이터로 presign API를 호출한다.
-2. 백엔드가 UUID 기반 객체 키와 제한 시간 PUT URL을 발급한다.
-3. 브라우저가 파일을 Cloudflare R2에 직접 업로드한다.
-4. 프론트엔드가 완료 API를 호출한다.
-5. 백엔드가 R2 객체 존재를 확인하고 DB 레코드를 생성한다.
-
-이 흐름은 대용량 파일이 Fly API를 통과하지 않는 장점이 있지만, presign 발급 전에 사용자 권한·파일 크기·콘텐츠 정책·사용량 한도를 서버가 검증해야 한다.
-
-### 영상 트랜스코딩
-
-1. 영상 미디어 레코드가 생성되면 백엔드 스레드가 작업을 시작한다.
-2. 원본을 R2에서 임시 디렉터리로 내려받는다.
-3. FFmpeg로 720p, 480p, 오디오 전용 파일을 만든다.
-4. 파생 파일을 R2에 업로드하고 DB 상태를 완료 또는 실패로 갱신한다.
-
-현재 방식은 API 머신의 자원을 공유하고 재시작 시 작업을 잃을 수 있다. 향후에는 내구성 있는 큐와 별도 워커로 분리하는 것이 백엔드 이전보다 선행되어야 한다.
-
-### NAVER 지도·장소 검색
-
-- 브라우저는 NAVER Maps JavaScript SDK로 지도, 좌표 선택과 역지오코딩 UI를 제공한다.
-- 장소명 검색은 백엔드 `/api/search-places`를 거쳐 NAVER Local Search API를 호출한다.
-- 합주 레코드는 장소명과 위도·경도를 저장한다.
-
-## 배포 상태의 구분
-
-| 구분 | 상태 |
-| --- | --- |
-| Cloudflare 프론트엔드 | 현재 운영 |
-| Fly.io 백엔드 | 현재 운영 |
-| Cloudflare R2 | 현재 운영 |
-| GitHub Pages 워크플로 | 현재 운영 사실과 불일치하는 과거/대체 경로 |
-| k3s 매니페스트 | 실운영이 아닌 검토 초안 |
-| 백엔드 Cloudflare/타 호스팅 이전 | 결정 전 로드맵 후보 |
-
-## 구조적 우선과제
-
-1. 공통 인증·인가와 변경 권한을 API에서 강제한다.
-2. 비밀값을 Git과 manifest에서 제거하고 노출 가능 키를 회전한다.
-3. 업로드 정책과 트랜스코딩 작업을 API 요청 처리에서 분리한다.
-4. 정식 DB 마이그레이션과 백업·복구 체계를 만든다.
-5. 테스트와 관측성을 갖춘 뒤 백엔드 호스팅 후보를 동일 조건으로 비교한다.
+FE=Cloudflare, BE=Fly.io, object storage=Cloudflare R2가 현재 운영 기준이다. k3s는 예시 레지스트리·도메인과 `latest` 태그를 포함한 초안이다. 백엔드를 Cloudflare 또는 더 성능 좋은 호스팅으로 옮기는 일은 검토 단계이며, 그 전에 SQLite 단일 볼륨·FFmpeg 작업·백업/복구를 함께 평가한다. 상세 실행 절차는 [배포 운영 가이드](deployment.md)에 있다.
