@@ -31,14 +31,6 @@ enum BackgroundUploadError: LocalizedError, Equatable {
     }
 }
 
-struct PickedVideo: Equatable {
-    /// This URL is only an internal, short-lived NSItemProvider handle; callers must durable-copy it before scheduling.
-    let handle: URL
-    let filename: String
-    let contentType: String
-    let declaredBytes: Int64?
-}
-
 struct DurableUploadFile: Codable, Equatable {
     let uploadID: String
     let path: String
@@ -67,54 +59,99 @@ enum BackgroundUploadFiles {
         return canonicalCandidate
     }
 
-    static func copyDurably(_ picked: PickedVideo, uploadID: String = UUID().uuidString, fileManager: FileManager = .default) async throws -> DurableUploadFile {
-        let root = try directory(fileManager: fileManager)
-        guard picked.declaredBytes.map({ $0 <= maximumBytes }) ?? true else { throw BackgroundUploadError.fileTooLarge }
-        let available = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
-        let required = (picked.declaredBytes ?? 0) + freeSpaceHeadroom
+    /// This is intentionally synchronous. NSItemProvider deletes a loadFileRepresentation URL when its
+    /// completion handler returns, so callers must finish this copy before returning from that callback.
+    static func copyDurably(from source: URL, filename: String, contentType: String, declaredBytes: Int64?, uploadID: String = UUID().uuidString, root explicitRoot: URL? = nil, fileManager: FileManager = .default) throws -> DurableUploadFile {
+        let root: URL
+        if let explicitRoot {
+            root = explicitRoot
+        } else {
+            root = try directory(fileManager: fileManager)
+        }
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let canonicalRoot = root.resolvingSymlinksInPath()
+        guard declaredBytes.map({ $0 <= maximumBytes }) ?? true else { throw BackgroundUploadError.fileTooLarge }
+        let available = try canonicalRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
+        let required = (declaredBytes ?? 0) + freeSpaceHeadroom
         guard (available ?? 0) >= required else { throw BackgroundUploadError.insufficientSpace }
+        let destination = canonicalRoot.appendingPathComponent(uploadID, isDirectory: false)
+        let temporary = canonicalRoot.appendingPathComponent("\(uploadID).tmp", isDirectory: false)
+        guard canonicalChild(destination, of: canonicalRoot) != nil, canonicalChild(temporary, of: canonicalRoot) != nil else { throw BackgroundUploadError.unsafePath }
+        defer { try? fileManager.removeItem(at: temporary) }
+        guard fileManager.fileExists(atPath: source.path) else { throw BackgroundUploadError.unavailableFile }
+        let input = try FileHandle(forReadingFrom: source)
+        fileManager.createFile(atPath: temporary.path, contents: nil)
+        let output = try FileHandle(forWritingTo: temporary)
+        defer { try? input.close(); try? output.close() }
+        var total: Int64 = 0
+        var digest = SHA256()
+        while true {
+            let chunk = try input.read(upToCount: 64 * 1_024) ?? Data()
+            if chunk.isEmpty { break }
+            total += Int64(chunk.count)
+            guard total <= maximumBytes else { throw BackgroundUploadError.fileTooLarge }
+            digest.update(data: chunk)
+            try output.write(contentsOf: chunk)
+        }
+        try output.synchronize()
+        guard declaredBytes == nil || declaredBytes == total else { throw BackgroundUploadError.unavailableFile }
+        // Same-directory move is atomic on the app volume; upload IDs make a destination collision invalid.
+        try fileManager.moveItem(at: temporary, to: destination)
+        let fingerprint = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        return DurableUploadFile(uploadID: uploadID, path: destination.path, filename: filename, contentType: contentType, bytes: total, sha256: fingerprint)
+    }
+}
 
-        return try await Task.detached(priority: .userInitiated) {
-            let destination = root.appendingPathComponent(uploadID, isDirectory: false)
-            let temporary = root.appendingPathComponent("\(uploadID).tmp", isDirectory: false)
-            guard canonicalChild(destination, of: root) != nil, canonicalChild(temporary, of: root) != nil else { throw BackgroundUploadError.unsafePath }
-            defer { try? fileManager.removeItem(at: temporary) }
-            let secured = picked.handle.startAccessingSecurityScopedResource()
-            defer { if secured { picked.handle.stopAccessingSecurityScopedResource() } }
-            guard fileManager.fileExists(atPath: picked.handle.path) else { throw BackgroundUploadError.unavailableFile }
-            let input = try FileHandle(forReadingFrom: picked.handle)
-            fileManager.createFile(atPath: temporary.path, contents: nil)
-            let output = try FileHandle(forWritingTo: temporary)
-            defer { try? input.close(); try? output.close() }
-            var total: Int64 = 0
-            var digest = SHA256()
-            while true {
-                let chunk = try input.read(upToCount: 64 * 1_024) ?? Data()
-                if chunk.isEmpty { break }
-                total += Int64(chunk.count)
-                guard total <= maximumBytes else { throw BackgroundUploadError.fileTooLarge }
-                digest.update(data: chunk)
-                try output.write(contentsOf: chunk)
+enum VideoPickerPolicy {
+    static func selectionLimit(multiple: Bool) -> Int { multiple ? 0 : 1 }
+
+    static func mimeType(filename: String, fallback: UTType = .movie) -> String {
+        let extensionType = UTType(filenameExtension: URL(fileURLWithPath: filename).pathExtension)
+        if let mime = extensionType?.preferredMIMEType, mime.hasPrefix("video/") { return mime }
+        if let mime = fallback.preferredMIMEType, mime.hasPrefix("video/") { return mime }
+        return "video/mp4"
+    }
+}
+
+enum VideoPickerLoader {
+    static func loadDurably(_ provider: NSItemProvider) async -> Result<DurableUploadFile, Error> {
+        let type = UTType.movie.identifier
+        guard provider.hasItemConformingToTypeIdentifier(type) else { return .failure(BackgroundUploadError.unavailableFile) }
+        return await withCheckedContinuation { continuation in
+            provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+                if let error { continuation.resume(returning: .failure(error)); return }
+                guard let url else { continuation.resume(returning: .failure(BackgroundUploadError.unavailableFile)); return }
+                do {
+                    let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+                    let declaredBytes = values?.fileSize.map(Int64.init)
+                    let suggested = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let filename = Self.filename(suggested: suggested, source: url)
+                    // The durable copy completes synchronously before this NSItemProvider callback returns.
+                    let durable = try BackgroundUploadFiles.copyDurably(from: url, filename: filename, contentType: VideoPickerPolicy.mimeType(filename: filename), declaredBytes: declaredBytes)
+                    continuation.resume(returning: .success(durable))
+                } catch {
+                    continuation.resume(returning: .failure(error))
+                }
             }
-            try output.synchronize()
-            guard picked.declaredBytes == nil || picked.declaredBytes == total else { throw BackgroundUploadError.unavailableFile }
-            // Same-directory move is atomic on the app volume; upload IDs make a destination collision invalid.
-            try fileManager.moveItem(at: temporary, to: destination)
-            let fingerprint = digest.finalize().map { String(format: "%02x", $0) }.joined()
-            return DurableUploadFile(uploadID: uploadID, path: destination.path, filename: picked.filename, contentType: picked.contentType, bytes: total, sha256: fingerprint)
-        }.value
+        }
+    }
+
+    private static func filename(suggested: String?, source: URL) -> String {
+        let base = (suggested?.isEmpty == false ? suggested! : source.lastPathComponent)
+        guard URL(fileURLWithPath: base).pathExtension.isEmpty, !source.pathExtension.isEmpty else { return base }
+        return "\(base).\(source.pathExtension)"
     }
 }
 
 @MainActor
 final class VideoPicker: NSObject, PHPickerViewControllerDelegate {
-    typealias Completion = ([Result<PickedVideo, Error>]) -> Void
+    typealias Completion = ([Result<DurableUploadFile, Error>]) -> Void
     private var completion: Completion?
 
-    func present(from controller: UIViewController, completion: @escaping Completion) {
+    func present(from controller: UIViewController, multiple: Bool, completion: @escaping Completion) {
         var config = PHPickerConfiguration(photoLibrary: .shared())
         config.filter = .videos
-        config.selectionLimit = 0
+        config.selectionLimit = VideoPickerPolicy.selectionLimit(multiple: multiple)
         config.preferredAssetRepresentationMode = .current
         self.completion = completion
         controller.present(PHPickerViewController(configuration: config), animated: true)
@@ -125,9 +162,9 @@ final class VideoPicker: NSObject, PHPickerViewControllerDelegate {
         let completion = self.completion
         self.completion = nil
         Task {
-            let selections = await withTaskGroup(of: Result<PickedVideo, Error>.self) { group in
-                for result in results { group.addTask { await Self.load(result.itemProvider) } }
-                var values: [Result<PickedVideo, Error>] = []
+            let selections = await withTaskGroup(of: Result<DurableUploadFile, Error>.self) { group in
+                for result in results { group.addTask { await VideoPickerLoader.loadDurably(result.itemProvider) } }
+                var values: [Result<DurableUploadFile, Error>] = []
                 for await value in group { values.append(value) }
                 return values
             }
@@ -135,19 +172,6 @@ final class VideoPicker: NSObject, PHPickerViewControllerDelegate {
         }
     }
 
-    private static func load(_ provider: NSItemProvider) async -> Result<PickedVideo, Error> {
-        let type = UTType.movie.identifier
-        guard provider.hasItemConformingToTypeIdentifier(type) else { return .failure(BackgroundUploadError.unavailableFile) }
-        return await withCheckedContinuation { continuation in
-            provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
-                if let error { continuation.resume(returning: .failure(error)); return }
-                guard let url else { continuation.resume(returning: .failure(BackgroundUploadError.unavailableFile)); return }
-                let values = try? url.resourceValues(forKeys: [.fileSizeKey])
-                let filename = provider.suggestedName ?? url.lastPathComponent
-                continuation.resume(returning: .success(PickedVideo(handle: url, filename: filename, contentType: type, declaredBytes: values?.fileSize.map { Int64($0) })))
-            }
-        }
-    }
 }
 
 protocol UploadCredentialStoring {

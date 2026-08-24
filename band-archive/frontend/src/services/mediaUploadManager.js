@@ -40,7 +40,7 @@ const requestJson = async (url, options = {}) => {
   return response.json();
 };
 
-const isVideo = (file) => file.type.startsWith('video/') || /\.(mp4|mov|webm|avi|mkv)$/i.test(file.name);
+const isVideo = (file = {}) => String(file.type || file.mimeType || '').startsWith('video/') || /\.(mp4|mov|webm|avi|mkv)$/i.test(file.name || '');
 
 export const normalizePositiveInteger = (value, fieldName, { optional = false } = {}) => {
   if (optional && (value === undefined || value === null || value === '')) return null;

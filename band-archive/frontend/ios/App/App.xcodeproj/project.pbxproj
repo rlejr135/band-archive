@@ -16,6 +16,7 @@
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
+		AA400000000000000000000002 /* BridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA400000000000000000000001 /* BridgeViewController.swift */; };
 		AA100000000000000000000002 /* BackgroundUploadFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000000001 /* BackgroundUploadFoundation.swift */; };
 		AA100000000000000000000004 /* BackgroundUploadFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */; };
 		AA100000000000000000000006 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA100000000000000000000005 /* XCTest.framework */; };
@@ -47,6 +48,7 @@
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		AA400000000000000000000001 /* BridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeViewController.swift; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		AA100000000000000000000001 /* BackgroundUploadFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadFoundation.swift; sourceTree = "<group>"; };
 		AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadFoundationTests.swift; sourceTree = "<group>"; };
@@ -101,6 +103,7 @@
 			isa = PBXGroup;
 			children = (
 				AA100000000000000000000016 /* BackgroundUpload */,
+				AA400000000000000000000001 /* BridgeViewController.swift */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -224,6 +227,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA400000000000000000000002 /* BridgeViewController.swift in Sources */,
 				AA300000000000000000000002 /* BackgroundUploadNotifications.swift in Sources */,
 				AA200000000000000000000002 /* IOSMultipartEngine.swift in Sources */,
 				AA200000000000000000000004 /* BackgroundUploadPlugin.swift in Sources */,

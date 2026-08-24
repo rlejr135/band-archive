@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '../services/api';
 import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
-import { mapUploadState } from '../services/uploadTransport';
+import { isNativeDurableVideo, mapUploadState } from '../services/uploadTransport';
 import { claimNativeProcessingRecovery, consumeNativeUpload, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -81,7 +81,7 @@ export default function useMediaUpload() {
       const target = createUploadTarget({ songId, rehearsalId, memberId, title });
       onStatus(mapUploadState('preparing'));
       const transport = getUploadTransport();
-      if (transport.kind === 'native' && file?.uri && file?.id && (file.mimeType || file.type || '').startsWith('video/')) {
+      if (transport.kind === 'native' && isNativeDurableVideo(file)) {
         active.transport = transport; active.nativeId = file.id;
         return await new Promise((resolve, reject) => {
           active.rejectNative = reject;

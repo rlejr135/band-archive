@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
+import { createTransportCache, createWebUploadTransport, isNativeDurableVideo, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
 
 const response = (body = {}, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -51,4 +52,17 @@ test('transport cache keeps identity until explicit invalidation', () => {
   assert.equal(created, 1);
   cache.invalidate();
   assert.equal(cache.get().id, 2);
+});
+
+test('iOS durable video snapshots accept MIME values and the legacy public.movie type', () => {
+  assert.equal(isNativeDurableVideo({ id: 'one', uri: 'file:///one', mimeType: 'video/quicktime', nativeVideo: true }), true);
+  assert.equal(isNativeDurableVideo({ id: 'two', uri: 'file:///two', mimeType: 'public.movie' }), true);
+  assert.equal(isNativeDurableVideo({ id: 'three', uri: 'file:///three', mimeType: 'audio/mpeg' }), false);
+});
+
+test('iOS uses Capacitor 8 bridge-instance registration instead of the removed static API', async () => {
+  const bridge = await readFile(new URL('../../ios/App/App/BridgeViewController.swift', import.meta.url), 'utf8');
+  const appDelegate = await readFile(new URL('../../ios/App/App/AppDelegate.swift', import.meta.url), 'utf8');
+  assert.match(bridge, /bridge\.registerPluginInstance\(BackgroundUploadPlugin\(\)\)/);
+  assert.doesNotMatch(appDelegate, /CAPBridgeViewController\.registerPlugin/);
 });

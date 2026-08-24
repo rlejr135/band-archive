@@ -24,6 +24,25 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertGreaterThan(BackgroundUploadFiles.freeSpaceHeadroom, 0)
     }
 
+    func testSynchronousProviderCopyRemainsAfterTheTemporarySourceIsRemoved() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let temporaryProviderFile = root.appendingPathComponent("provider.mov")
+        try Data([1, 2, 3]).write(to: temporaryProviderFile)
+        let durable = try BackgroundUploadFiles.copyDurably(from: temporaryProviderFile, filename: "provider.mov", contentType: "video/quicktime", declaredBytes: 3, uploadID: "durable", root: root)
+        try FileManager.default.removeItem(at: temporaryProviderFile)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: durable.path))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: durable.path)), Data([1, 2, 3]))
+    }
+
+    func testVideoPickerPolicyUsesVideoMIMEAndHonorsMultipleChoice() {
+        XCTAssertEqual(VideoPickerPolicy.mimeType(filename: "clip.mov"), "video/quicktime")
+        XCTAssertEqual(VideoPickerPolicy.mimeType(filename: "clip.mp4"), "video/mp4")
+        XCTAssertEqual(VideoPickerPolicy.selectionLimit(multiple: true), 0)
+        XCTAssertEqual(VideoPickerPolicy.selectionLimit(multiple: false), 1)
+    }
+
     func testFreshStoreRunsV1MigrationAndStoresAcknowledgedParts() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

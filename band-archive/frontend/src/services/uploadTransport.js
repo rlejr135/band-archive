@@ -10,6 +10,13 @@ export const mapUploadState = (value) => {
   return 'failed';
 };
 
+// Native picker files are durable app-owned files, not browser File objects. iOS used
+// public.movie before MIME normalization, so retain that legacy snapshot compatibility.
+export const isNativeDurableVideo = (file = {}) => {
+  const mime = String(file.mimeType || file.type || '').toLowerCase();
+  return Boolean(file.id && file.uri) && (file.nativeVideo === true || mime.startsWith('video/') || mime === 'public.movie');
+};
+
 export class UploadTransportError extends Error {
   constructor(message, { status, retryable = false } = {}) {
     super(message);

@@ -20,11 +20,10 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func pickFiles(_ call: CAPPluginCall) {
         guard let controller = bridge?.viewController else { call.reject("Picker is unavailable"); return }
-        picker.present(from: controller) { results in
-            Task { var files:[[String:Any]]=[]; var errors:[[String:String]]=[]
-                for result in results { do { let picked=try result.get(); let durable=try await BackgroundUploadFiles.copyDurably(picked); files.append(["id":durable.uploadID,"uri":URL(fileURLWithPath:durable.path).absoluteString,"name":durable.filename,"mimeType":durable.contentType,"size":durable.bytes,"fingerprint":durable.sha256]) } catch { errors.append(["message":error.localizedDescription]) } }
-                call.resolve(["files":files,"errors":errors])
-            }
+        picker.present(from: controller, multiple: call.getBool("multiple", true)) { results in
+            var files:[[String:Any]]=[]; var errors:[[String:String]]=[]
+            for result in results { do { let durable=try result.get(); files.append(["id":durable.uploadID,"uri":URL(fileURLWithPath:durable.path).absoluteString,"name":durable.filename,"mimeType":durable.contentType,"size":durable.bytes,"fingerprint":durable.sha256,"nativeVideo":true]) } catch { errors.append(["message":error.localizedDescription]) } }
+            call.resolve(["files":files,"errors":errors])
         }
     }
 
