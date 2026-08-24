@@ -1,7 +1,7 @@
 package com.deutteun.archive;
 
 import com.getcapacitor.JSObject;
-import android.app.NotificationManager;
+import android.content.Context;
 import java.lang.ref.WeakReference;
 
 public final class UploadEvents {
@@ -16,12 +16,10 @@ public final class UploadEvents {
     if (t.result != null) out.put("result", t.result);
     return out;
   }
-  static void emit(UploadStore.Task task) {
+  static void emit(Context context, UploadStore.Task task) {
+    UploadNotifications.update(context,task);
     BackgroundUploadPlugin active = plugin.get(); if (active == null) return;
     JSObject event = json(task); active.emitNative("state", event);
-    NotificationManager notifications = active.getContext().getSystemService(NotificationManager.class);
-    if ("completed".equals(task.state) || "failed".equals(task.state) || "cancelled".equals(task.state)) notifications.cancel(task.workId);
-    else notifications.notify(task.workId, UploadNotifications.upload(active.getContext(), task.id, task.workId, task.progress));
     if ("uploading".equals(task.state)) active.emitNative("progress", event);
     if ("completed".equals(task.state)) active.emitNative("completed", event);
     if ("failed".equals(task.state)) active.emitNative("failed", event);

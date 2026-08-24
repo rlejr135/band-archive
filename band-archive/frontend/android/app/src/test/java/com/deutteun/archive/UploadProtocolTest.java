@@ -2,6 +2,8 @@ package com.deutteun.archive;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import java.util.HashSet;
 import java.util.Set;
@@ -44,5 +46,25 @@ public class UploadProtocolTest {
     assertFalse(UploadLeasePolicy.canEngineWrite("cancelled",null,"owner-a"));
     assertTrue(UploadLeasePolicy.isNonterminal("processing"));
     assertFalse(UploadLeasePolicy.isNonterminal("cancelled"));
+  }
+  @Test public void registryRejectsDuplicateTaskButAllowsIndependentTasks() {
+    UploadExecutionRegistry.Handle first=UploadExecutionRegistry.register("task-a",101,null);
+    UploadExecutionRegistry.Handle second=UploadExecutionRegistry.register("task-b",102,null);
+    assertNotNull(first); assertNotNull(second);
+    assertNull(UploadExecutionRegistry.register("task-a",103,null));
+    assertTrue(UploadExecutionRegistry.cancel(first));
+    assertTrue(first.isCancelled()); assertFalse(second.isCancelled());
+    assertTrue(first.finishOnce()); assertFalse(first.finishOnce());
+    UploadExecutionRegistry.unregister(first); UploadExecutionRegistry.unregister(second);
+  }
+  @Test public void stopAndNotificationPoliciesAreTaskStateSpecific() {
+    assertTrue(UploadExecutionRegistry.shouldRetryOnStop("uploading"));
+    assertFalse(UploadExecutionRegistry.shouldRetryOnStop("processing"));
+    assertFalse(UploadExecutionRegistry.shouldRetryOnStop("completed"));
+    assertEquals(UploadNotificationPolicy.Mode.PROGRESS,UploadNotificationPolicy.mode("uploading"));
+    assertEquals(UploadNotificationPolicy.Mode.RETRY,UploadNotificationPolicy.mode("retry_wait"));
+    assertEquals(UploadNotificationPolicy.Mode.PROCESSING,UploadNotificationPolicy.mode("processing"));
+    assertEquals(UploadNotificationPolicy.Mode.FAILURE,UploadNotificationPolicy.mode("failed"));
+    assertEquals(UploadNotificationPolicy.Mode.REMOVE,UploadNotificationPolicy.mode("cancelled"));
   }
 }
