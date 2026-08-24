@@ -15,7 +15,7 @@ final class IOSLifecycleNotificationTests: XCTestCase {
     }
 
     func testBackgroundSessionCompletionIsDrainedExactlyOnce() {
-        let engine = IOSMultipartEngine.shared
+        guard let engine = IOSMultipartEngine.shared else { XCTFail("background engine unavailable"); return }
         let completion = expectation(description: "background completion")
         XCTAssertTrue(engine.attachBackgroundEvents(identifier: IOSMultipartEngine.backgroundSessionIdentifier) {
             completion.fulfill()
@@ -30,6 +30,6 @@ final class IOSLifecycleNotificationTests: XCTestCase {
     }
 
     func testUnknownBackgroundSessionIsNotClaimed() {
-        XCTAssertFalse(IOSMultipartEngine.shared.attachBackgroundEvents(identifier: "other.sdk.session") {})
+        XCTAssertFalse(IOSMultipartEngine.shared?.attachBackgroundEvents(identifier: "other.sdk.session") {} ?? false)
     }
 }

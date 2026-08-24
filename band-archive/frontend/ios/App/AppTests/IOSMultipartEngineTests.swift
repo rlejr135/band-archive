@@ -71,7 +71,8 @@ final class IOSMultipartEngineTests: XCTestCase {
         let task = IOSUploadTask(uploadID: upload, workID: 1, createdAt: Date(), file: DurableUploadFile(uploadID: upload, path: source.path, filename: "video.mp4", contentType: "video/mp4", bytes: 1, sha256: "x"), api: "https://example.invalid", targetKind: "song_id", targetID: "1", sessionID: "session", partSize: 1, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
         try store.insert(task, capability: "capability")
         let expected = IOSPartAttempt(uploadID: upload, part: 2, attemptID: attempt, temporaryPath: root.appendingPathComponent("part").path, taskIdentifier: 41)
-        try store.savePartAttempt(expected)
+        XCTAssertTrue(try store.acquire(upload, owner: "engine"))
+        XCTAssertTrue(try store.savePartAttempt(expected, owner: "engine"))
         XCTAssertEqual(try store.partAttempt(uploadID: upload, part: 2, attemptID: attempt), expected)
 
         let coordinator = IOSUploadCoordinator()

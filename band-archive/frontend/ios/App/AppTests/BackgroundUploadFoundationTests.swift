@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import XCTest
 @testable import App
 
@@ -51,7 +52,8 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let file = DurableUploadFile(uploadID: "one", path: root.appendingPathComponent("one").path, filename: "one.mov", contentType: "video/quicktime", bytes: 1, sha256: "hash")
         let task = IOSUploadTask(uploadID: "one", workID: 1, createdAt: Date(), file: file, api: "https://example.invalid", targetKind: "media", targetID: "1", sessionID: nil, partSize: nil, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
         try store.insert(task, capability: "secret")
-        try store.saveAck(uploadID: "one", part: 2, etag: "etag", bytes: 1)
+        XCTAssertTrue(try store.acquire("one", owner: "engine"))
+        XCTAssertTrue(try store.saveAck(uploadID: "one", part: 2, etag: "etag", bytes: 1, owner: "engine"))
         XCTAssertEqual(try store.acknowledgedParts(uploadID: "one"), [2])
         XCTAssertEqual(try credentials.read(uploadID: "one"), "secret")
     }
@@ -61,6 +63,65 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertEqual(try credentials.read(uploadID: "upload"), "token")
         try credentials.delete(uploadID: "upload")
         XCTAssertNil(try credentials.read(uploadID: "upload"))
+    }
+
+    func testOwnerCASDeniesStaleWritesAndAckAfterCancel() throws {
+        let (store, task) = try makeStoreTask()
+        XCTAssertTrue(try store.acquire(task.uploadID, owner: "owner-a"))
+        XCTAssertTrue(try store.cancel(task.uploadID))
+        XCTAssertFalse(try store.renew(task.uploadID, owner: "owner-a"))
+        var stale = task; stale.state = .retryWait; stale.error = "stale"; stale.updatedAt = Date()
+        XCTAssertFalse(try store.updateForOwner(stale, owner: "owner-a"))
+        XCTAssertFalse(try store.savePendingAck(uploadID: task.uploadID, part: 1, etag: "etag", bytes: 1, owner: "owner-a"))
+        XCTAssertEqual(try store.task(task.uploadID)?.state, .cancelled)
+    }
+
+    func testOwnerMismatchTerminalOverwriteAndLeaseExpiryTakeover() throws {
+        let (store, task) = try makeStoreTask()
+        let now = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(try store.acquire(task.uploadID, owner: "owner-a", now: now))
+        var changed = task; changed.state = .uploading; changed.updatedAt = now
+        XCTAssertFalse(try store.updateForOwner(changed, owner: "owner-b", now: now))
+        XCTAssertTrue(try store.acquire(task.uploadID, owner: "owner-b", now: now.addingTimeInterval(121)))
+        changed.state = .completed
+        XCTAssertTrue(try store.updateForOwner(changed, owner: "owner-b", now: now.addingTimeInterval(121)))
+        changed.state = .retryWait
+        XCTAssertFalse(try store.updateForOwner(changed, owner: "owner-b", now: now.addingTimeInterval(122)))
+    }
+
+    func testPersistentWorkIDsArePositiveUniqueAndSurviveReopen() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try IOSUploadStore(root: root, credentials: FakeCredentials())
+        XCTAssertEqual(try first.allocateWorkID(), 1)
+        XCTAssertEqual(try first.allocateWorkID(), 2)
+        let reopened = try IOSUploadStore(root: root, credentials: FakeCredentials())
+        XCTAssertEqual(try reopened.allocateWorkID(), 3)
+    }
+
+    func testV3MigrationSeedsPersistentWorkIDAllocator() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("background_upload.sqlite").path
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        XCTAssertEqual(sqlite3_exec(database, "CREATE TABLE tasks(work_id INTEGER NOT NULL UNIQUE CHECK(work_id>0)); INSERT INTO tasks(work_id) VALUES(41); PRAGMA user_version=3;", nil, nil, nil), SQLITE_OK)
+        let store = try IOSUploadStore(root: root, credentials: FakeCredentials())
+        XCTAssertEqual(try store.allocateWorkID(), 42)
+    }
+
+    private func makeStoreTask() throws -> (IOSUploadStore, IOSUploadTask) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = try IOSUploadStore(root: root, credentials: FakeCredentials())
+        let id = UUID().uuidString; let path = root.appendingPathComponent(id)
+        try Data([1]).write(to: path)
+        let task = IOSUploadTask(uploadID: id, workID: try store.allocateWorkID(), createdAt: Date(), file: DurableUploadFile(uploadID: id, path: path.path, filename: "video.mp4", contentType: "video/mp4", bytes: 1, sha256: "x"), api: "https://example.invalid", targetKind: "member_id", targetID: "1", sessionID: "session", partSize: 1, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
+        try store.insert(task, capability: "secret")
+        return (store, task)
     }
 }
 

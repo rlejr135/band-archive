@@ -31,6 +31,16 @@ enum BackgroundUploadError: LocalizedError, Equatable {
     }
 }
 
+/// Missing capability is terminal for this upload; temporary Keychain access failures are retryable.
+enum UploadCredentialError: Error, Equatable {
+    case lost
+    case unavailable
+}
+
+enum UploadEngineError: Error {
+    case ownershipLost
+}
+
 struct DurableUploadFile: Codable, Equatable {
     let uploadID: String
     let path: String
@@ -249,33 +259,46 @@ final class IOSUploadStore {
     }
     func task(_ id: String) throws -> IOSUploadTask? { try tasks(where: "upload_id=?", values: [id]).first }
     func retainedTasks() throws -> [IOSUploadTask] { try tasks(where: "1=1", values: []) }
-    func updateLocal(_ task: IOSUploadTask) throws { try execute("UPDATE tasks SET session_id=?,part_size=?,state=?,progress=?,error=?,result=?,lease_owner=?,lease_expires_at=?,updated_at=? WHERE upload_id=?", values: [task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, task.leaseOwner, task.leaseExpiresAt.map(stamp), stamp(task.updatedAt), task.uploadID]) }
+    func allocateWorkID() throws -> Int64 {
+        try transaction {
+            guard let text = try query("SELECT next_work_id FROM work_id_allocator WHERE singleton=1", []).first?.first,
+                  let next = Int64(text), next > 0, next < Int64.max else { throw BackgroundUploadError.database("work_id") }
+            guard try update("UPDATE work_id_allocator SET next_work_id=? WHERE singleton=1 AND next_work_id=?", [next + 1, next]) else { throw BackgroundUploadError.database("work_id") }
+            return next
+        }
+    }
     func acquire(_ id: String, owner: String, now: Date = Date()) throws -> Bool { try update("UPDATE tasks SET lease_owner=?,lease_expires_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled') AND (lease_owner IS NULL OR lease_expires_at<? OR lease_owner=?)", [owner, stamp(now.addingTimeInterval(120)), id, stamp(now), owner]) }
+    func renew(_ id: String, owner: String, now: Date = Date()) throws -> Bool { try update("UPDATE tasks SET lease_expires_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [stamp(now.addingTimeInterval(120)), id, owner, stamp(now)]) }
+    func release(_ id: String, owner: String) throws -> Bool { try update("UPDATE tasks SET lease_owner=NULL,lease_expires_at=NULL WHERE upload_id=? AND lease_owner=?", [id, owner]) }
     /// Engine writes are compare-and-set: a cancelled/terminal row or different lease owner cannot be overwritten.
     func updateForOwner(_ task: IOSUploadTask, owner: String, now: Date = Date()) throws -> Bool {
-        guard !task.state.isTerminal else { return false }
-        return try update("UPDATE tasks SET session_id=?,part_size=?,state=?,progress=?,error=?,result=?,lease_expires_at=?,updated_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, stamp(now.addingTimeInterval(120)), stamp(now), task.uploadID, owner, stamp(now)])
+        try transaction { try update("UPDATE tasks SET session_id=?,part_size=?,state=?,progress=?,error=?,result=?,lease_expires_at=?,updated_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, stamp(now.addingTimeInterval(120)), stamp(now), task.uploadID, owner, stamp(now)]) }
     }
     func cancel(_ id: String) throws -> Bool { try transaction { try update("UPDATE tasks SET state='cancelled',lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled')", [stamp(Date()), id]) } }
+    /// Media processing is no longer owned by the upload engine; UI polling may only consume its nonterminal processing row once.
+    func syncProcessing(_ id: String, state: BackgroundUploadState, result: String?, error: String?, now: Date = Date()) throws -> Bool {
+        guard state == .completed || state == .failed else { return false }
+        return try update("UPDATE tasks SET state=?,result=COALESCE(?,result),error=COALESCE(?,error),lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state='processing'", [state.rawValue, result, error, stamp(now), id])
+    }
     func acknowledge(_ id: String) throws -> Bool { try transaction { let changed = try update("DELETE FROM tasks WHERE upload_id=? AND state IN ('completed','failed','cancelled')", [id]); if changed { try credentials.delete(uploadID: id) }; return changed } }
-    func saveAck(uploadID: String, part: Int, etag: String, bytes: Int64) throws { try execute("INSERT OR REPLACE INTO part_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) }
-    func savePendingAck(uploadID: String, part: Int, etag: String, bytes: Int64) throws { try execute("INSERT OR REPLACE INTO pending_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) }
+    func saveAck(uploadID: String, part: Int, etag: String, bytes: Int64, owner: String, now: Date = Date()) throws -> Bool { try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("INSERT OR REPLACE INTO part_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) } }
+    func savePendingAck(uploadID: String, part: Int, etag: String, bytes: Int64, owner: String, now: Date = Date()) throws -> Bool { try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("INSERT OR REPLACE INTO pending_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) } }
     func pendingAcks(uploadID: String) throws -> [(Int, String, Int64)] { try query("SELECT part_number,etag,bytes FROM pending_acks WHERE upload_id=? ORDER BY part_number", [uploadID]).compactMap { row in guard let part=Int(row[0] ?? ""), let etag=row[1], let bytes=Int64(row[2] ?? "") else{return nil}; return (part,etag,bytes) } }
-    func clearPendingAck(uploadID: String, part: Int) throws { try execute("DELETE FROM pending_acks WHERE upload_id=? AND part_number=?", values: [uploadID, part]) }
+    func clearPendingAck(uploadID: String, part: Int, owner: String, now: Date = Date()) throws -> Bool { try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("DELETE FROM pending_acks WHERE upload_id=? AND part_number=?", values: [uploadID, part]) } }
     func acknowledgedParts(uploadID: String) throws -> Set<Int> {
         let values = try query("SELECT part_number FROM part_acks WHERE upload_id=?", [uploadID]).compactMap { Int($0[0] ?? "") }
         return Set(values)
     }
-    func savePartAttempt(_ attempt: IOSPartAttempt) throws {
-        try execute("INSERT OR REPLACE INTO part_attempts(upload_id,part_number,attempt_id,temp_path,task_identifier,created_at) VALUES(?,?,?,?,?,?)", values: [attempt.uploadID, attempt.part, attempt.attemptID, attempt.temporaryPath, attempt.taskIdentifier, stamp(Date())])
+    func savePartAttempt(_ attempt: IOSPartAttempt, owner: String, now: Date = Date()) throws -> Bool {
+        try ownerTransaction(uploadID: attempt.uploadID, owner: owner, now: now) { try execute("INSERT OR REPLACE INTO part_attempts(upload_id,part_number,attempt_id,temp_path,task_identifier,created_at) VALUES(?,?,?,?,?,?)", values: [attempt.uploadID, attempt.part, attempt.attemptID, attempt.temporaryPath, attempt.taskIdentifier, stamp(Date())]) }
     }
     func partAttempt(uploadID: String, part: Int, attemptID: String) throws -> IOSPartAttempt? {
         guard let row = try query("SELECT upload_id,part_number,attempt_id,temp_path,task_identifier FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", [uploadID, part, attemptID]).first,
               let storedID = row[0], let storedPart = Int(row[1] ?? ""), let storedAttempt = row[2], let path = row[3] else { return nil }
         return IOSPartAttempt(uploadID: storedID, part: storedPart, attemptID: storedAttempt, temporaryPath: path, taskIdentifier: Int(row[4] ?? ""))
     }
-    func removePartAttempt(uploadID: String, part: Int, attemptID: String) throws {
-        try execute("DELETE FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", values: [uploadID, part, attemptID])
+    func removePartAttempt(uploadID: String, part: Int, attemptID: String, owner: String, now: Date = Date()) throws -> Bool {
+        try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("DELETE FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", values: [uploadID, part, attemptID]) }
     }
     func garbageCollect(now: Date = Date(), fileManager: FileManager = .default) throws {
         let stale = stamp(now.addingTimeInterval(-Self.retention)); let rows = try query("SELECT upload_id,path FROM tasks WHERE state IN ('completed','failed','cancelled') AND updated_at<=? AND (lease_expires_at IS NULL OR lease_expires_at<?)", [stale, stamp(now)])
@@ -287,6 +310,7 @@ final class IOSUploadStore {
         if version < 1 { try transaction { try execute("CREATE TABLE IF NOT EXISTS tasks(upload_id TEXT PRIMARY KEY,work_id INTEGER NOT NULL UNIQUE CHECK(work_id>0),created_at REAL NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,bytes INTEGER NOT NULL,type TEXT NOT NULL,hash TEXT NOT NULL,api TEXT NOT NULL,target_kind TEXT NOT NULL,target_id TEXT NOT NULL,session_id TEXT,part_size INTEGER,state TEXT NOT NULL,progress INTEGER NOT NULL,error TEXT,result TEXT,lease_owner TEXT,lease_expires_at REAL,updated_at REAL NOT NULL)"); try execute("CREATE TABLE IF NOT EXISTS part_acks(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,etag TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(upload_id,part_number))"); try execute("PRAGMA user_version=1") } }
         if version < 2 { try transaction { try execute("CREATE TABLE IF NOT EXISTS pending_acks(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,etag TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(upload_id,part_number))"); try execute("PRAGMA user_version=2") } }
         if version < 3 { try transaction { try execute("CREATE TABLE IF NOT EXISTS part_attempts(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,attempt_id TEXT NOT NULL,temp_path TEXT NOT NULL,task_identifier INTEGER,created_at REAL NOT NULL,PRIMARY KEY(upload_id,part_number,attempt_id))"); try execute("PRAGMA user_version=3") } }
+        if version < 4 { try transaction { try execute("CREATE TABLE IF NOT EXISTS work_id_allocator(singleton INTEGER PRIMARY KEY CHECK(singleton=1),next_work_id INTEGER NOT NULL CHECK(next_work_id>0))"); try execute("INSERT OR IGNORE INTO work_id_allocator(singleton,next_work_id) SELECT 1,COALESCE(MAX(work_id),0)+1 FROM tasks"); try execute("PRAGMA user_version=4") } }
     }
     private func tasks(where clause: String, values: [Any?]) throws -> [IOSUploadTask] {
         try query("SELECT upload_id,work_id,created_at,path,name,bytes,type,hash,api,target_kind,target_id,session_id,part_size,state,progress,error,result,lease_owner,lease_expires_at,updated_at FROM tasks WHERE \(clause) ORDER BY created_at", values).compactMap { row in
@@ -295,6 +319,13 @@ final class IOSUploadStore {
         }
     }
     private func transaction<T>(_ block: () throws -> T) throws -> T { try execute("BEGIN IMMEDIATE"); do { let result=try block(); try execute("COMMIT"); return result } catch { try? execute("ROLLBACK"); throw error } }
+    private func ownerTransaction(uploadID: String, owner: String, now: Date, _ write: () throws -> Void) throws -> Bool {
+        try transaction {
+            guard try ownsLease(uploadID: uploadID, owner: owner, now: now) else { return false }
+            try write(); return true
+        }
+    }
+    private func ownsLease(uploadID: String, owner: String, now: Date) throws -> Bool { !(try query("SELECT 1 FROM tasks WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [uploadID, owner, stamp(now)])).isEmpty }
     private func execute(_ sql: String, values: [Any?] = []) throws { guard let db else { throw BackgroundUploadError.database("closed") }; var statement: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw BackgroundUploadError.database("prepare") }; defer { sqlite3_finalize(statement) }; try bind(values, to: statement); guard sqlite3_step(statement) == SQLITE_DONE else { throw BackgroundUploadError.database("step") } }
     private func update(_ sql: String, _ values: [Any?]) throws -> Bool { guard let db else { throw BackgroundUploadError.database("closed") }; var statement: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw BackgroundUploadError.database("prepare") }; defer { sqlite3_finalize(statement) }; try bind(values, to: statement); guard sqlite3_step(statement) == SQLITE_DONE else { throw BackgroundUploadError.database("step") }; return sqlite3_changes(db)>0 }
     private func query(_ sql: String, _ values: [Any?]) throws -> [[String?]] { guard let db else { throw BackgroundUploadError.database("closed") }; var statement: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw BackgroundUploadError.database("prepare") }; defer { sqlite3_finalize(statement) }; try bind(values, to: statement); var rows:[[String?]]=[]; while sqlite3_step(statement)==SQLITE_ROW { rows.append((0..<sqlite3_column_count(statement)).map { sqlite3_column_text(statement,$0).map { String(cString:$0) } }) }; return rows }

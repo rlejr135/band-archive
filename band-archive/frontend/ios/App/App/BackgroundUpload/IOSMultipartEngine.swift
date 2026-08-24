@@ -122,12 +122,53 @@ final class IOSUploadCoordinator {
         lock.lock(); defer { lock.unlock() }
         return active.keys.filter { $0.uploadID == uploadID }.count
     }
+    func releaseAll(uploadID: String) -> [ActivePart] {
+        lock.lock(); defer { lock.unlock() }
+        let matching = active.values.filter { $0.descriptor.uploadID == uploadID }
+        for entry in matching {
+            active.removeValue(forKey: entry.descriptor)
+            if let taskIdentifier = entry.taskIdentifier { byTaskIdentifier.removeValue(forKey: taskIdentifier); etags.removeValue(forKey: taskIdentifier) }
+        }
+        return matching
+    }
+}
+
+private final class LeaseHeartbeat {
+    private let store: IOSUploadStore
+    private let uploadID: String
+    private let owner: String
+    private let onLost: () -> Void
+    private let lock = NSLock()
+    private var lost = false
+    private var stopped = false
+    private var task: Task<Void, Never>?
+
+    init(store: IOSUploadStore, uploadID: String, owner: String, onLost: @escaping () -> Void) {
+        self.store = store; self.uploadID = uploadID; self.owner = owner; self.onLost = onLost
+    }
+    func start() {
+        task = Task { [weak self] in
+            while let self, !self.isStopped {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !self.isStopped else { return }
+                guard (try? self.store.renew(self.uploadID, owner: self.owner)) == true else { self.markLost(); return }
+            }
+        }
+    }
+    func isValid() -> Bool { lock.lock(); defer { lock.unlock() }; return !lost && !stopped }
+    func stop() { lock.lock(); stopped = true; lock.unlock(); task?.cancel() }
+    private var isStopped: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+    private func markLost() {
+        lock.lock(); guard !lost else { lock.unlock(); return }; lost = true; lock.unlock()
+        onLost()
+    }
 }
 
 /// Shared background-session multipart executor. It stores no credentials or presigned URLs in SQLite/task descriptions.
 final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate {
     static let backgroundSessionIdentifier = "com.deutteun.archive.background-upload.v1"
-    static let shared = IOSMultipartEngine()
+    /// Database initialization can fail (for example, protected storage while the device is locked); callers keep web/UI alive when it is unavailable.
+    static let shared: IOSMultipartEngine? = try? IOSMultipartEngine(store: IOSUploadStore(), credentials: KeychainUploadCredentialStore(), client: URLSessionMultipartHTTPClient())
     private let owner = UUID().uuidString
     private let store: IOSUploadStore
     private let credentials: UploadCredentialStoring
@@ -139,7 +180,6 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     private let lifecycleLock = NSLock()
     private var backgroundCompletions: [() -> Void] = []
 
-    override convenience init() { try! self.init(store: IOSUploadStore(), credentials: KeychainUploadCredentialStore(), client: URLSessionMultipartHTTPClient()) }
     init(store: IOSUploadStore, credentials: UploadCredentialStoring, client: MultipartHTTPClient) throws {
         self.store = store; self.credentials = credentials; self.client = client
         super.init()
@@ -149,6 +189,8 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         recoverBackgroundTasks {}
     }
+
+    func allocateWorkID() throws -> Int64 { try store.allocateWorkID() }
 
     func enqueue(_ task: IOSUploadTask) async throws {
         var payload: [String: Any] = ["filename": task.file.filename, "content_type": task.file.contentType, "declared_bytes": task.file.bytes]
@@ -187,32 +229,67 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     }
 
     private func reconcile(_ id: String) async {
-        guard var task = try? store.task(id), !task.state.isTerminal, try! store.acquire(id, owner: owner) else { return }
+        guard let loaded = try? store.task(id), var task = loaded, !task.state.isTerminal else { return }
+        guard (try? store.acquire(id, owner: owner)) == true else { return }
+        let lease = LeaseHeartbeat(store: store, uploadID: id, owner: owner) { [weak self] in self?.stopActive(id) }
+        lease.start()
+        defer { lease.stop(); _ = try? store.release(id, owner: owner) }
         guard let sessionID = task.sessionID else { return }
-        guard let capability = try? credentials.read(uploadID: id), let capability else { task.state = .failed; task.error = "credential_lost"; task.updatedAt = Date(); try? store.updateLocal(task); publish(task); return }
+        let capability: String
+        do { capability = try readCapability(uploadID: id) }
+        catch UploadCredentialError.lost {
+            task.state = .failed; task.error = "credential_lost"; task.updatedAt = Date()
+            if (try? store.updateForOwner(task, owner: owner)) == true { publish(task) } else { stopActive(id) }
+            return
+        } catch {
+            task.state = .retryWait; task.error = "credential_unavailable"; task.updatedAt = Date()
+            if (try? store.updateForOwner(task, owner: owner)) == true { publish(task) } else { stopActive(id) }
+            return
+        }
         do {
-            for (part, etag, bytes) in try store.pendingAcks(uploadID: id) { _ = try await request(task.api + "/uploads/multipart/\(sessionID)/parts/\(part)/ack", method: "POST", body: ["etag": etag, "bytes": bytes], capability: capability); try store.saveAck(uploadID: id, part: part, etag: etag, bytes: bytes); try store.clearPendingAck(uploadID: id, part: part) }
+            for (part, etag, bytes) in try store.pendingAcks(uploadID: id) {
+                guard lease.isValid else { return }
+                _ = try await request(task.api + "/uploads/multipart/\(sessionID)/parts/\(part)/ack", method: "POST", body: ["etag": etag, "bytes": bytes], capability: capability)
+                guard (try store.saveAck(uploadID: id, part: part, etag: etag, bytes: bytes, owner: owner)) else { stopActive(id); return }
+                guard (try store.clearPendingAck(uploadID: id, part: part, owner: owner)) else { stopActive(id); return }
+            }
+            guard lease.isValid else { return }
             let remote = try await request(task.api + "/uploads/multipart/\(sessionID)", method: "GET", body: nil, capability: capability)
             let remoteState = remote["status"] as? String ?? ""
-            if remoteState == "completed" { try finish(&task, response: remote); return }
-            if ["expired", "aborted", "failed"].contains(remoteState) { task.state = .failed; task.error = "session_\(remoteState)"; task.updatedAt = Date(); try store.updateLocal(task); publish(task); return }
+            if remoteState == "completed" { _ = try finish(&task, response: remote, owner: owner); return }
+            if ["expired", "aborted", "failed"].contains(remoteState) {
+                task.state = .failed; task.error = "session_\(remoteState)"; task.updatedAt = Date()
+                if (try store.updateForOwner(task, owner: owner)) { publish(task) } else { stopActive(id) }
+                return
+            }
             let partSize = (remote["part_size"] as? NSNumber)?.int64Value ?? task.partSize ?? 0
             guard partSize > 0 else { throw URLError(.cannotParseResponse) }
             let remoteAcked = Set(((remote["parts"] as? [[String: Any]]) ?? []).compactMap { ($0["status"] as? String) == "acknowledged" ? ($0["part_number"] as? NSNumber)?.intValue : nil })
             let localAcked = try store.acknowledgedParts(uploadID: id)
             let count = Int((task.file.bytes + partSize - 1) / partSize)
             let missing = MultipartPartPlanner.missingParts(total: count, remoteAcknowledged: remoteAcked, localAcknowledged: localAcked)
-            if missing.isEmpty && (try store.pendingAcks(uploadID: id)).isEmpty && !coordinator.hasActive(uploadID: id) { task.state = .completing; task.updatedAt = Date(); try store.updateLocal(task); let result = try await request(task.api + "/uploads/multipart/\(sessionID)/complete", method: "POST", body: [:], capability: capability); try finish(&task, response: result); return }
+            if missing.isEmpty && (try store.pendingAcks(uploadID: id)).isEmpty && !coordinator.hasActive(uploadID: id) {
+                task.state = .completing; task.updatedAt = Date()
+                guard try store.updateForOwner(task, owner: owner) else { stopActive(id); return }
+                guard lease.isValid else { return }
+                let result = try await request(task.api + "/uploads/multipart/\(sessionID)/complete", method: "POST", body: [:], capability: capability)
+                _ = try finish(&task, response: result, owner: owner); return
+            }
             for part in missing {
                 guard coordinator.activeCount(uploadID: id) < 2 else { break }
-                try await schedulePart(task, part: part, partSize: partSize, capability: capability)
+                guard lease.isValid else { return }
+                try await schedulePart(task, part: part, partSize: partSize, capability: capability, owner: owner)
             }
+        } catch UploadEngineError.ownershipLost {
+            stopActive(id)
         } catch {
-            task.state = .retryWait; task.error = "network_retry"; task.updatedAt = Date(); try? store.updateForOwner(task, owner: owner); publish(task)
+            guard lease.isValid else { return }
+            task.state = .retryWait; task.error = "network_retry"; task.updatedAt = Date()
+            if (try? store.updateForOwner(task, owner: owner)) == true { publish(task) } else { stopActive(id) }
         }
     }
 
-    private func schedulePart(_ task: IOSUploadTask, part: Int, partSize: Int64, capability: String) async throws {
+    private func schedulePart(_ task: IOSUploadTask, part: Int, partSize: Int64, capability: String, owner: String) async throws {
         guard let sessionID = task.sessionID, !coordinator.hasActive(uploadID: task.uploadID, part: part) else { return }
         let descriptor = MultipartPartDescriptor(uploadID: task.uploadID, part: part, attemptID: UUID().uuidString)
         guard MultipartPartDescriptor.parse(descriptor.encoded) != nil else { throw BackgroundUploadError.unavailableFile }
@@ -227,13 +304,13 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
             var request = URLRequest(url: url); request.httpMethod = "PUT"; request.setValue(task.file.contentType, forHTTPHeaderField: "Content-Type")
             let upload = session.uploadTask(with: request, fromFile: partFile)
             upload.taskDescription = descriptor.encoded
-            try store.savePartAttempt(IOSPartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID, temporaryPath: partFile.path, taskIdentifier: upload.taskIdentifier))
+            guard try store.savePartAttempt(IOSPartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID, temporaryPath: partFile.path, taskIdentifier: upload.taskIdentifier), owner: owner) else { throw UploadEngineError.ownershipLost }
             guard coordinator.attach(descriptor, taskIdentifier: upload.taskIdentifier) else { throw BackgroundUploadError.database("active_part") }
             upload.resume()
         } catch {
             let entry = coordinator.release(descriptor)
             if let entry { try? FileManager.default.removeItem(at: entry.temporaryURL) }
-            try? store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID)
+            _ = try? store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID, owner: owner)
             throw error
         }
     }
@@ -272,8 +349,6 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
                       let safe = self.safeRegularPartFile(attempt.temporaryPath),
                       self.coordinator.recover(attempt, descriptor: descriptor, taskIdentifier: task.taskIdentifier, temporaryURL: safe) else {
                     task.cancel()
-                    // Never delete a mapping used by the task that won this part's recovery race.
-                    if !self.coordinator.hasActive(uploadID: descriptor.uploadID, part: descriptor.part) { try? self.store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID) }
                     continue
                 }
             }
@@ -291,10 +366,13 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let descriptor = MultipartPartDescriptor.parse(task.taskDescription), let finished = coordinator.finish(taskIdentifier: task.taskIdentifier, descriptor: descriptor) else { return }
-        defer { try? FileManager.default.removeItem(at: finished.0.temporaryURL); try? store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID) }
+        defer { try? FileManager.default.removeItem(at: finished.0.temporaryURL) }
         guard error == nil, let response = task.response as? HTTPURLResponse, (200..<300).contains(response.statusCode), let etag = finished.1 ?? response.value(forHTTPHeaderField: "ETag")?.trimmingCharacters(in: CharacterSet(charactersIn: "\"")), let upload = try? store.task(descriptor.uploadID) else { pump(descriptor.uploadID); return }
         let size = min(upload.partSize ?? upload.file.bytes, upload.file.bytes - Int64(descriptor.part - 1) * (upload.partSize ?? upload.file.bytes))
-        try? store.savePendingAck(uploadID: descriptor.uploadID, part: descriptor.part, etag: etag, bytes: size)
+        guard (try? store.acquire(descriptor.uploadID, owner: owner)) == true else { stopActive(descriptor.uploadID); return }
+        defer { _ = try? store.release(descriptor.uploadID, owner: owner) }
+        guard (try? store.savePendingAck(uploadID: descriptor.uploadID, part: descriptor.part, etag: etag, bytes: size, owner: owner)) == true,
+              (try? store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID, owner: owner)) == true else { stopActive(descriptor.uploadID); return }
         pump(descriptor.uploadID)
     }
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
@@ -311,22 +389,45 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         guard let descriptor = MultipartPartDescriptor.parse(task.taskDescription), coordinator.isCurrent(taskIdentifier: task.taskIdentifier, descriptor: descriptor), var upload = try? store.task(descriptor.uploadID) else { return }
         let sent = Int64(descriptor.part - 1) * (upload.partSize ?? upload.file.bytes) + totalBytesSent
         upload.progress = max(upload.progress, min(99, Int(sent * 100 / max(1, upload.file.bytes)))); upload.state = .uploading; upload.updatedAt = Date()
-        try? store.updateLocal(upload); publish(upload)
+        guard (try? store.acquire(descriptor.uploadID, owner: owner)) == true else { stopActive(descriptor.uploadID); return }
+        defer { _ = try? store.release(descriptor.uploadID, owner: owner) }
+        guard (try? store.updateForOwner(upload, owner: owner)) == true else { stopActive(descriptor.uploadID); return }
+        publish(upload)
     }
 
     func cancel(_ id: String) {
-        session.getAllTasks { tasks in tasks.filter { MultipartPartDescriptor.parse($0.taskDescription)?.uploadID == id }.forEach { $0.cancel() } }
-        if let task = try? store.task(id), let sessionID = task.sessionID, let capability = try? credentials.read(uploadID: id), let capability { Task { _ = try? await self.request(task.api + "/uploads/multipart/\(sessionID)/abort", method: "POST", body: [:], capability: capability) } }
-        _ = try? store.cancel(id); if let task = try? store.task(id) { publish(task) }
+        guard (try? store.cancel(id)) == true, let task = try? store.task(id) else { return }
+        stopActive(id)
+        if let sessionID = task.sessionID, let capability = try? credentials.read(uploadID: id), let capability { Task { _ = try? await self.request(task.api + "/uploads/multipart/\(sessionID)/abort", method: "POST", body: [:], capability: capability) } }
+        publish(task)
     }
     func acknowledge(_ id: String) -> Bool { guard let task = try? store.task(id) else { return false }; BackgroundUploadNotifier.shared.clear(task); return (try? store.acknowledge(id)) ?? false }
     func retry(_ id: String) -> Bool { guard let task = try? store.task(id), task.state == .retryWait, !coordinator.hasActive(uploadID: id) else { return false }; pump(id); return true }
     func syncProcessing(_ id: String, state: BackgroundUploadState, result: String?, error: String?) -> Bool {
-        guard state == .completed || state == .failed, var task = try? store.task(id), task.state == .processing else { return false }
-        task.state = state; task.result = result ?? task.result; task.error = error ?? task.error; task.updatedAt = Date(); try? store.updateLocal(task); publish(task); return true
+        guard state == .completed || state == .failed, let current = try? store.task(id), current.state == .processing,
+              (try? store.syncProcessing(id, state: state, result: result, error: error)) == true,
+              let task = try? store.task(id) else { return false }
+        publish(task); return true
     }
 
     private func request(_ path: String, method: String, body: [String: Any]?, capability: String?) async throws -> [String: Any] { guard let url = URL(string: path) else { throw URLError(.badURL) }; var request = URLRequest(url: url); request.httpMethod = method; if let capability { request.setValue(capability, forHTTPHeaderField: "X-Upload-Capability") }; if let body { request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONSerialization.data(withJSONObject: body) }; return try await client.json(request) }
-    private func finish(_ task: inout IOSUploadTask, response: [String: Any]) throws { let entity = ((response["result"] as? [String: Any]) ?? response); let item = (entity["media"] as? [String: Any]) ?? (entity["personal_log"] as? [String: Any]) ?? entity; let status = (item["transcoding_status"] as? String) ?? (item["status"] as? String) ?? "processing"; task.result = String(data: try JSONSerialization.data(withJSONObject: ["id": item["id"] as Any, "status": status, "transcoding_status": status]), encoding: .utf8); task.state = status == "completed" ? .completed : (status == "failed" ? .failed : .processing); task.progress = 100; task.updatedAt = Date(); try store.updateLocal(task); if task.state == .processing || task.state == .completed { try? FileManager.default.removeItem(at: URL(fileURLWithPath: task.file.path)) }; publish(task) }
+    private func readCapability(uploadID: String) throws -> String {
+        do {
+            guard let capability = try credentials.read(uploadID: uploadID) else { throw UploadCredentialError.lost }
+            return capability
+        } catch let error as UploadCredentialError { throw error
+        } catch { throw UploadCredentialError.unavailable }
+    }
+    private func finish(_ task: inout IOSUploadTask, response: [String: Any], owner: String) throws -> Bool {
+        let entity = ((response["result"] as? [String: Any]) ?? response); let item = (entity["media"] as? [String: Any]) ?? (entity["personal_log"] as? [String: Any]) ?? entity; let status = (item["transcoding_status"] as? String) ?? (item["status"] as? String) ?? "processing"
+        task.result = String(data: try JSONSerialization.data(withJSONObject: ["id": item["id"] as Any, "status": status, "transcoding_status": status]), encoding: .utf8); task.state = status == "completed" ? .completed : (status == "failed" ? .failed : .processing); task.progress = 100; task.updatedAt = Date()
+        guard try store.updateForOwner(task, owner: owner) else { stopActive(task.uploadID); return false }
+        if task.state == .processing || task.state == .completed { try? FileManager.default.removeItem(at: URL(fileURLWithPath: task.file.path)) }
+        publish(task); return true
+    }
+    private func stopActive(_ uploadID: String) {
+        session.getAllTasks { tasks in tasks.filter { MultipartPartDescriptor.parse($0.taskDescription)?.uploadID == uploadID }.forEach { $0.cancel() } }
+        coordinator.releaseAll(uploadID: uploadID).forEach { try? FileManager.default.removeItem(at: $0.temporaryURL) }
+    }
     private func publish(_ task: IOSUploadTask) { event?(task); BackgroundUploadNotifier.shared.publishIfNeeded(task) }
 }
