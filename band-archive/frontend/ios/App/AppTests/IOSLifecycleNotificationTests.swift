@@ -15,19 +15,47 @@ final class IOSLifecycleNotificationTests: XCTestCase {
         XCTAssertEqual(IOSMultipartEngine.backgroundSessionIdentifier, "com.deutteun.archive.background-upload.v1")
     }
 
-    func testBackgroundSessionCompletionIsDrainedExactlyOnce() {
-        guard let engine = IOSMultipartEngine.shared else { XCTFail("background engine unavailable"); return }
-        let completion = expectation(description: "background completion")
-        XCTAssertTrue(engine.attachBackgroundEvents(identifier: IOSMultipartEngine.backgroundSessionIdentifier) {
-            completion.fulfill()
-        })
-        engine.urlSessionDidFinishEvents(forBackgroundURLSession: .shared)
-        wait(for: [completion], timeout: 1)
+    func testBackgroundSessionCompletionIsDrainedExactlyOncePerGeneration() {
+        let state = BackgroundEventDrainState(); var calls: [String] = []
+        let first = state.append { calls.append("first") }
+        XCTAssertEqual(state.markFinishObserved(), first)
+        XCTAssertTrue(state.beginDrain(generation: first))
+        let firstSnapshot = state.snapshot()
+        state.finishIfStable(generation: first, revision: firstSnapshot.revision)?.forEach { $0() }
 
-        let secondCompletion = expectation(description: "no duplicate completion")
-        secondCompletion.isInverted = true
-        engine.urlSessionDidFinishEvents(forBackgroundURLSession: .shared)
-        wait(for: [secondCompletion], timeout: 0.1)
+        // A stale finish from the consumed generation must not make this new
+        // AppDelegate completion runnable before its own finish callback.
+        XCTAssertNil(state.markFinishObserved())
+        let second = state.append { calls.append("second") }
+        XCTAssertFalse(state.beginDrain(generation: second))
+        XCTAssertEqual(state.markFinishObserved(), second)
+        XCTAssertTrue(state.beginDrain(generation: second))
+        let secondSnapshot = state.snapshot()
+        state.finishIfStable(generation: second, revision: secondSnapshot.revision)?.forEach { $0() }
+        XCTAssertEqual(calls, ["first", "second"])
+    }
+
+    func testFinishBeforeFirstAttachBindsOnlyThatGeneration() {
+        let state = BackgroundEventDrainState()
+        XCTAssertNil(state.markFinishObserved())
+        let first = state.append {}
+        XCTAssertTrue(state.beginDrain(generation: first))
+        let snapshot = state.snapshot()
+        XCTAssertNotNil(state.finishIfStable(generation: first, revision: snapshot.revision))
+        let second = state.append {}
+        XCTAssertFalse(state.beginDrain(generation: second))
+    }
+
+    func testFinishAndNextAttachRaceWhilePreviousGenerationDrains() {
+        let state = BackgroundEventDrainState()
+        let first = state.append {}
+        XCTAssertEqual(state.markFinishObserved(), first)
+        XCTAssertTrue(state.beginDrain(generation: first))
+        // The next URLSession finish can precede its AppDelegate callback while
+        // the previous completion is still awaiting the durable barrier.
+        XCTAssertNil(state.markFinishObserved())
+        let second = state.append {}
+        XCTAssertTrue(state.beginDrain(generation: second))
     }
 
     func testUnknownBackgroundSessionIsNotClaimed() {
@@ -39,23 +67,42 @@ final class IOSLifecycleNotificationTests: XCTestCase {
         XCTAssertLessThanOrEqual(BackgroundEventDrainPolicy.networkBudget, 5)
         let state = BackgroundEventDrainState()
         var calls = 0
-        state.append { calls += 1 }; state.append { calls += 1 }
+        let first = state.append { calls += 1 }
+        let second = state.append { calls += 1 }
+        XCTAssertEqual(state.markFinishObserved(), first)
+        XCTAssertEqual(state.markFinishObserved(), second)
         state.beginDelegateWrite()
-        XCTAssertTrue(state.beginDrain())
+        XCTAssertTrue(state.beginDrain(generation: first))
         let beforeCommit = state.snapshot()
-        XCTAssertNil(state.finishIfStable(revision: beforeCommit.revision))
+        XCTAssertNil(state.finishIfStable(generation: first, revision: beforeCommit.revision))
         // Production didCompleteWithError stores pending ACK before ending this barrier.
         state.endDelegateWrite()
         let committed = state.snapshot()
-        let handlers = state.finishIfStable(revision: committed.revision)
+        let handlers = state.finishIfStable(generation: first, revision: committed.revision)
         handlers?.forEach { $0() }
+        XCTAssertEqual(calls, 1)
+        XCTAssertTrue(state.beginDrain(generation: second))
+        let secondHandlers = state.finishIfStable(generation: second, revision: committed.revision)
+        secondHandlers?.forEach { $0() }
         XCTAssertEqual(calls, 2)
-        XCTAssertNil(state.finishIfStable(revision: committed.revision))
     }
 
     func testKeychainReadPolicyKeepsLockedDeviceRetryable() {
         XCTAssertEqual(UploadCredentialPolicy.readError(for: errSecItemNotFound), .lost)
         XCTAssertEqual(UploadCredentialPolicy.readError(for: errSecInteractionNotAllowed), .unavailable)
         XCTAssertEqual(UploadCredentialPolicy.readError(for: errSecNotAvailable), .unavailable)
+    }
+
+    func testEngineProviderRetriesAfterProtectedDataFailure() {
+        var attempts = 0
+        let provider = IOSMultipartEngineProvider(factory: {
+            attempts += 1
+            throw BackgroundUploadError.database("protected_data_unavailable")
+        })
+        XCTAssertNil(provider.acquire())
+        // A second foreground/protected-data notification gets another factory
+        // attempt rather than inheriting a static `nil` from the first call.
+        XCTAssertNil(provider.acquire())
+        XCTAssertEqual(attempts, 2)
     }
 }

@@ -17,7 +17,7 @@ enum BackgroundUploadState: String, Codable, CaseIterable {
 }
 
 enum BackgroundUploadError: LocalizedError, Equatable {
-    case fileTooLarge, insufficientSpace, unsafePath, unavailableFile, database(String), keychain(OSStatus)
+    case fileTooLarge, insufficientSpace, unsafePath, unavailableFile, unsupportedVideo, database(String), keychain(OSStatus)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +25,7 @@ enum BackgroundUploadError: LocalizedError, Equatable {
         case .insufficientSpace: return "There is not enough device storage to prepare this video."
         case .unsafePath: return "The selected file is outside the app upload directory."
         case .unavailableFile: return "The selected video is no longer available."
+        case .unsupportedVideo: return "This video format is not supported."
         case .database: return "The upload queue could not be stored."
         case .keychain: return "The upload credential could not be stored securely."
         }
@@ -61,6 +62,9 @@ struct DurableUploadFile: Codable, Equatable {
 enum BackgroundUploadFiles {
     static let maximumBytes: Int64 = 1_024 * 1_024 * 1_024
     static let freeSpaceHeadroom: Int64 = 16 * 1_024 * 1_024
+    /// A live provider copy is not yet represented in SQLite. Keep its .tmp file out of
+    /// foreground GC; a crashed copy loses this in-memory lease and is collected after grace.
+    static let copyTemporaryGrace: TimeInterval = 10 * 60
 
     static func directory(fileManager: FileManager = .default) throws -> URL {
         let support = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -95,6 +99,8 @@ enum BackgroundUploadFiles {
         let destination = canonicalRoot.appendingPathComponent(uploadID, isDirectory: false)
         let temporary = canonicalRoot.appendingPathComponent("\(uploadID).tmp", isDirectory: false)
         guard canonicalChild(destination, of: canonicalRoot) != nil, canonicalChild(temporary, of: canonicalRoot) != nil else { throw BackgroundUploadError.unsafePath }
+        BackgroundUploadCopyRegistry.register(temporary.path)
+        defer { BackgroundUploadCopyRegistry.unregister(temporary.path) }
         defer { try? fileManager.removeItem(at: temporary) }
         guard fileManager.fileExists(atPath: source.path) else { throw BackgroundUploadError.unavailableFile }
         let input = try FileHandle(forReadingFrom: source)
@@ -120,8 +126,20 @@ enum BackgroundUploadFiles {
     }
 }
 
+/// Process-local protection for a synchronous PHPicker copy. It deliberately contains
+/// paths only, never picker URLs, credentials, or file metadata.
+enum BackgroundUploadCopyRegistry {
+    private static let lock = NSLock()
+    private static var paths: Set<String> = []
+    static func register(_ path: String) { lock.lock(); paths.insert(path); lock.unlock() }
+    static func unregister(_ path: String) { lock.lock(); paths.remove(path); lock.unlock() }
+    static func activePaths() -> Set<String> { lock.lock(); defer { lock.unlock() }; return paths }
+}
+
 enum VideoPickerPolicy {
+    static let acceptedExtensions: Set<String> = ["mp4", "webm", "mov", "avi", "mkv"]
     static func selectionLimit(multiple: Bool) -> Int { multiple ? 0 : 1 }
+    static func supports(filename: String) -> Bool { acceptedExtensions.contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
 
     static func mimeType(filename: String, fallback: UTType = .movie) -> String {
         let extensionType = UTType(filenameExtension: URL(fileURLWithPath: filename).pathExtension)
@@ -144,6 +162,7 @@ enum VideoPickerLoader {
                     let declaredBytes = values?.fileSize.map(Int64.init)
                     let suggested = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let filename = Self.filename(suggested: suggested, source: url)
+                    guard VideoPickerPolicy.supports(filename: filename) else { throw BackgroundUploadError.unsupportedVideo }
                     // The durable copy completes synchronously before this NSItemProvider callback returns.
                     let durable = try BackgroundUploadFiles.copyDurably(from: url, filename: filename, contentType: VideoPickerPolicy.mimeType(filename: filename), declaredBytes: declaredBytes)
                     continuation.resume(returning: .success(durable))
@@ -332,7 +351,7 @@ final class IOSUploadStore {
         let referencedSources = Set(try query("SELECT path FROM tasks", []).compactMap { $0[0] })
         let attempts = try allAttempts()
         let leasedAttempts = Set(try query("SELECT p.temp_path FROM part_attempts p JOIN tasks t ON t.upload_id=p.upload_id WHERE t.lease_expires_at>=? AND t.state NOT IN ('completed','failed','cancelled')", [stamp(now)]).compactMap { $0[0] })
-        let active = activeAttemptPaths.union(leasedAttempts)
+        let active = activeAttemptPaths.union(leasedAttempts).union(BackgroundUploadCopyRegistry.activePaths())
         let referencedAttempts = Set(attempts.map(\.temporaryPath))
         for attempt in attempts where !active.contains(attempt.temporaryPath) {
             // A mapping without a recovered active URLSession task is stale; remove its canonical part file and row.
@@ -347,8 +366,14 @@ final class IOSUploadStore {
             let path = safe.path
             if active.contains(path) || referencedSources.contains(path) || referencedAttempts.contains(path) { continue }
             let name = safe.lastPathComponent
-            if name.hasSuffix(".tmp") || name.hasSuffix(".part") { try? fileManager.removeItem(at: safe); continue }
             let modified = (try? safe.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
+            // A `.tmp` with no in-memory copy lease can be left by a crash. Give it a
+            // bounded grace period rather than racing a live PHPicker copy.
+            if name.hasSuffix(".tmp") {
+                if modified <= now.addingTimeInterval(-BackgroundUploadFiles.copyTemporaryGrace) { try? fileManager.removeItem(at: safe) }
+                continue
+            }
+            if name.hasSuffix(".part") { try? fileManager.removeItem(at: safe); continue }
             if modified <= now.addingTimeInterval(-Self.retention) { try? fileManager.removeItem(at: safe) }
         }
     }

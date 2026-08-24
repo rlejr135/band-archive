@@ -40,14 +40,24 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
         let task=IOSUploadTask(uploadID:id,workID:workID,createdAt:Date(),file:file,api:api,targetKind:kind,targetID:targetID,sessionID:nil,partSize:nil,state:.preparing,progress:0,error:nil,result:nil,leaseOwner:nil,leaseExpiresAt:nil,updatedAt:Date())
         Task { do { try await engine.enqueue(task); call.resolve(["id":id,"state":"queued"]) } catch { call.reject(error.localizedDescription) } }
     }
-    @objc func resume(_ call: CAPPluginCall) { engine?.pump(call.getString("id")); call.resolve(["available":engine != nil]) }
+    @objc func resume(_ call: CAPPluginCall) {
+        guard let engine else { call.resolve(["available":false,"retryable":true,"state":"retry_wait","error":"queue_unavailable"]); return }
+        engine.pump(call.getString("id")); call.resolve(["available":true])
+    }
     @objc func retry(_ call: CAPPluginCall) { guard let id=call.getString("id"), let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.retry(id)]) }
     @objc func cancel(_ call: CAPPluginCall) { guard let id=call.getString("id"), let engine else {call.reject("The upload queue is temporarily unavailable.");return}; engine.cancel(id); call.resolve() }
     @objc func acknowledge(_ call: CAPPluginCall) { terminalDelete(call) }
     @objc func delete(_ call: CAPPluginCall) { terminalDelete(call) }
     @objc func syncProcessingStatus(_ call: CAPPluginCall) { guard let id=call.getString("id"), let state=call.getString("state"), let next=BackgroundUploadState(rawValue:state), next == .completed || next == .failed, let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.syncProcessing(id,state:next,result:call.getString("result"),error:call.getString("error"))]) }
     @objc func updateProcessing(_ call: CAPPluginCall) { syncProcessingStatus(call) }
-    @objc func listPending(_ call: CAPPluginCall) { let tasks=(try? IOSUploadStore().retainedTasks()) ?? []; call.resolve(["items":tasks.map(Self.json),"supportsBackground":true,"forceQuitStopsTransfers":true,"backgroundNotice":"Force-quitting the app cancels iOS background transfers; reopen and retry when needed."]) }
+    @objc func listPending(_ call: CAPPluginCall) {
+        guard engine != nil else {
+            call.resolve(["items":[],"supportsBackground":true,"forceQuitStopsTransfers":true,"queueUnavailable":true,"retryable":true,"backgroundNotice":"The upload queue is temporarily unavailable; unlock the device and reopen the app to retry."])
+            return
+        }
+        let tasks=(try? IOSUploadStore().retainedTasks()) ?? []
+        call.resolve(["items":tasks.map(Self.json),"supportsBackground":true,"forceQuitStopsTransfers":true,"backgroundNotice":"Force-quitting the app cancels iOS background transfers; reopen and retry when needed."])
+    }
     private func terminalDelete(_ call:CAPPluginCall){guard let id=call.getString("id"),let engine else{call.resolve(["changed":false]);return};call.resolve(["changed":engine.acknowledge(id)])}
     private static func json(_ task:IOSUploadTask)->[String:Any]{ let target: [String:Any] = task.targetKind == "media" ? ((try? JSONSerialization.jsonObject(with: Data(task.targetID.utf8))) as? [String:Any] ?? [:]) : [task.targetKind:task.targetID]; return ["id":task.uploadID,"workId":task.workID,"uri":URL(fileURLWithPath:task.file.path).absoluteString,"name":task.file.filename,"mimeType":task.file.contentType,"size":task.file.bytes,"fingerprint":task.file.sha256,"apiUrl":task.api,"target":target,"state":task.state.rawValue,"progress":task.progress,"error":task.error as Any,"result":task.result as Any] }
 }

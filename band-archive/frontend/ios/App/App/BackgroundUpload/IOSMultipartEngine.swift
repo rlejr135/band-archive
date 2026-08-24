@@ -142,24 +142,62 @@ final class IOSUploadCoordinator {
 /// delegate-to-SQLite commits. Network reconciliation is deliberately bounded;
 /// pending ACK/complete intent remains durable for the next foreground pump.
 final class BackgroundEventDrainState {
+    private struct Cycle {
+        let generation: Int
+        var handlers: [() -> Void]
+        var finishObserved: Bool
+        var draining: Bool
+    }
     private let lock = NSLock()
-    private var handlers: [() -> Void] = []
+    private var cycles: [Cycle] = []
     private var delegateWrites = 0
     private var revision = 0
-    private var draining = false
-    private var finishObserved = false
+    private var nextGeneration = 1
+    // URLSession can deliver its finish delegate before AppDelegate's handoff on
+    // cold launch, or while a preceding generation is still draining. Retain one
+    // such next-generation signal only in those two cases; an unmatched finish
+    // after every cycle was consumed is a stale duplicate and is discarded.
+    private var unboundFinishForNextCycle = false
+    private var hasAttachedAtLeastOnce = false
 
-    /// Returns true when URLSession's finish callback raced ahead of AppDelegate's handoff.
-    func append(_ handler: @escaping () -> Void) -> Bool { lock.lock(); defer { lock.unlock() }; handlers.append(handler); return finishObserved }
-    func markFinishObserved() { lock.lock(); finishObserved = true; lock.unlock() }
+    /// Creates an isolated handoff generation. A prior completed generation cannot
+    /// make this handler runnable.
+    func append(_ handler: @escaping () -> Void) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let generation = nextGeneration; nextGeneration += 1
+        let observed = unboundFinishForNextCycle
+        if observed { unboundFinishForNextCycle = false }
+        hasAttachedAtLeastOnce = true
+        cycles.append(Cycle(generation: generation, handlers: [handler], finishObserved: observed, draining: false))
+        return generation
+    }
+    /// Returns the generation which became finish-observed, if it has an attached
+    /// AppDelegate completion. An unmatched finish is remembered only for an
+    /// initial attach or a handler racing a still-draining prior generation.
+    func markFinishObserved() -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        if let index = cycles.firstIndex(where: { !$0.finishObserved }) {
+            cycles[index].finishObserved = true
+            return cycles[index].generation
+        }
+        if !hasAttachedAtLeastOnce || cycles.contains(where: { $0.draining }) {
+            unboundFinishForNextCycle = true
+        }
+        return nil
+    }
     func beginDelegateWrite() { lock.lock(); delegateWrites += 1; revision += 1; lock.unlock() }
     func endDelegateWrite() { lock.lock(); delegateWrites = max(0, delegateWrites - 1); revision += 1; lock.unlock() }
-    func beginDrain() -> Bool { lock.lock(); defer { lock.unlock() }; guard !draining, !handlers.isEmpty else { return false }; draining = true; return true }
-    func snapshot() -> (writes: Int, revision: Int) { lock.lock(); defer { lock.unlock() }; return (delegateWrites, revision) }
-    func finishIfStable(revision expected: Int) -> [() -> Void]? {
+    func beginDrain(generation: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard draining, delegateWrites == 0, revision == expected else { return nil }
-        draining = false; let result = handlers; handlers.removeAll(); return result
+        guard let index = cycles.firstIndex(where: { $0.generation == generation }), cycles[index].finishObserved, !cycles[index].draining else { return false }
+        cycles[index].draining = true; return true
+    }
+    func snapshot() -> (writes: Int, revision: Int) { lock.lock(); defer { lock.unlock() }; return (delegateWrites, revision) }
+    func finishIfStable(generation: Int, revision expected: Int) -> [() -> Void]? {
+        lock.lock(); defer { lock.unlock() }
+        guard let index = cycles.firstIndex(where: { $0.generation == generation }), cycles[index].draining,
+              cycles[index].finishObserved, delegateWrites == 0, revision == expected else { return nil }
+        return cycles.remove(at: index).handlers
     }
 }
 
@@ -199,11 +237,35 @@ private final class LeaseHeartbeat {
     }
 }
 
+/// Keeps a successfully-created engine for the process, but never memoizes an
+/// initialization failure. This is important when Application Support or the
+/// Keychain is temporarily unavailable before first device unlock.
+final class IOSMultipartEngineProvider {
+    typealias Factory = () throws -> IOSMultipartEngine
+    private let lock = NSLock()
+    private var instance: IOSMultipartEngine?
+    private let factory: Factory
+
+    init(factory: @escaping Factory = {
+        try IOSMultipartEngine(store: IOSUploadStore(), credentials: KeychainUploadCredentialStore(), client: URLSessionMultipartHTTPClient())
+    }) { self.factory = factory }
+
+    func acquire() -> IOSMultipartEngine? {
+        lock.lock(); defer { lock.unlock() }
+        if let instance { return instance }
+        guard let created = try? factory() else { return nil }
+        instance = created
+        return created
+    }
+}
+
 /// Shared background-session multipart executor. It stores no credentials or presigned URLs in SQLite/task descriptions.
 final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate {
     static let backgroundSessionIdentifier = "com.deutteun.archive.background-upload.v1"
-    /// Database initialization can fail (for example, protected storage while the device is locked); callers keep web/UI alive when it is unavailable.
-    static let shared: IOSMultipartEngine? = try? IOSMultipartEngine(store: IOSUploadStore(), credentials: KeychainUploadCredentialStore(), client: URLSessionMultipartHTTPClient())
+    /// Protected-data availability can change after process launch, so creation is
+    /// retryable instead of permanently caching a failed `try?` result.
+    static let provider = IOSMultipartEngineProvider()
+    static var shared: IOSMultipartEngine? { provider.acquire() }
     private let owner = UUID().uuidString
     private let store: IOSUploadStore
     private let credentials: UploadCredentialStoring
@@ -419,13 +481,15 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         pump(descriptor.uploadID)
     }
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        drainState.markFinishObserved()
-        requestBackgroundDrain()
+        if let generation = drainState.markFinishObserved() { requestBackgroundDrain(generation: generation) }
     }
     /// Returns false for unknown sessions so AppDelegate can safely leave other SDK handlers untouched.
     func attachBackgroundEvents(identifier: String, completion: @escaping () -> Void) -> Bool {
         guard identifier == Self.backgroundSessionIdentifier else { return false }
-        let finishAlreadyObserved = drainState.append(completion); pump(); if finishAlreadyObserved { requestBackgroundDrain() }; return true
+        let generation = drainState.append(completion)
+        pump()
+        requestBackgroundDrain(generation: generation)
+        return true
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
         drainState.beginDelegateWrite()
@@ -454,11 +518,11 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         publish(task); return true
     }
 
-    private func requestBackgroundDrain() {
-        guard drainState.beginDrain() else { return }
-        Task { [weak self] in await self?.drainBackgroundEvents() }
+    private func requestBackgroundDrain(generation: Int) {
+        guard drainState.beginDrain(generation: generation) else { return }
+        Task { [weak self] in await self?.drainBackgroundEvents(generation: generation) }
     }
-    private func drainBackgroundEvents() async {
+    private func drainBackgroundEvents(generation: Int) async {
         let deadline = Date().addingTimeInterval(BackgroundEventDrainPolicy.networkBudget)
         var stableRevision: Int?
         var pumpedRevision: Int?
@@ -470,7 +534,7 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
             if snapshot.writes == 0 {
                 if stableRevision == snapshot.revision {
                     if !coordinator.hasReconciling() || Date() >= deadline,
-                       let handlers = drainState.finishIfStable(revision: snapshot.revision) {
+                        let handlers = drainState.finishIfStable(generation: generation, revision: snapshot.revision) {
                         DispatchQueue.main.async { handlers.forEach { $0() } }
                         return
                     }

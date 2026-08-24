@@ -42,6 +42,8 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertEqual(VideoPickerPolicy.mimeType(filename: "clip.mp4"), "video/mp4")
         XCTAssertEqual(VideoPickerPolicy.selectionLimit(multiple: true), 0)
         XCTAssertEqual(VideoPickerPolicy.selectionLimit(multiple: false), 1)
+        XCTAssertTrue(VideoPickerPolicy.supports(filename: "clip.MOV"))
+        XCTAssertFalse(VideoPickerPolicy.supports(filename: "clip.m4v"))
     }
 
     func testFreshStoreRunsV1MigrationAndStoresAcknowledgedParts() throws {
@@ -117,10 +119,12 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let (store, task) = try makeStoreTask()
         XCTAssertTrue(try store.acquire(task.uploadID, owner: "engine"))
         let drain = BackgroundEventDrainState(); var completionCalls = 0
-        drain.append { completionCalls += 1 }; drain.beginDelegateWrite(); XCTAssertTrue(drain.beginDrain())
+        let generation = drain.append { completionCalls += 1 }
+        XCTAssertEqual(drain.markFinishObserved(), generation)
+        drain.beginDelegateWrite(); XCTAssertTrue(drain.beginDrain(generation: generation))
         XCTAssertTrue(try store.savePendingAck(uploadID: task.uploadID, part: 1, etag: "etag", bytes: 1, owner: "engine"))
         drain.endDelegateWrite()
-        let stable = drain.snapshot(); drain.finishIfStable(revision: stable.revision)?.forEach { $0() }
+        let stable = drain.snapshot(); drain.finishIfStable(generation: generation, revision: stable.revision)?.forEach { $0() }
         XCTAssertEqual(try store.pendingAcks(uploadID: task.uploadID).count, 1)
         XCTAssertEqual(completionCalls, 1)
     }
@@ -154,20 +158,24 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: processing.file.path))
     }
 
-    func testGCExcludesActiveAttemptAndCleansOrphanTempAndTraversalSafely() throws {
+    func testGCExcludesActiveAttemptAndCopyAndCleansStaleTempAndTraversalSafely() throws {
         let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
         let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
         let task = try insertTask(store: store, root: root, id: "active", credentials: credentials)
         let activePart = root.appendingPathComponent("active.part"); try Data([1]).write(to: activePart)
         XCTAssertTrue(try store.acquire(task.uploadID, owner: "engine"))
         XCTAssertTrue(try store.savePartAttempt(IOSPartAttempt(uploadID: task.uploadID, part: 1, attemptID: UUID().uuidString, temporaryPath: activePart.path, taskIdentifier: 1), owner: "engine"))
-        let temporary = root.appendingPathComponent("orphan.tmp"); let stalePart = root.appendingPathComponent("orphan.part"); let orphan = root.appendingPathComponent("orphan")
+        let copying = root.appendingPathComponent("copying.tmp"); let temporary = root.appendingPathComponent("orphan.tmp"); let stalePart = root.appendingPathComponent("orphan.part"); let orphan = root.appendingPathComponent("orphan")
+        try Data([1]).write(to: copying)
         try Data([1]).write(to: temporary); try Data([1]).write(to: stalePart); try Data([1]).write(to: orphan)
         let old = Date(timeIntervalSince1970: 10_000); try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: orphan.path)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: temporary.path)
+        BackgroundUploadCopyRegistry.register(copying.path); defer { BackgroundUploadCopyRegistry.unregister(copying.path) }
         let outside = root.deletingLastPathComponent().appendingPathComponent("outside-retention-test")
         try Data([1]).write(to: outside); defer { try? FileManager.default.removeItem(at: outside) }
         try store.garbageCollect(activeAttemptPaths: [activePart.path], now: old.addingTimeInterval(8 * 24 * 60 * 60))
         XCTAssertTrue(FileManager.default.fileExists(atPath: activePart.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copying.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: stalePart.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
