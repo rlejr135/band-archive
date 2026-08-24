@@ -1,11 +1,12 @@
 import sqlite3
 
 from flask import Flask
+import pytest
 
 from app import _run_migrations
 from extensions import db
-from media_processing import claim_next_queued_item, create_personal_log, process_claimed_personal_log
-from models import PersonalLog
+from media_processing import claim_next_queued_item, create_media, create_personal_log, process_claimed_personal_log
+from models import Media, PersonalLog
 from storage import storage
 
 
@@ -91,7 +92,7 @@ def test_personal_log_worker_lifecycle_and_deletes_audio_derivative(client, app,
     deleted = []
     monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
     assert client.delete(f'/personal-logs/{log_id}').status_code == 200
-    assert deleted == ['personal_logs/worker.mp4', 'personal_logs/worker_audio.m4a']
+    assert deleted == ['personal_logs/worker_audio.m4a', 'personal_logs/worker.mp4']
 
 
 def test_member_deletion_removes_personal_log_original_and_audio(client, app, monkeypatch):
@@ -104,7 +105,7 @@ def test_member_deletion_removes_personal_log_original_and_audio(client, app, mo
     deleted = []
     monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
     assert client.delete(f'/members/{member_id}').status_code == 200
-    assert deleted == ['personal_logs/old.mp4', 'personal_logs/old_audio.m4a']
+    assert deleted == ['personal_logs/old_audio.m4a', 'personal_logs/old.mp4']
 
 
 def test_startup_migration_queues_existing_personal_video_with_default_status(tmp_path):
@@ -127,3 +128,49 @@ def test_startup_migration_queues_existing_personal_video_with_default_status(tm
     status = connection.execute('SELECT transcoding_status FROM personal_log WHERE id = 1').fetchone()[0]
     connection.close()
     assert status == 'queued'
+
+
+def test_personal_log_delete_attempts_original_after_audio_failure_and_keeps_row(client, app, monkeypatch):
+    member_id = _member(client)
+    with app.app_context():
+        log = create_personal_log(member_id=member_id, title='Delete', filename='delete.mp4', file_type='video')
+        log.audio_filename = 'delete_audio.m4a'
+        db.session.add(log)
+        db.session.commit()
+        log_id = log.id
+    attempted = []
+
+    def failing_delete(key):
+        attempted.append(key)
+        if key.endswith('_audio.m4a'):
+            raise RuntimeError('audio unavailable')
+
+    monkeypatch.setattr(storage, 'delete', failing_delete)
+    with pytest.raises(RuntimeError):
+        client.delete(f'/personal-logs/{log_id}')
+    assert attempted == ['personal_logs/delete_audio.m4a', 'personal_logs/delete.mp4']
+    with app.app_context():
+        assert db.session.get(PersonalLog, log_id) is not None
+
+
+def test_media_delete_keeps_row_when_original_delete_fails(client, app, monkeypatch):
+    song_id = client.post('/songs', json={'title': 'Delete song', 'artist': 'Band'}).get_json()['id']
+    with app.app_context():
+        media = create_media(song_id=song_id, filename='media.mp4', file_type='video')
+        media.audio_filename = 'media_audio.m4a'
+        db.session.add(media)
+        db.session.commit()
+        media_id = media.id
+    attempted = []
+
+    def failing_delete(key):
+        attempted.append(key)
+        if key.endswith('media.mp4'):
+            raise RuntimeError('original unavailable')
+
+    monkeypatch.setattr(storage, 'delete', failing_delete)
+    with pytest.raises(RuntimeError):
+        client.delete(f'/media/{media_id}')
+    assert attempted == ['media/media_audio.m4a', 'media/media.mp4']
+    with app.app_context():
+        assert db.session.get(Media, media_id) is not None

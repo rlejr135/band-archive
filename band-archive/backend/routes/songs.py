@@ -8,7 +8,8 @@ from extensions import db
 from models import Song, Media, Rehearsal
 from errors import ValidationError, NotFoundError
 from storage import storage
-from media_processing import create_media, save_media_and_start, retry_audio_processing
+from media_processing import (create_media, save_media_and_start, retry_audio_processing,
+                              delete_original_and_audio, processing_status_response)
 from validators import (
     validate_status,
     validate_difficulty,
@@ -150,7 +151,7 @@ def delete_song(id):
     song = _get_song_or_404(id)
 
     for media in song.media_files:
-        storage.delete(f'media/{media.filename}')
+        delete_original_and_audio(media, 'media', current_app.logger)
 
     db.session.delete(song)
     db.session.commit()
@@ -352,13 +353,7 @@ def delete_media(media_id):
     if not media:
         raise NotFoundError("Media not found")
 
-    storage.delete(f'media/{media.filename}')
-
-    if media.audio_filename:
-        try:
-            storage.delete(f'media/{media.audio_filename}')
-        except Exception:
-            current_app.logger.exception('Error deleting audio derivative for media %s', media_id)
+    delete_original_and_audio(media, 'media', current_app.logger)
 
     db.session.delete(media)
     db.session.commit()
@@ -370,19 +365,7 @@ def get_media_processing(media_id):
     media = db.session.get(Media, media_id)
     if not media:
         raise NotFoundError("Media not found")
-    return jsonify({
-        'id': media.id,
-        'file_type': media.file_type,
-        'status': media.transcoding_status,
-        'audio_filename': media.audio_filename,
-        'audio_url': (storage.generate_url(f'media/{media.audio_filename}')
-                      if media.transcoding_status == 'completed' and media.audio_filename else None),
-        'error': media.processing_error,
-        'attempts': media.processing_attempts,
-        'started_at': media.processing_started_at.isoformat() if media.processing_started_at else None,
-        'heartbeat_at': media.processing_heartbeat_at.isoformat() if media.processing_heartbeat_at else None,
-        'completed_at': media.processing_completed_at.isoformat() if media.processing_completed_at else None,
-    })
+    return jsonify(processing_status_response(media, 'media'))
 
 
 @songs_bp.route('/media/<int:media_id>/retry-audio', methods=['POST'])

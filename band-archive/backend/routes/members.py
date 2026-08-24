@@ -4,6 +4,7 @@ from extensions import db
 from models import Member
 from errors import NotFoundError, ValidationError
 from storage import storage
+from media_processing import delete_original_and_audio
 from validators import validate_required_string, validate_string_length
 
 members_bp = Blueprint('members', __name__)
@@ -75,9 +76,7 @@ def delete_member(id):
     member = _get_member_or_404(id)
 
     for log in member.personal_logs:
-        storage.delete(f'personal_logs/{log.filename}')
-        if log.audio_filename:
-            storage.delete(f'personal_logs/{log.audio_filename}')
+        delete_original_and_audio(log, 'personal_logs')
 
     db.session.delete(member)
     db.session.commit()

@@ -7,7 +7,9 @@ from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
 from storage import storage
-from media_processing import create_personal_log, save_personal_log_and_start, start_audio_processing
+from media_processing import (create_personal_log, save_personal_log_and_start,
+                              retry_audio_processing_record, PERSONAL_LOG_SPEC,
+                              delete_original_and_audio, processing_status_response)
 from validators import (
     validate_required_string,
     validate_string_length,
@@ -90,9 +92,7 @@ def delete_log(log_id):
     if not log:
         raise NotFoundError("Personal log not found")
 
-    storage.delete(f'personal_logs/{log.filename}')
-    if log.audio_filename:
-        storage.delete(f'personal_logs/{log.audio_filename}')
+    delete_original_and_audio(log, 'personal_logs', current_app.logger)
 
     db.session.delete(log)
     db.session.commit()
@@ -104,16 +104,7 @@ def get_log_processing(log_id):
     log = db.session.get(PersonalLog, log_id)
     if not log:
         raise NotFoundError('Personal log not found')
-    return jsonify({
-        'id': log.id, 'file_type': log.file_type, 'status': log.transcoding_status,
-        'audio_filename': log.audio_filename,
-        'audio_url': (storage.generate_url(f'personal_logs/{log.audio_filename}')
-                      if log.transcoding_status == 'completed' and log.audio_filename else None),
-        'error': log.processing_error, 'attempts': log.processing_attempts,
-        'started_at': log.processing_started_at.isoformat() if log.processing_started_at else None,
-        'heartbeat_at': log.processing_heartbeat_at.isoformat() if log.processing_heartbeat_at else None,
-        'completed_at': log.processing_completed_at.isoformat() if log.processing_completed_at else None,
-    })
+    return jsonify(processing_status_response(log, 'personal_logs'))
 
 
 @personal_logs_bp.route('/personal-logs/<int:log_id>/retry-audio', methods=['POST'])
@@ -121,17 +112,12 @@ def retry_log_audio(log_id):
     log = db.session.get(PersonalLog, log_id)
     if not log:
         raise NotFoundError('Personal log not found')
-    if log.file_type != 'video':
-        raise ValidationError('Only video personal logs can be retried.')
-    if log.transcoding_status in ('queued', 'processing'):
-        raise ValidationError('Audio processing is already queued or running.', status_code=409)
-    log.transcoding_status = 'queued'
-    log.processing_error = None
-    log.processing_started_at = None
-    log.processing_completed_at = None
-    log.processing_heartbeat_at = None
-    db.session.commit()
-    start_audio_processing(current_app._get_current_object(), log.id)
+    try:
+        retry_audio_processing_record(current_app._get_current_object(), log, PERSONAL_LOG_SPEC)
+    except ValueError as exc:
+        raise ValidationError(str(exc))
+    except RuntimeError as exc:
+        raise ValidationError(str(exc), status_code=409)
     return jsonify({'id': log.id, 'status': log.transcoding_status}), 202
 
 

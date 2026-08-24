@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import atexit
+from dataclasses import dataclass
 import logging
 import os
 import subprocess
@@ -26,6 +27,19 @@ SAFE_ERRORS = {
 
 class AudioProcessingError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ProcessingSpec:
+    kind: str
+    model: type
+    key_prefix: str
+    label: str
+
+
+MEDIA_SPEC = ProcessingSpec('media', Media, 'media', 'media')
+PERSONAL_LOG_SPEC = ProcessingSpec('personal_log', PersonalLog, 'personal_logs', 'personal log')
+PROCESSING_SPECS = {MEDIA_SPEC.kind: MEDIA_SPEC, PERSONAL_LOG_SPEC.kind: PERSONAL_LOG_SPEC}
 
 
 class AudioWorker:
@@ -80,31 +94,78 @@ def audio_filename_for(filename):
     return f"{filename.rsplit('.', 1)[0]}_audio.m4a"
 
 
+def processing_fields(record, key_prefix):
+    """Shared JSON fields; callers retain their established endpoint names."""
+    original_url = storage.generate_url(f'{key_prefix}/{record.filename}')
+    audio_url = None
+    if record.file_type == 'video' and record.transcoding_status == 'completed' and record.audio_filename:
+        audio_url = storage.generate_url(f'{key_prefix}/{record.audio_filename}')
+    return {
+        'url': original_url, 'audio_url': audio_url,
+        'transcoding_status': record.transcoding_status, 'audio_filename': record.audio_filename,
+        'processing_error': record.processing_error,
+        'processing_started_at': record.processing_started_at.isoformat() if record.processing_started_at else None,
+        'processing_completed_at': record.processing_completed_at.isoformat() if record.processing_completed_at else None,
+        'processing_attempts': record.processing_attempts,
+        'processing_heartbeat_at': record.processing_heartbeat_at.isoformat() if record.processing_heartbeat_at else None,
+    }
+
+
+def processing_status_response(record, key_prefix):
+    fields = processing_fields(record, key_prefix)
+    return {
+        'id': record.id, 'file_type': record.file_type, 'status': fields['transcoding_status'],
+        'audio_filename': fields['audio_filename'], 'audio_url': fields['audio_url'],
+        'error': fields['processing_error'], 'attempts': fields['processing_attempts'],
+        'started_at': fields['processing_started_at'], 'heartbeat_at': fields['processing_heartbeat_at'],
+        'completed_at': fields['processing_completed_at'],
+    }
+
+
+def delete_original_and_audio(record, key_prefix, logger=None):
+    """Delete derivative then original; preserve DB state if either delete fails."""
+    keys = ([f'{key_prefix}/{record.audio_filename}'] if record.audio_filename else [])
+    keys.append(f'{key_prefix}/{record.filename}')
+    errors = []
+    for key in keys:
+        try:
+            storage.delete(key)
+        except Exception as exc:
+            errors.append((key, exc))
+            if logger:
+                logger.exception('Failed to delete stored object %s', key)
+    if errors:
+        failed_keys = ', '.join(key for key, _ in errors)
+        raise RuntimeError(f'Failed to delete stored objects: {failed_keys}') from errors[0][1]
+
+
 def create_media(**kwargs):
-    kwargs['transcoding_status'] = initial_processing_status(kwargs.get('file_type'))
-    return Media(**kwargs)
+    return _create_record(MEDIA_SPEC, **kwargs)
 
 
 def create_personal_log(**kwargs):
+    return _create_record(PERSONAL_LOG_SPEC, **kwargs)
+
+
+def _create_record(spec, **kwargs):
     kwargs['transcoding_status'] = initial_processing_status(kwargs.get('file_type'))
-    return PersonalLog(**kwargs)
+    return spec.model(**kwargs)
 
 
 def save_media_and_start(app, media):
-    """Persist a queued media record, then wake (never create) the process worker."""
-    db.session.add(media)
-    db.session.commit()
-    if media.file_type == 'video':
-        start_audio_processing(app, media.id)
-    return media
+    return _save_record_and_start(app, media)
 
 
 def save_personal_log_and_start(app, log):
-    db.session.add(log)
+    return _save_record_and_start(app, log)
+
+
+def _save_record_and_start(app, record):
+    db.session.add(record)
     db.session.commit()
-    if log.file_type == 'video':
-        start_audio_processing(app, log.id)
-    return log
+    if record.file_type == 'video':
+        start_audio_processing(app, record.id)
+    return record
 
 
 def start_worker(app):
@@ -137,65 +198,64 @@ def start_audio_processing(app, media_id):
 
 
 def retry_audio_processing(app, media):
-    if media.file_type != 'video':
-        raise ValueError('Only video media can be retried.')
-    if media.transcoding_status in ('queued', 'processing'):
+    return retry_audio_processing_record(app, media, MEDIA_SPEC)
+
+
+def retry_audio_processing_record(app, record, spec):
+    if record.file_type != 'video':
+        raise ValueError(f'Only video {spec.label}s can be retried.')
+    if record.transcoding_status in ('queued', 'processing'):
         raise RuntimeError('Audio processing is already queued or running.')
-    media.transcoding_status = 'queued'
-    media.processing_error = None
-    media.processing_started_at = None
-    media.processing_completed_at = None
-    media.processing_heartbeat_at = None
+    record.transcoding_status = 'queued'
+    record.processing_error = None
+    record.processing_started_at = record.processing_completed_at = record.processing_heartbeat_at = None
     db.session.commit()
-    start_audio_processing(app, media.id)
+    start_audio_processing(app, record.id)
 
 
 def recover_stale_processing(stale_seconds):
     """Return only abandoned processing rows to queue; live heartbeats are preserved."""
     cutoff = utcnow() - timedelta(seconds=stale_seconds)
-    recovered = Media.query.filter(
-        Media.file_type == 'video',
-        Media.transcoding_status == 'processing',
-        (Media.processing_heartbeat_at.is_(None)) | (Media.processing_heartbeat_at < cutoff),
-    ).update({
-        'transcoding_status': 'queued',
-        'processing_error': None,
-        'processing_started_at': None,
-        'processing_heartbeat_at': None,
-    }, synchronize_session=False)
-    recovered += PersonalLog.query.filter(
-        PersonalLog.file_type == 'video',
-        PersonalLog.transcoding_status == 'processing',
-        (PersonalLog.processing_heartbeat_at.is_(None)) | (PersonalLog.processing_heartbeat_at < cutoff),
-    ).update({
-        'transcoding_status': 'queued', 'processing_error': None,
-        'processing_started_at': None, 'processing_heartbeat_at': None,
-    }, synchronize_session=False)
+    recovered = sum(_recover_stale(spec, cutoff) for spec in PROCESSING_SPECS.values())
     db.session.commit()
     return recovered
 
 
+def _recover_stale(spec, cutoff):
+    model = spec.model
+    return model.query.filter(model.file_type == 'video', model.transcoding_status == 'processing',
+        (model.processing_heartbeat_at.is_(None)) | (model.processing_heartbeat_at < cutoff)).update({
+        'transcoding_status': 'queued', 'processing_error': None,
+        'processing_started_at': None, 'processing_heartbeat_at': None,
+    }, synchronize_session=False)
+
+
 def _claim_media(media_id=None):
+    return _claim_record(MEDIA_SPEC, media_id)
+
+
+def _claim_record(spec, record_id=None):
+    model = spec.model
     now = utcnow()
-    query = Media.query.filter_by(transcoding_status='queued', file_type='video')
-    if media_id is not None:
-        query = query.filter_by(id=media_id)
+    query = model.query.filter_by(transcoding_status='queued', file_type='video')
+    if record_id is not None:
+        query = query.filter_by(id=record_id)
     else:
-        candidate = query.order_by(Media.created_at.asc(), Media.id.asc()).with_entities(Media.id).first()
+        candidate = query.order_by(model.created_at.asc(), model.id.asc()).with_entities(model.id).first()
         if not candidate:
             return None
-        media_id = candidate.id
-        query = query.filter_by(id=media_id)
+        record_id = candidate.id
+        query = query.filter_by(id=record_id)
     claimed = query.update({
         'transcoding_status': 'processing',
         'processing_started_at': now,
         'processing_completed_at': None,
         'processing_heartbeat_at': now,
         'processing_error': None,
-        'processing_attempts': func.coalesce(Media.processing_attempts, 0) + 1,
+        'processing_attempts': func.coalesce(model.processing_attempts, 0) + 1,
     }, synchronize_session=False)
     db.session.commit()
-    return media_id if claimed else None
+    return record_id if claimed else None
 
 
 def claim_next_queued_media():
@@ -208,24 +268,7 @@ def claim_next_queued_media():
 
 
 def _claim_personal_log(log_id=None):
-    now = utcnow()
-    query = PersonalLog.query.filter_by(transcoding_status='queued', file_type='video')
-    if log_id is not None:
-        query = query.filter_by(id=log_id)
-    else:
-        candidate = query.order_by(PersonalLog.created_at.asc(), PersonalLog.id.asc()).with_entities(PersonalLog.id).first()
-        if not candidate:
-            return None
-        log_id = candidate.id
-        query = query.filter_by(id=log_id)
-    claimed = query.update({
-        'transcoding_status': 'processing', 'processing_started_at': now,
-        'processing_completed_at': None, 'processing_heartbeat_at': now,
-        'processing_error': None,
-        'processing_attempts': func.coalesce(PersonalLog.processing_attempts, 0) + 1,
-    }, synchronize_session=False)
-    db.session.commit()
-    return log_id if claimed else None
+    return _claim_record(PERSONAL_LOG_SPEC, log_id)
 
 
 def claim_next_queued_item():
@@ -242,14 +285,15 @@ def claim_next_queued_item():
 
 
 def _heartbeat(media_id):
-    Media.query.filter_by(id=media_id, transcoding_status='processing').update({
-        'processing_heartbeat_at': utcnow(),
-    }, synchronize_session=False)
-    db.session.commit()
+    _heartbeat_record(MEDIA_SPEC, media_id)
 
 
 def _personal_log_heartbeat(log_id):
-    PersonalLog.query.filter_by(id=log_id, transcoding_status='processing').update({
+    _heartbeat_record(PERSONAL_LOG_SPEC, log_id)
+
+
+def _heartbeat_record(spec, record_id):
+    spec.model.query.filter_by(id=record_id, transcoding_status='processing').update({
         'processing_heartbeat_at': utcnow(),
     }, synchronize_session=False)
     db.session.commit()
@@ -264,67 +308,43 @@ def _process_audio_job(app, media_id):
 
 
 def process_claimed_media(media_id, config):
-    media = db.session.get(Media, media_id)
-    if not media or media.transcoding_status != 'processing':
-        return
-    try:
-        audio_filename = extract_m4a_audio(
-            media.filename,
-            timeout_seconds=config['AUDIO_PROCESSING_TIMEOUT_SECONDS'],
-            heartbeat=lambda: _heartbeat(media_id),
-            heartbeat_seconds=config['AUDIO_PROCESSING_HEARTBEAT_SECONDS'],
-        )
-        if not storage.exists(f'media/{audio_filename}'):
-            raise AudioProcessingError('output_missing')
-        media = db.session.get(Media, media_id)
-        media.audio_filename = audio_filename
-        media.transcoding_status = 'completed'
-        media.processing_error = None
-        media.processing_completed_at = utcnow()
-        media.processing_heartbeat_at = utcnow()
-        db.session.commit()
-    except Exception as exc:
-        db.session.rollback()
-        media = db.session.get(Media, media_id)
-        if media:
-            media.transcoding_status = 'failed'
-            media.processing_error = _safe_error(exc)
-            media.processing_completed_at = utcnow()
-            media.processing_heartbeat_at = utcnow()
-            db.session.commit()
-        logging.exception('Audio extraction failed for media id %s', media_id)
+    return process_claimed_record(MEDIA_SPEC, media_id, config)
 
 
 def process_claimed_personal_log(log_id, config):
-    log = db.session.get(PersonalLog, log_id)
-    if not log or log.transcoding_status != 'processing':
+    return process_claimed_record(PERSONAL_LOG_SPEC, log_id, config)
+
+
+def process_claimed_record(spec, record_id, config):
+    record = db.session.get(spec.model, record_id)
+    if not record or record.transcoding_status != 'processing':
         return
     try:
         audio_filename = extract_m4a_audio(
-            log.filename, source_prefix='personal_logs',
+            record.filename, source_prefix=spec.key_prefix,
             timeout_seconds=config['AUDIO_PROCESSING_TIMEOUT_SECONDS'],
-            heartbeat=lambda: _personal_log_heartbeat(log_id),
+            heartbeat=lambda: _heartbeat_record(spec, record_id),
             heartbeat_seconds=config['AUDIO_PROCESSING_HEARTBEAT_SECONDS'],
         )
-        if not storage.exists(f'personal_logs/{audio_filename}'):
+        if not storage.exists(f'{spec.key_prefix}/{audio_filename}'):
             raise AudioProcessingError('output_missing')
-        log = db.session.get(PersonalLog, log_id)
-        log.audio_filename = audio_filename
-        log.transcoding_status = 'completed'
-        log.processing_error = None
-        log.processing_completed_at = utcnow()
-        log.processing_heartbeat_at = utcnow()
+        record = db.session.get(spec.model, record_id)
+        record.audio_filename = audio_filename
+        record.transcoding_status = 'completed'
+        record.processing_error = None
+        record.processing_completed_at = utcnow()
+        record.processing_heartbeat_at = utcnow()
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
-        log = db.session.get(PersonalLog, log_id)
-        if log:
-            log.transcoding_status = 'failed'
-            log.processing_error = _safe_error(exc)
-            log.processing_completed_at = utcnow()
-            log.processing_heartbeat_at = utcnow()
+        record = db.session.get(spec.model, record_id)
+        if record:
+            record.transcoding_status = 'failed'
+            record.processing_error = _safe_error(exc)
+            record.processing_completed_at = utcnow()
+            record.processing_heartbeat_at = utcnow()
             db.session.commit()
-        logging.exception('Audio extraction failed for personal log id %s', log_id)
+        logging.exception('Audio extraction failed for %s id %s', spec.label, record_id)
 
 
 def _safe_error(exc):

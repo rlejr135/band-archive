@@ -65,14 +65,11 @@ class Media(db.Model):
                                foreign_keys='Comment.media_id')
 
     def to_dict(self):
-        from storage import storage
-        original_url = storage.generate_url(f'media/{self.filename}')
-        audio_url = None
-        if self.file_type == 'video' and self.transcoding_status == 'completed' and self.audio_filename:
-            audio_url = storage.generate_url(f'media/{self.audio_filename}')
-        qualities = {'original': original_url}
-        if audio_url:
-            qualities['audio'] = audio_url
+        from media_processing import processing_fields
+        fields = processing_fields(self, 'media')
+        qualities = {'original': fields['url']}
+        if fields['audio_url']:
+            qualities['audio'] = fields['audio_url']
         
         return {
             'id': self.id,
@@ -85,15 +82,7 @@ class Media(db.Model):
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
-            'transcoding_status': self.transcoding_status,
-            'audio_filename': self.audio_filename,
-            'processing_error': self.processing_error,
-            'processing_started_at': self.processing_started_at.isoformat() if self.processing_started_at else None,
-            'processing_completed_at': self.processing_completed_at.isoformat() if self.processing_completed_at else None,
-            'processing_attempts': self.processing_attempts,
-            'processing_heartbeat_at': self.processing_heartbeat_at.isoformat() if self.processing_heartbeat_at else None,
-            'url': original_url,
-            'audio_url': audio_url,
+            **fields,
             'qualities': qualities,
             'is_featured': self.is_featured,
             'comment_count': len(self.comments),
@@ -190,11 +179,8 @@ class PersonalLog(db.Model):
                                foreign_keys='Comment.personal_log_id')
 
     def to_dict(self):
-        from storage import storage
-        original_url = storage.generate_url(f'personal_logs/{self.filename}')
-        audio_url = None
-        if self.file_type == 'video' and self.transcoding_status == 'completed' and self.audio_filename:
-            audio_url = storage.generate_url(f'personal_logs/{self.audio_filename}')
+        from media_processing import processing_fields
+        fields = processing_fields(self, 'personal_logs')
         return {
             'id': self.id,
             'member_id': self.member_id,
@@ -203,15 +189,7 @@ class PersonalLog(db.Model):
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
-            'url': original_url,
-            'audio_url': audio_url,
-            'transcoding_status': self.transcoding_status,
-            'audio_filename': self.audio_filename,
-            'processing_error': self.processing_error,
-            'processing_started_at': self.processing_started_at.isoformat() if self.processing_started_at else None,
-            'processing_completed_at': self.processing_completed_at.isoformat() if self.processing_completed_at else None,
-            'processing_attempts': self.processing_attempts,
-            'processing_heartbeat_at': self.processing_heartbeat_at.isoformat() if self.processing_heartbeat_at else None,
+            **fields,
             'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
