@@ -22,12 +22,29 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    testOptions {
+        unitTests.includeAndroidResources = true
+    }
 }
 
 repositories {
     flatDir{
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
     }
+}
+
+configurations { robolectricRuntime }
+
+tasks.register('copyRobolectricRuntime', Copy) {
+    from configurations.robolectricRuntime
+    into layout.buildDirectory.dir('robolectric-runtime')
+}
+
+tasks.withType(Test).configureEach {
+    dependsOn tasks.named('copyRobolectricRuntime')
+    // Robolectric's default Maven cache URL-encodes this Windows user's space; use a build-local offline cache.
+    systemProperty 'robolectric.offline', 'true'
+    systemProperty 'robolectric.dependency.dir', layout.buildDirectory.dir('robolectric-runtime').get().asFile.absolutePath
 }
 
 dependencies {
@@ -37,6 +54,11 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // Robolectric 4.16.1 and AndroidX Test Core 1.7.0 are current stable artifacts for local Android tests.
+    testImplementation "org.robolectric:robolectric:4.16.1"
+    testImplementation "androidx.test:core:1.7.0"
+    testImplementation "com.squareup.okhttp3:mockwebserver:4.12.0"
+    robolectricRuntime "org.robolectric:android-all-instrumented:15-robolectric-13954326-i7"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
