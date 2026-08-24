@@ -127,17 +127,33 @@ def test_startup_migration_queues_existing_personal_video_with_default_status(tm
         CREATE TABLE media (id INTEGER PRIMARY KEY, file_type VARCHAR(20));
         CREATE TABLE personal_log (id INTEGER PRIMARY KEY, file_type VARCHAR(20));
         CREATE TABLE rehearsal (id INTEGER PRIMARY KEY);
-        CREATE TABLE multipart_upload_session (id VARCHAR(36) PRIMARY KEY);
-        CREATE TABLE personal_log_multipart_upload_session (id VARCHAR(36) PRIMARY KEY);
-        CREATE TABLE multipart_upload_part (id INTEGER PRIMARY KEY);
-        CREATE TABLE personal_log_multipart_upload_part (id INTEGER PRIMARY KEY);
+        CREATE TABLE multipart_upload_session (
+            id VARCHAR(36) PRIMARY KEY, object_key VARCHAR(300), status VARCHAR(20)
+        );
+        CREATE TABLE personal_log_multipart_upload_session (
+            id VARCHAR(36) PRIMARY KEY, object_key VARCHAR(300), status VARCHAR(20)
+        );
+        CREATE TABLE multipart_upload_part (
+            id INTEGER PRIMARY KEY, session_id VARCHAR(36), part_number INTEGER
+        );
+        CREATE TABLE personal_log_multipart_upload_part (
+            id INTEGER PRIMARY KEY, session_id VARCHAR(36), part_number INTEGER
+        );
         INSERT INTO personal_log (id, file_type) VALUES (1, 'video');
+        INSERT INTO multipart_upload_session (id, object_key, status)
+            VALUES ('media-legacy', 'media/legacy.mp4', 'initiated');
+        INSERT INTO personal_log_multipart_upload_session (id, object_key, status)
+            VALUES ('personal-legacy', 'personal_logs/legacy.mp4', 'initiated');
+        INSERT INTO multipart_upload_part (id, session_id, part_number) VALUES (1, 'media-legacy', 1);
+        INSERT INTO personal_log_multipart_upload_part (id, session_id, part_number)
+            VALUES (1, 'personal-legacy', 1);
     ''')
     connection.commit()
     connection.close()
 
     flask_app = Flask(__name__)
     flask_app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+    _run_migrations(flask_app)
     _run_migrations(flask_app)
 
     connection = sqlite3.connect(db_path)
@@ -146,12 +162,32 @@ def test_startup_migration_queues_existing_personal_video_with_default_status(tm
     personal_session_columns = {row[1] for row in connection.execute('PRAGMA table_info(personal_log_multipart_upload_session)')}
     media_part_columns = {row[1] for row in connection.execute('PRAGMA table_info(multipart_upload_part)')}
     personal_part_columns = {row[1] for row in connection.execute('PRAGMA table_info(personal_log_multipart_upload_part)')}
+    media_legacy = connection.execute(
+        "SELECT object_key, status, capability_token_hash, completion_started_at "
+        "FROM multipart_upload_session WHERE id = 'media-legacy'"
+    ).fetchone()
+    personal_legacy = connection.execute(
+        "SELECT object_key, status, capability_token_hash, completion_started_at "
+        "FROM personal_log_multipart_upload_session WHERE id = 'personal-legacy'"
+    ).fetchone()
+    media_part = connection.execute(
+        'SELECT session_id, part_number, etag, uploaded_bytes, checksum, acknowledged_at '
+        'FROM multipart_upload_part WHERE id = 1'
+    ).fetchone()
+    personal_part = connection.execute(
+        'SELECT session_id, part_number, etag, uploaded_bytes, checksum, acknowledged_at '
+        'FROM personal_log_multipart_upload_part WHERE id = 1'
+    ).fetchone()
     connection.close()
     assert status == 'queued'
     assert {'capability_token_hash', 'completion_started_at'} <= media_session_columns
     assert {'capability_token_hash', 'completion_started_at'} <= personal_session_columns
     assert {'etag', 'uploaded_bytes', 'checksum', 'acknowledged_at'} <= media_part_columns
     assert {'etag', 'uploaded_bytes', 'checksum', 'acknowledged_at'} <= personal_part_columns
+    assert media_legacy == ('media/legacy.mp4', 'initiated', None, None)
+    assert personal_legacy == ('personal_logs/legacy.mp4', 'initiated', None, None)
+    assert media_part == ('media-legacy', 1, None, None, None, None)
+    assert personal_part == ('personal-legacy', 1, None, None, None, None)
 
 
 def test_personal_log_delete_attempts_original_after_audio_failure_and_keeps_row(client, app, monkeypatch):

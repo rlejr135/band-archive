@@ -142,6 +142,9 @@ def test_session_status_returns_target_acknowledgements_and_rejects_wrong_token(
     session_id = session['session_id']
     assert client.get(f'/uploads/multipart/{session_id}').status_code == 403
     assert client.get(f'/uploads/multipart/{session_id}', headers={'X-Upload-Capability': 'wrong'}).status_code == 403
+    assert client.post(f'/uploads/multipart/{session_id}/parts/1/ack', json={'etag': 'x', 'bytes': 32}).status_code == 403
+    assert client.post(f'/uploads/multipart/{session_id}/complete').status_code == 403
+    assert client.post(f'/uploads/multipart/{session_id}/abort').status_code == 403
     _issue_and_ack(client, session_id, headers, bytes=32)
     response = client.get(f'/uploads/multipart/{session_id}', headers=headers)
     assert response.status_code == 200
@@ -149,6 +152,7 @@ def test_session_status_returns_target_acknowledgements_and_rejects_wrong_token(
     assert data['target'] == {'kind': 'media', 'song_id': song_id, 'rehearsal_id': None}
     assert data['parts'][0]['status'] == 'acknowledged'
     assert data['parts'][0]['etag'] == 'etag-1'
+    assert session['upload_capability_token'] not in response.get_data(as_text=True)
 
 
 def test_interrupted_or_timed_out_completion_can_resume_from_stored_acknowledgements(client, app, monkeypatch):
