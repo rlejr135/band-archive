@@ -122,6 +122,10 @@ final class IOSUploadCoordinator {
         lock.lock(); defer { lock.unlock() }
         return active.keys.filter { $0.uploadID == uploadID }.count
     }
+    func activeAttemptPaths() -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return Set(active.values.map { $0.temporaryURL.path })
+    }
     func releaseAll(uploadID: String) -> [ActivePart] {
         lock.lock(); defer { lock.unlock() }
         let matching = active.values.filter { $0.descriptor.uploadID == uploadID }
@@ -237,6 +241,8 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         recoverBackgroundTasks { [weak self] in
             guard let self else { return }
             self.pumpQueue.async {
+                // Recovery registers live system tasks before GC sees stale mappings/files.
+                try? self.store.garbageCollect(activeAttemptPaths: self.coordinator.activeAttemptPaths())
                 let tasks = (try? self.store.retainedTasks()) ?? []
                 for task in tasks where (uploadID == nil || task.uploadID == uploadID) && task.state.isRunnable { self.beginReconcile(task.uploadID) }
             }
@@ -401,10 +407,13 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         defer { drainState.endDelegateWrite() }
         guard let descriptor = MultipartPartDescriptor.parse(task.taskDescription), let finished = coordinator.finish(taskIdentifier: task.taskIdentifier, descriptor: descriptor) else { return }
         defer { try? FileManager.default.removeItem(at: finished.0.temporaryURL) }
-        guard error == nil, let response = task.response as? HTTPURLResponse, (200..<300).contains(response.statusCode), let etag = finished.1 ?? response.value(forHTTPHeaderField: "ETag")?.trimmingCharacters(in: CharacterSet(charactersIn: "\"")), let upload = try? store.task(descriptor.uploadID) else { pump(descriptor.uploadID); return }
-        let size = min(upload.partSize ?? upload.file.bytes, upload.file.bytes - Int64(descriptor.part - 1) * (upload.partSize ?? upload.file.bytes))
         guard (try? store.acquire(descriptor.uploadID, owner: owner)) == true else { stopActive(descriptor.uploadID); return }
         defer { _ = try? store.release(descriptor.uploadID, owner: owner) }
+        guard error == nil, let response = task.response as? HTTPURLResponse, (200..<300).contains(response.statusCode), let etag = finished.1 ?? response.value(forHTTPHeaderField: "ETag")?.trimmingCharacters(in: CharacterSet(charactersIn: "\"")), let upload = try? store.task(descriptor.uploadID) else {
+            _ = try? store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID, owner: owner)
+            pump(descriptor.uploadID); return
+        }
+        let size = min(upload.partSize ?? upload.file.bytes, upload.file.bytes - Int64(descriptor.part - 1) * (upload.partSize ?? upload.file.bytes))
         guard (try? store.savePendingAck(uploadID: descriptor.uploadID, part: descriptor.part, etag: etag, bytes: size, owner: owner)) == true,
               (try? store.removePartAttempt(uploadID: descriptor.uploadID, part: descriptor.part, attemptID: descriptor.attemptID, owner: owner)) == true else { stopActive(descriptor.uploadID); return }
         pump(descriptor.uploadID)
@@ -489,7 +498,7 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         let entity = ((response["result"] as? [String: Any]) ?? response); let item = (entity["media"] as? [String: Any]) ?? (entity["personal_log"] as? [String: Any]) ?? entity; let status = (item["transcoding_status"] as? String) ?? (item["status"] as? String) ?? "processing"
         task.result = String(data: try JSONSerialization.data(withJSONObject: ["id": item["id"] as Any, "status": status, "transcoding_status": status]), encoding: .utf8); task.state = status == "completed" ? .completed : (status == "failed" ? .failed : .processing); task.progress = 100; task.updatedAt = Date()
         guard try store.updateForOwner(task, owner: owner) else { stopActive(task.uploadID); return false }
-        if task.state == .processing || task.state == .completed { try? FileManager.default.removeItem(at: URL(fileURLWithPath: task.file.path)) }
+        if task.state == .processing || task.state == .completed { _ = try? store.removeSourceAfterR2Complete(task.uploadID) }
         publish(task); return true
     }
     private func stopActive(_ uploadID: String) {

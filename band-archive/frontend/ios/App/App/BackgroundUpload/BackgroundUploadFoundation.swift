@@ -283,13 +283,26 @@ final class IOSUploadStore {
     func updateForOwner(_ task: IOSUploadTask, owner: String, now: Date = Date()) throws -> Bool {
         try transaction { try update("UPDATE tasks SET session_id=?,part_size=?,state=?,progress=?,error=?,result=?,lease_expires_at=?,updated_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, stamp(now.addingTimeInterval(120)), stamp(now), task.uploadID, owner, stamp(now)]) }
     }
-    func cancel(_ id: String) throws -> Bool { try transaction { try update("UPDATE tasks SET state='cancelled',lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled')", [stamp(Date()), id]) } }
+    func cancel(_ id: String) throws -> Bool {
+        let changed = try transaction { try update("UPDATE tasks SET state='cancelled',lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled')", [stamp(Date()), id]) }
+        guard changed else { return false }
+        // Cancellation is durable before best-effort file cleanup; a later acknowledge/GC retry can finish cleanup.
+        try? cleanupArtifacts(uploadID: id, requireTerminal: true)
+        return true
+    }
     /// Media processing is no longer owned by the upload engine; UI polling may only consume its nonterminal processing row once.
     func syncProcessing(_ id: String, state: BackgroundUploadState, result: String?, error: String?, now: Date = Date()) throws -> Bool {
         guard state == .completed || state == .failed else { return false }
         return try update("UPDATE tasks SET state=?,result=COALESCE(?,result),error=COALESCE(?,error),lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state='processing'", [state.rawValue, result, error, stamp(now), id])
     }
-    func acknowledge(_ id: String) throws -> Bool { try transaction { let changed = try update("DELETE FROM tasks WHERE upload_id=? AND state IN ('completed','failed','cancelled')", [id]); if changed { try credentials.delete(uploadID: id) }; return changed } }
+    /// Terminal-only consume sequence. Files are removed first, then Keychain capability, then the task row and
+    /// its ACK/attempt children. Any earlier failure leaves the terminal row for an idempotent later retry.
+    func acknowledge(_ id: String, fileManager: FileManager = .default) throws -> Bool {
+        guard let task = try task(id), task.state.isTerminal else { return false }
+        try cleanupArtifacts(uploadID: id, requireTerminal: true, deleteMappings: false, fileManager: fileManager)
+        try credentials.delete(uploadID: id)
+        return try transaction { try update("DELETE FROM tasks WHERE upload_id=? AND state IN ('completed','failed','cancelled')", [id]) }
+    }
     func saveAck(uploadID: String, part: Int, etag: String, bytes: Int64, owner: String, now: Date = Date()) throws -> Bool { try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("INSERT OR REPLACE INTO part_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) } }
     func savePendingAck(uploadID: String, part: Int, etag: String, bytes: Int64, owner: String, now: Date = Date()) throws -> Bool { try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("INSERT OR REPLACE INTO pending_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) } }
     func pendingAcks(uploadID: String) throws -> [(Int, String, Int64)] { try query("SELECT part_number,etag,bytes FROM pending_acks WHERE upload_id=? ORDER BY part_number", [uploadID]).compactMap { row in guard let part=Int(row[0] ?? ""), let etag=row[1], let bytes=Int64(row[2] ?? "") else{return nil}; return (part,etag,bytes) } }
@@ -309,9 +322,62 @@ final class IOSUploadStore {
     func removePartAttempt(uploadID: String, part: Int, attemptID: String, owner: String, now: Date = Date()) throws -> Bool {
         try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("DELETE FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", values: [uploadID, part, attemptID]) }
     }
-    func garbageCollect(now: Date = Date(), fileManager: FileManager = .default) throws {
-        let stale = stamp(now.addingTimeInterval(-Self.retention)); let rows = try query("SELECT upload_id,path FROM tasks WHERE state IN ('completed','failed','cancelled') AND updated_at<=? AND (lease_expires_at IS NULL OR lease_expires_at<?)", [stale, stamp(now)])
-        for row in rows { guard let id=row[0], let path=row[1] else { continue }; if let file=BackgroundUploadFiles.canonicalChild(URL(fileURLWithPath: path), of: root) { try? fileManager.removeItem(at: file) }; _ = try acknowledge(id) }
+    /// Startup/foreground cleanup. Only canonical children of Application Support/background_uploads are touched.
+    /// Active URLSession attempts and unexpired leases are caller-provided exclusions; every task cleanup is isolated.
+    func garbageCollect(activeAttemptPaths: Set<String> = [], now: Date = Date(), fileManager: FileManager = .default) throws {
+        let stale = stamp(now.addingTimeInterval(-Self.retention))
+        let terminalIDs = try query("SELECT upload_id FROM tasks WHERE state IN ('completed','failed','cancelled') AND updated_at<=? AND (lease_expires_at IS NULL OR lease_expires_at<?)", [stale, stamp(now)]).compactMap { $0[0] }
+        for id in terminalIDs { _ = try? acknowledge(id, fileManager: fileManager) }
+
+        let referencedSources = Set(try query("SELECT path FROM tasks", []).compactMap { $0[0] })
+        let attempts = try allAttempts()
+        let leasedAttempts = Set(try query("SELECT p.temp_path FROM part_attempts p JOIN tasks t ON t.upload_id=p.upload_id WHERE t.lease_expires_at>=? AND t.state NOT IN ('completed','failed','cancelled')", [stamp(now)]).compactMap { $0[0] })
+        let active = activeAttemptPaths.union(leasedAttempts)
+        let referencedAttempts = Set(attempts.map(\.temporaryPath))
+        for attempt in attempts where !active.contains(attempt.temporaryPath) {
+            // A mapping without a recovered active URLSession task is stale; remove its canonical part file and row.
+            try? removeCanonical(attempt.temporaryPath, fileManager: fileManager)
+            try? execute("DELETE FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", values: [attempt.uploadID, attempt.part, attempt.attemptID])
+        }
+
+        let protected = Set(["background_upload.sqlite", "background_upload.sqlite-wal", "background_upload.sqlite-shm"])
+        let contents = (try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey], options: [.skipsHiddenFiles])) ?? []
+        for candidate in contents {
+            guard !protected.contains(candidate.lastPathComponent), let safe = BackgroundUploadFiles.canonicalChild(candidate, of: root) else { continue }
+            let path = safe.path
+            if active.contains(path) || referencedSources.contains(path) || referencedAttempts.contains(path) { continue }
+            let name = safe.lastPathComponent
+            if name.hasSuffix(".tmp") || name.hasSuffix(".part") { try? fileManager.removeItem(at: safe); continue }
+            let modified = (try? safe.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
+            if modified <= now.addingTimeInterval(-Self.retention) { try? fileManager.removeItem(at: safe) }
+        }
+    }
+    /// R2 has accepted the original once the multipart complete response enters processing/completed; keeping
+    /// the durable source after that only wastes device storage. Processing metadata itself remains for JS polling.
+    func removeSourceAfterR2Complete(_ id: String, fileManager: FileManager = .default) throws -> Bool {
+        guard let task = try task(id), task.state == .processing || task.state == .completed else { return false }
+        return try removeCanonical(task.file.path, fileManager: fileManager)
+    }
+
+    private func cleanupArtifacts(uploadID: String, requireTerminal: Bool, deleteMappings: Bool = true, fileManager: FileManager = .default) throws {
+        guard let task = try task(uploadID), !requireTerminal || task.state.isTerminal else { return }
+        _ = try removeCanonical(task.file.path, fileManager: fileManager)
+        let attempts = try allAttempts(uploadID: uploadID)
+        for attempt in attempts { _ = try removeCanonical(attempt.temporaryPath, fileManager: fileManager) }
+        if deleteMappings { try execute("DELETE FROM part_attempts WHERE upload_id=?", values: [uploadID]) }
+    }
+    private func allAttempts(uploadID: String? = nil) throws -> [IOSPartAttempt] {
+        let clause = uploadID == nil ? "1=1" : "upload_id=?"
+        let values: [Any?] = uploadID == nil ? [] : [uploadID!]
+        return try query("SELECT upload_id,part_number,attempt_id,temp_path,task_identifier FROM part_attempts WHERE \(clause)", values).compactMap { row in
+            guard let id = row[0], let part = Int(row[1] ?? ""), let attempt = row[2], let path = row[3] else { return nil }
+            return IOSPartAttempt(uploadID: id, part: part, attemptID: attempt, temporaryPath: path, taskIdentifier: Int(row[4] ?? ""))
+        }
+    }
+    @discardableResult private func removeCanonical(_ path: String, fileManager: FileManager) throws -> Bool {
+        guard let safe = BackgroundUploadFiles.canonicalChild(URL(fileURLWithPath: path), of: root) else { return false }
+        guard fileManager.fileExists(atPath: safe.path) else { return true }
+        try fileManager.removeItem(at: safe); return true
     }
 
     private func migrate() throws {

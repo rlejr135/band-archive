@@ -125,6 +125,86 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertEqual(completionCalls, 1)
     }
 
+    func testR2ProcessingAndCancelDeleteDurableSource() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        var processing = try insertTask(store: store, root: root, id: "processing", credentials: credentials)
+        XCTAssertTrue(try store.acquire(processing.uploadID, owner: "engine")); processing.state = .processing
+        XCTAssertTrue(try store.updateForOwner(processing, owner: "engine"))
+        XCTAssertTrue(try store.removeSourceAfterR2Complete(processing.uploadID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: processing.file.path))
+
+        let cancelled = try insertTask(store: store, root: root, id: "cancelled", credentials: credentials)
+        XCTAssertTrue(try store.cancel(cancelled.uploadID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.file.path))
+    }
+
+    func testRetryAndProcessingSourcesSurviveSevenDayGC() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        let base = Date(timeIntervalSince1970: 10_000)
+        var retry = try insertTask(store: store, root: root, id: "retry", credentials: credentials)
+        XCTAssertTrue(try store.acquire(retry.uploadID, owner: "engine", now: base)); retry.state = .retryWait
+        XCTAssertTrue(try store.updateForOwner(retry, owner: "engine", now: base))
+        var processing = try insertTask(store: store, root: root, id: "processing", credentials: credentials)
+        XCTAssertTrue(try store.acquire(processing.uploadID, owner: "engine", now: base)); processing.state = .processing
+        XCTAssertTrue(try store.updateForOwner(processing, owner: "engine", now: base))
+        try store.garbageCollect(now: base.addingTimeInterval(8 * 24 * 60 * 60))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retry.file.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: processing.file.path))
+    }
+
+    func testGCExcludesActiveAttemptAndCleansOrphanTempAndTraversalSafely() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        let task = try insertTask(store: store, root: root, id: "active", credentials: credentials)
+        let activePart = root.appendingPathComponent("active.part"); try Data([1]).write(to: activePart)
+        XCTAssertTrue(try store.acquire(task.uploadID, owner: "engine"))
+        XCTAssertTrue(try store.savePartAttempt(IOSPartAttempt(uploadID: task.uploadID, part: 1, attemptID: UUID().uuidString, temporaryPath: activePart.path, taskIdentifier: 1), owner: "engine"))
+        let temporary = root.appendingPathComponent("orphan.tmp"); let stalePart = root.appendingPathComponent("orphan.part"); let orphan = root.appendingPathComponent("orphan")
+        try Data([1]).write(to: temporary); try Data([1]).write(to: stalePart); try Data([1]).write(to: orphan)
+        let old = Date(timeIntervalSince1970: 10_000); try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: orphan.path)
+        let outside = root.deletingLastPathComponent().appendingPathComponent("outside-retention-test")
+        try Data([1]).write(to: outside); defer { try? FileManager.default.removeItem(at: outside) }
+        try store.garbageCollect(activeAttemptPaths: [activePart.path], now: old.addingTimeInterval(8 * 24 * 60 * 60))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activePart.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stalePart.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+    }
+
+    func testAcknowledgeGuardsNonterminalAndCanRerunAfterPartialCleanupFailure() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        let retry = try insertTask(store: store, root: root, id: "retry", credentials: credentials)
+        XCTAssertFalse(try store.acknowledge(retry.uploadID))
+
+        var terminal = try insertTask(store: store, root: root, id: "terminal", credentials: credentials)
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: terminal.file.path)); try FileManager.default.createDirectory(at: URL(fileURLWithPath: terminal.file.path), withIntermediateDirectories: true)
+        let blocker = URL(fileURLWithPath: terminal.file.path).appendingPathComponent("blocker"); try Data([1]).write(to: blocker)
+        XCTAssertTrue(try store.acquire(terminal.uploadID, owner: "engine")); terminal.state = .failed
+        XCTAssertTrue(try store.updateForOwner(terminal, owner: "engine"))
+        XCTAssertThrowsError(try store.acknowledge(terminal.uploadID))
+        XCTAssertNotNil(try store.task(terminal.uploadID))
+        try FileManager.default.removeItem(at: blocker)
+        XCTAssertTrue(try store.acknowledge(terminal.uploadID))
+        XCTAssertNil(try store.task(terminal.uploadID))
+        XCTAssertNil(try credentials.read(uploadID: terminal.uploadID))
+    }
+
+    func testTerminalFailedTaskIsCollectedAfterSevenDays() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        let base = Date(timeIntervalSince1970: 10_000)
+        var task = try insertTask(store: store, root: root, id: "failed", credentials: credentials)
+        XCTAssertTrue(try store.acquire(task.uploadID, owner: "engine", now: base)); task.state = .failed
+        XCTAssertTrue(try store.updateForOwner(task, owner: "engine", now: base))
+        try store.garbageCollect(now: base.addingTimeInterval(8 * 24 * 60 * 60))
+        XCTAssertNil(try store.task(task.uploadID))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: task.file.path))
+    }
+
     private func makeStoreTask() throws -> (IOSUploadStore, IOSUploadTask) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -134,6 +214,12 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let task = IOSUploadTask(uploadID: id, workID: try store.allocateWorkID(), createdAt: Date(), file: DurableUploadFile(uploadID: id, path: path.path, filename: "video.mp4", contentType: "video/mp4", bytes: 1, sha256: "x"), api: "https://example.invalid", targetKind: "member_id", targetID: "1", sessionID: "session", partSize: 1, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
         try store.insert(task, capability: "secret")
         return (store, task)
+    }
+    private func testRoot() throws -> URL { let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); return root }
+    private func insertTask(store: IOSUploadStore, root: URL, id: String, credentials: FakeCredentials) throws -> IOSUploadTask {
+        let path = root.appendingPathComponent(id); try Data([1]).write(to: path)
+        let task = IOSUploadTask(uploadID: id, workID: try store.allocateWorkID(), createdAt: Date(), file: DurableUploadFile(uploadID: id, path: path.path, filename: "video.mp4", contentType: "video/mp4", bytes: 1, sha256: "x"), api: "https://example.invalid", targetKind: "member_id", targetID: "1", sessionID: "session", partSize: 1, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
+        try store.insert(task, capability: "secret"); return task
     }
 }
 
