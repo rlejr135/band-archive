@@ -216,6 +216,17 @@ struct IOSUploadTask: Codable, Equatable {
     var error: String?; var result: String?; var leaseOwner: String?; var leaseExpiresAt: Date?; var updatedAt: Date
 }
 
+/// A durable association between an opaque background URLSession task and its
+/// one-use on-disk part file. Presigned URLs and capabilities are deliberately
+/// not persisted here.
+struct IOSPartAttempt: Equatable {
+    let uploadID: String
+    let part: Int
+    let attemptID: String
+    let temporaryPath: String
+    let taskIdentifier: Int?
+}
+
 final class IOSUploadStore {
     private var db: OpaquePointer?
     private let root: URL
@@ -255,6 +266,17 @@ final class IOSUploadStore {
         let values = try query("SELECT part_number FROM part_acks WHERE upload_id=?", [uploadID]).compactMap { Int($0[0] ?? "") }
         return Set(values)
     }
+    func savePartAttempt(_ attempt: IOSPartAttempt) throws {
+        try execute("INSERT OR REPLACE INTO part_attempts(upload_id,part_number,attempt_id,temp_path,task_identifier,created_at) VALUES(?,?,?,?,?,?)", values: [attempt.uploadID, attempt.part, attempt.attemptID, attempt.temporaryPath, attempt.taskIdentifier, stamp(Date())])
+    }
+    func partAttempt(uploadID: String, part: Int, attemptID: String) throws -> IOSPartAttempt? {
+        guard let row = try query("SELECT upload_id,part_number,attempt_id,temp_path,task_identifier FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", [uploadID, part, attemptID]).first,
+              let storedID = row[0], let storedPart = Int(row[1] ?? ""), let storedAttempt = row[2], let path = row[3] else { return nil }
+        return IOSPartAttempt(uploadID: storedID, part: storedPart, attemptID: storedAttempt, temporaryPath: path, taskIdentifier: Int(row[4] ?? ""))
+    }
+    func removePartAttempt(uploadID: String, part: Int, attemptID: String) throws {
+        try execute("DELETE FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", values: [uploadID, part, attemptID])
+    }
     func garbageCollect(now: Date = Date(), fileManager: FileManager = .default) throws {
         let stale = stamp(now.addingTimeInterval(-Self.retention)); let rows = try query("SELECT upload_id,path FROM tasks WHERE state IN ('completed','failed','cancelled') AND updated_at<=? AND (lease_expires_at IS NULL OR lease_expires_at<?)", [stale, stamp(now)])
         for row in rows { guard let id=row[0], let path=row[1] else { continue }; if let file=BackgroundUploadFiles.canonicalChild(URL(fileURLWithPath: path), of: root) { try? fileManager.removeItem(at: file) }; _ = try acknowledge(id) }
@@ -264,6 +286,7 @@ final class IOSUploadStore {
         let version = Int(try query("PRAGMA user_version", []).first?.first ?? "0") ?? 0
         if version < 1 { try transaction { try execute("CREATE TABLE IF NOT EXISTS tasks(upload_id TEXT PRIMARY KEY,work_id INTEGER NOT NULL UNIQUE CHECK(work_id>0),created_at REAL NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,bytes INTEGER NOT NULL,type TEXT NOT NULL,hash TEXT NOT NULL,api TEXT NOT NULL,target_kind TEXT NOT NULL,target_id TEXT NOT NULL,session_id TEXT,part_size INTEGER,state TEXT NOT NULL,progress INTEGER NOT NULL,error TEXT,result TEXT,lease_owner TEXT,lease_expires_at REAL,updated_at REAL NOT NULL)"); try execute("CREATE TABLE IF NOT EXISTS part_acks(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,etag TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(upload_id,part_number))"); try execute("PRAGMA user_version=1") } }
         if version < 2 { try transaction { try execute("CREATE TABLE IF NOT EXISTS pending_acks(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,etag TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(upload_id,part_number))"); try execute("PRAGMA user_version=2") } }
+        if version < 3 { try transaction { try execute("CREATE TABLE IF NOT EXISTS part_attempts(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,attempt_id TEXT NOT NULL,temp_path TEXT NOT NULL,task_identifier INTEGER,created_at REAL NOT NULL,PRIMARY KEY(upload_id,part_number,attempt_id))"); try execute("PRAGMA user_version=3") } }
     }
     private func tasks(where clause: String, values: [Any?]) throws -> [IOSUploadTask] {
         try query("SELECT upload_id,work_id,created_at,path,name,bytes,type,hash,api,target_kind,target_id,session_id,part_size,state,progress,error,result,lease_owner,lease_expires_at,updated_at FROM tasks WHERE \(clause) ORDER BY created_at", values).compactMap { row in
