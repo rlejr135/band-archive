@@ -11,7 +11,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [uploadingFor, setUploadingFor] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const { upload } = useMediaUpload();
+  const { upload, transport } = useMediaUpload();
 
   const dateStr = date.toLocaleDateString('ko-KR', {
     year: 'numeric',
@@ -28,7 +28,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         if (r.media_count > 0) {
           try {
             newMap[r.id] = await fetchRehearsalMedia(r.id);
-          } catch (e) {
+          } catch {
             newMap[r.id] = [];
           }
         }
@@ -48,8 +48,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     }
   };
 
-  const handleFilesSelected = (e) => {
-    const files = Array.from(e.target.files);
+  const addPendingFiles = (files) => {
     if (files.length === 0) return;
     setPendingFiles(prev => [
       ...prev,
@@ -60,6 +59,18 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         status: 'pending',
       })),
     ]);
+  };
+
+  const handleFilesSelected = (e) => addPendingFiles(Array.from(e.target.files));
+  const handleNativePicker = async (e) => {
+    if (transport.kind !== 'native') return;
+    e.preventDefault();
+    try {
+      const selected = await transport.pickFiles({ multiple: true });
+      addPendingFiles(selected?.files || []);
+    } catch (error) {
+      setPendingFiles(prev => [...prev, { file: { name: '파일 선택' }, songId: '', progress: 0, status: 'failed', error: error.message }]);
+    }
   };
 
   const updatePendingFile = (index, key, value) => {
@@ -85,7 +96,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         ));
 
         try {
-          await upload({ key: `rehearsal-${rehearsalId}-${i}-${item.file.lastModified}`, file: item.file, songId: item.songId, rehearsalId,
+          await upload({ key: `rehearsal-${rehearsalId}-${i}-${item.file.id || item.file.lastModified}`, file: item.file, songId: item.songId, rehearsalId,
             onProgress: (loaded, total) => {
             setPendingFiles(prev => prev.map((f, idx) =>
               idx === i ? { ...f, status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } : f
@@ -96,7 +107,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
           setPendingFiles(prev => prev.map((f, idx) =>
             idx === i ? { ...f, status: 'completed', progress: 100 } : f
           ));
-        } catch (err) {
+        } catch {
           hasError = true;
           setPendingFiles(prev => prev.map((f, idx) =>
             idx === i ? { ...f, status: 'error' } : f
@@ -251,6 +262,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       multiple
                       accept="audio/*,video/*,image/*,.pdf,.mp3,.wav,.m4a,.mp4,.mov"
                       className="rd-file-input"
+                      onClick={handleNativePicker}
                       onChange={handleFilesSelected}
                     />
 

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useId } from 'react';
+import React, { useState, useCallback, useId, useEffect } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
 import './FileUpload.css';
 
@@ -13,8 +13,13 @@ const FileUpload = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
-  const { upload, cancel } = useMediaUpload();
+  const { upload, cancel, transport, nativePending } = useMediaUpload();
   const inputId = useId();
+
+  useEffect(() => {
+    nativePending.filter((item) => (memberId ? item.target?.member_id === Number(memberId) : item.target?.song_id === Number(songId)))
+      .forEach((item) => setUploadProgress((previous) => ({ ...previous, [item.id]: { name: item.name || '업로드 파일', progress: item.progress || 0, status: item.state, error: item.error } })));
+  }, [memberId, nativePending, songId]);
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
@@ -36,7 +41,7 @@ const FileUpload = ({
   const handleFiles = useCallback(async (files) => {
     for (const file of files) {
       const uniqueId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-      const fileId = `${file.name}-${file.lastModified}-${uniqueId}`;
+      const fileId = file.id || `${file.name}-${file.lastModified}-${uniqueId}`;
       setUploadProgress(prev => ({ ...prev, [fileId]: { name: file.name, progress: 0, status: 'preparing' } }));
 
       try {
@@ -69,6 +74,21 @@ const FileUpload = ({
     e.target.value = '';
   };
 
+  const chooseFiles = useCallback(async () => {
+    if (transport.kind === 'native' && !onUpload) {
+      try {
+        await transport.requestNotificationPermission?.();
+        const selected = await transport.pickFiles({ multiple });
+        if (selected?.files?.length) handleFiles(selected.files);
+      } catch (error) {
+        const fileId = `picker-${Date.now()}`;
+        setUploadProgress(prev => ({ ...prev, [fileId]: { name: '파일 선택', progress: 0, status: 'failed', error: error.message } }));
+      }
+      return;
+    }
+    document.getElementById(inputId).click();
+  }, [handleFiles, inputId, multiple, onUpload, transport]);
+
   const hasActiveUploads = Object.keys(uploadProgress).length > 0;
 
   return (
@@ -79,10 +99,10 @@ const FileUpload = ({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => document.getElementById(inputId).click()}
+        onClick={chooseFiles}
         role="button"
         tabIndex="0"
-        onKeyDown={(e) => e.key === 'Enter' && document.getElementById(inputId).click()}
+        onKeyDown={(e) => e.key === 'Enter' && chooseFiles()}
       >
         <div className="drop-zone-content">
           <div className="upload-icon">📁</div>

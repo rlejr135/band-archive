@@ -5,8 +5,6 @@ export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
 const MAX_PART_RETRIES = 3;
 const webTransport = createWebUploadTransport({ apiUrl: API_URL });
-// No Capacitor dependency is installed yet. This remains web unless a later
-// scaffold supplies a compatible plugin explicitly.
 export const getUploadTransport = () => resolveUploadTransport({ apiUrl: API_URL });
 
 // Processing endpoints return { status, error, audio_url, ... }, while regular
@@ -62,6 +60,10 @@ export const createUploadTarget = ({ songId, rehearsalId, memberId, title }) => 
     rehearsalId: normalizePositiveInteger(rehearsalId, '합주 ID', { optional: true }),
   };
 };
+
+export const nativeTargetPayload = (target) => target.kind === 'personal_log'
+  ? { member_id: target.memberId, title: target.title }
+  : { song_id: target.songId, rehearsal_id: target.rehearsalId };
 
 const targetPayload = (target, file, filename) => target.kind === 'personal_log'
   ? { filename, original_filename: file.name, file_size: file.size, member_id: target.memberId, title: personalTitle(file, target.title) }

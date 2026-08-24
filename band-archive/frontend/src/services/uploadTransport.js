@@ -71,14 +71,37 @@ export const createWebUploadTransport = ({ apiUrl, fetchImpl = fetch, xhrFactory
   };
 };
 
-// Capacitor scaffold: a future native plugin should provide enqueue(), cancel(),
-// listPending(), addListener(), and the same multipart capability/ACK semantics.
-export const resolveUploadTransport = ({ apiUrl, nativePlugin } = {}) => {
-  const web = createWebUploadTransport({ apiUrl });
-  if (!nativePlugin || typeof nativePlugin.enqueue !== 'function') return web;
+const BackgroundUpload = registerPlugin('BackgroundUpload');
+
+export const getNativeBackgroundUploadTransport = () => {
+  // registerPlugin returns a proxy even in a browser, so platform detection must
+  // precede it. This avoids claiming background support where no native plugin exists.
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return null;
   return {
-    ...nativePlugin,
     kind: 'native',
-    supportsBackground: Boolean(nativePlugin.supportsBackground),
+    supportsBackground: true,
+    pickFiles: (options) => BackgroundUpload.pickFiles(options),
+    requestNotificationPermission: () => BackgroundUpload.requestNotificationPermission(),
+    enqueue: (options) => BackgroundUpload.enqueue(options),
+    resume: (options = {}) => BackgroundUpload.resume(options),
+    cancel: (options) => BackgroundUpload.cancel(options),
+    acknowledge: (options) => BackgroundUpload.acknowledge(options),
+    listPending: () => BackgroundUpload.listPending(),
+    addListener: async (event, listener) => {
+      const handle = await BackgroundUpload.addListener(event, listener);
+      return () => handle.remove();
+    },
   };
 };
+
+export const resolveUploadTransport = ({ apiUrl, nativePlugin } = {}) => {
+  const web = createWebUploadTransport({ apiUrl });
+  const native = nativePlugin || getNativeBackgroundUploadTransport();
+  if (!native || typeof native.enqueue !== 'function') return web;
+  return {
+    ...native,
+    kind: 'native',
+    supportsBackground: Boolean(native.supportsBackground),
+  };
+};
+import { Capacitor, registerPlugin } from '@capacitor/core';
