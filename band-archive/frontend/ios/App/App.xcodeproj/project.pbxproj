@@ -22,6 +22,8 @@
 		AA200000000000000000000002 /* IOSMultipartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200000000000000000000001 /* IOSMultipartEngine.swift */; };
 		AA200000000000000000000004 /* BackgroundUploadPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200000000000000000000003 /* BackgroundUploadPlugin.swift */; };
 		AA200000000000000000000006 /* IOSMultipartEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200000000000000000000005 /* IOSMultipartEngineTests.swift */; };
+		AA300000000000000000000002 /* BackgroundUploadNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA300000000000000000000001 /* BackgroundUploadNotifications.swift */; };
+		AA300000000000000000000004 /* IOSLifecycleNotificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA300000000000000000000003 /* IOSLifecycleNotificationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -53,6 +55,8 @@
 		AA200000000000000000000001 /* IOSMultipartEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMultipartEngine.swift; sourceTree = "<group>"; };
 		AA200000000000000000000003 /* BackgroundUploadPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadPlugin.swift; sourceTree = "<group>"; };
 		AA200000000000000000000005 /* IOSMultipartEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMultipartEngineTests.swift; sourceTree = "<group>"; };
+		AA300000000000000000000001 /* BackgroundUploadNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadNotifications.swift; sourceTree = "<group>"; };
+		AA300000000000000000000003 /* IOSLifecycleNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSLifecycleNotificationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -112,13 +116,13 @@
 		};
 		AA100000000000000000000016 /* BackgroundUpload */ = {
 			isa = PBXGroup;
-			children = (AA100000000000000000000001 /* BackgroundUploadFoundation.swift */, AA200000000000000000000001 /* IOSMultipartEngine.swift */, AA200000000000000000000003 /* BackgroundUploadPlugin.swift */,);
+			children = (AA100000000000000000000001 /* BackgroundUploadFoundation.swift */, AA200000000000000000000001 /* IOSMultipartEngine.swift */, AA200000000000000000000003 /* BackgroundUploadPlugin.swift */, AA300000000000000000000001 /* BackgroundUploadNotifications.swift */,);
 			path = BackgroundUpload;
 			sourceTree = "<group>";
 		};
 		AA100000000000000000000017 /* AppTests */ = {
 			isa = PBXGroup;
-			children = (AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */, AA200000000000000000000005 /* IOSMultipartEngineTests.swift */,);
+			children = (AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */, AA200000000000000000000005 /* IOSMultipartEngineTests.swift */, AA300000000000000000000003 /* IOSLifecycleNotificationTests.swift */,);
 			path = AppTests;
 			sourceTree = "<group>";
 		};
@@ -220,6 +224,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA300000000000000000000002 /* BackgroundUploadNotifications.swift in Sources */,
 				AA200000000000000000000002 /* IOSMultipartEngine.swift in Sources */,
 				AA200000000000000000000004 /* BackgroundUploadPlugin.swift in Sources */,
 				AA100000000000000000000002 /* BackgroundUploadFoundation.swift in Sources */,
@@ -231,7 +236,7 @@
 		AA100000000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (AA100000000000000000000004 /* BackgroundUploadFoundationTests.swift in Sources */, AA200000000000000000000006 /* IOSMultipartEngineTests.swift in Sources */,);
+			files = (AA100000000000000000000004 /* BackgroundUploadFoundationTests.swift in Sources */, AA200000000000000000000006 /* IOSMultipartEngineTests.swift in Sources */, AA300000000000000000000004 /* IOSLifecycleNotificationTests.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA100000000000000000000010 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };

@@ -21,4 +21,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
         SceneDelegateProxy.shared.scene(scene, continue: userActivity)
     }
+
+    func sceneWillEnterForeground(_ scene: UIScene) { IOSMultipartEngine.shared.pump() }
+    func sceneDidBecomeActive(_ scene: UIScene) { IOSMultipartEngine.shared.pump() }
 }

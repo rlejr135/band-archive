@@ -14,6 +14,7 @@ final class URLSessionMultipartHTTPClient: MultipartHTTPClient {
 
 /// Shared background-session multipart executor. It stores no credentials or presigned URLs in SQLite/task descriptions.
 final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionDataDelegate {
+    static let backgroundSessionIdentifier = "com.deutteun.archive.background-upload.v1"
     static let shared = IOSMultipartEngine()
     private let owner = UUID().uuidString
     private let store: IOSUploadStore
@@ -24,12 +25,14 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     private var active: Set<String> = []
     private var session: URLSession!
     var event: ((IOSUploadTask) -> Void)?
+    private let lifecycleLock = NSLock()
+    private var backgroundCompletions: [() -> Void] = []
 
     override convenience init() { try! self.init(store: IOSUploadStore(), credentials: KeychainUploadCredentialStore(), client: URLSessionMultipartHTTPClient()) }
     init(store: IOSUploadStore, credentials: UploadCredentialStoring, client: MultipartHTTPClient) throws {
         self.store = store; self.credentials = credentials; self.client = client
         super.init()
-        let configuration = URLSessionConfiguration.background(withIdentifier: "com.deutteun.archive.background-upload.v1")
+        let configuration = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
         configuration.sessionSendsLaunchEvents = true
         configuration.isDiscretionary = false
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
@@ -105,10 +108,21 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         guard error == nil, let response=task.response as? HTTPURLResponse, (200..<300).contains(response.statusCode), let etag=etags.removeValue(forKey:task.taskIdentifier), let upload=try? store.task(parts[0]) else { pump(parts[0]); return }
         let size = min(upload.partSize ?? upload.file.bytes, upload.file.bytes - Int64(part - 1) * (upload.partSize ?? upload.file.bytes)); try? store.savePendingAck(uploadID:parts[0],part:part,etag:etag,bytes:size); pump(parts[0])
     }
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        // Reconcile durable ACK/complete work before returning iOS's background-session completion handlers.
+        pump()
+        lifecycleLock.lock(); let completions = backgroundCompletions; backgroundCompletions.removeAll(); lifecycleLock.unlock()
+        DispatchQueue.main.async { completions.forEach { $0() } }
+    }
+    /// Returns false for unknown sessions so AppDelegate can safely leave other SDK handlers untouched.
+    func attachBackgroundEvents(identifier: String, completion: @escaping () -> Void) -> Bool {
+        guard identifier == Self.backgroundSessionIdentifier else { return false }
+        lifecycleLock.lock(); backgroundCompletions.append(completion); lifecycleLock.unlock(); pump(); return true
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) { guard let description=task.taskDescription else{return}; let pieces=description.split(separator:"|",maxSplits:1).map(String.init); guard pieces.count==2, let part=Int(pieces[1]), var upload=try? store.task(pieces[0]) else{return}; let sent=Int64(part-1)*(upload.partSize ?? upload.file.bytes)+totalBytesSent; upload.progress=max(upload.progress,min(99,Int(sent*100/max(1,upload.file.bytes)))); upload.state = .uploading; upload.updatedAt=Date(); try? store.updateLocal(upload); publish(upload) }
 
     func cancel(_ id: String) { session.getAllTasks { tasks in tasks.filter{$0.taskDescription?.hasPrefix(id + "|") == true}.forEach{$0.cancel()} }; if let task=try? store.task(id), let sessionID=task.sessionID, let capability=try? credentials.read(uploadID:id), let capability { Task { _=try? await self.request(task.api+"/uploads/multipart/\(sessionID)/abort",method:"POST",body:[:],capability:capability) } }; _=try? store.cancel(id); if let task=try? store.task(id){publish(task)} }
-    func acknowledge(_ id: String) -> Bool { (try? store.acknowledge(id)) ?? false }
+    func acknowledge(_ id: String) -> Bool { guard let task = try? store.task(id) else { return false }; BackgroundUploadNotifier.shared.clear(task); return (try? store.acknowledge(id)) ?? false }
     func retry(_ id: String) -> Bool { guard let task = try? store.task(id), task.state == .retryWait, !active.contains(where: { $0.hasPrefix(id + "|") }) else { return false }; pump(id); return true }
     func syncProcessing(_ id: String, state: BackgroundUploadState, result: String?, error: String?) -> Bool {
         guard state == .completed || state == .failed, var task = try? store.task(id), task.state == .processing else { return false }
@@ -117,6 +131,6 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
 
     private func request(_ path:String, method:String, body:[String:Any]?, capability:String?) async throws -> [String:Any] { guard let url=URL(string:path) else {throw URLError(.badURL)}; var request=URLRequest(url:url); request.httpMethod=method; if let capability {request.setValue(capability,forHTTPHeaderField:"X-Upload-Capability")}; if let body {request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try JSONSerialization.data(withJSONObject:body)}; return try await client.json(request) }
     private func finish(_ task: inout IOSUploadTask,response:[String:Any]) throws { let entity=((response["result"] as? [String:Any]) ?? response); let item=(entity["media"] as? [String:Any]) ?? (entity["personal_log"] as? [String:Any]) ?? entity; let status=(item["transcoding_status"] as? String) ?? (item["status"] as? String) ?? "processing"; task.result=String(data:try JSONSerialization.data(withJSONObject:["id":item["id"] as Any,"status":status,"transcoding_status":status]),encoding:.utf8); task.state=status=="completed" ? .completed : (status=="failed" ? .failed : .processing); task.progress=100;task.updatedAt=Date();try store.updateLocal(task);if task.state == .processing || task.state == .completed {try? FileManager.default.removeItem(at:URL(fileURLWithPath:task.file.path))};publish(task) }
-    private func publish(_ task:IOSUploadTask){event?(task)}
+    private func publish(_ task:IOSUploadTask){ event?(task); BackgroundUploadNotifier.shared.publishIfNeeded(task) }
     private func hasActive(_ value:String)->Bool{active.contains(value)}
 }

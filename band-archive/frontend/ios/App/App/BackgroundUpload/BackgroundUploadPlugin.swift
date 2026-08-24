@@ -16,7 +16,7 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
 
     public override func load() { engine.event = { [weak self] task in self?.notifyListeners("state", data: Self.json(task), retainUntilConsumed: true) }; engine.pump() }
 
-    @objc func requestNotificationPermission(_ call: CAPPluginCall) { call.resolve(["granted":true,"backgroundLimited":false]) }
+    @objc func requestNotificationPermission(_ call: CAPPluginCall) { BackgroundUploadNotifier.shared.requestPermission { granted in call.resolve(["granted":granted,"backgroundLimited":!granted,"message":granted ? "" : "Notifications are off; background completion alerts will be unavailable.","forceQuitStopsTransfers":true]) } }
 
     @objc func pickFiles(_ call: CAPPluginCall) {
         guard let controller = bridge?.viewController else { call.reject("Picker is unavailable"); return }
@@ -45,7 +45,7 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func delete(_ call: CAPPluginCall) { terminalDelete(call) }
     @objc func syncProcessingStatus(_ call: CAPPluginCall) { guard let id=call.getString("id"), let state=call.getString("state"), let next=BackgroundUploadState(rawValue:state), next == .completed || next == .failed else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.syncProcessing(id,state:next,result:call.getString("result"),error:call.getString("error"))]) }
     @objc func updateProcessing(_ call: CAPPluginCall) { syncProcessingStatus(call) }
-    @objc func listPending(_ call: CAPPluginCall) { let tasks=(try? IOSUploadStore().retainedTasks()) ?? []; call.resolve(["items":tasks.map(Self.json),"supportsBackground":true]) }
+    @objc func listPending(_ call: CAPPluginCall) { let tasks=(try? IOSUploadStore().retainedTasks()) ?? []; call.resolve(["items":tasks.map(Self.json),"supportsBackground":true,"forceQuitStopsTransfers":true,"backgroundNotice":"Force-quitting the app cancels iOS background transfers; reopen and retry when needed."]) }
     private func terminalDelete(_ call:CAPPluginCall){guard let id=call.getString("id")else{call.resolve(["changed":false]);return};call.resolve(["changed":engine.acknowledge(id)])}
     private static func json(_ task:IOSUploadTask)->[String:Any]{ let target: [String:Any] = task.targetKind == "media" ? ((try? JSONSerialization.jsonObject(with: Data(task.targetID.utf8))) as? [String:Any] ?? [:]) : [task.targetKind:task.targetID]; return ["id":task.uploadID,"workId":task.workID,"uri":URL(fileURLWithPath:task.file.path).absoluteString,"name":task.file.filename,"mimeType":task.file.contentType,"size":task.file.bytes,"fingerprint":task.file.sha256,"apiUrl":task.api,"target":target,"state":task.state.rawValue,"progress":task.progress,"error":task.error as Any,"result":task.result as Any] }
     private func positiveWorkID(_ text:String)->Int64{max(1,Int64(UInt32(bitPattern:Int32(truncatingIfNeeded:text.hashValue))))}
