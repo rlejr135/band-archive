@@ -33,4 +33,16 @@ public class UploadProtocolTest {
     assertEquals(2,UploadWorkIds.preserveOrAllocate(0,used));
     assertEquals(3,UploadWorkIds.preserveOrAllocate(null,used));
   }
+  @Test public void leasePolicyRejectsOwnerMismatchAndTerminalOverwrite() {
+    assertTrue(UploadLeasePolicy.canEngineWrite("uploading","owner-a","owner-a"));
+    assertFalse(UploadLeasePolicy.canEngineWrite("uploading","owner-a","owner-b"));
+    assertFalse(UploadLeasePolicy.canEngineWrite("completed","owner-a","owner-a"));
+    assertFalse(UploadLeasePolicy.canEngineWrite("failed","owner-a","owner-a"));
+  }
+  @Test public void cancelRaceRejectsTheEngineWriteAfterLeaseWasCleared() {
+    // This mirrors the SQL predicate after cancel's one-transaction state+lease update.
+    assertFalse(UploadLeasePolicy.canEngineWrite("cancelled",null,"owner-a"));
+    assertTrue(UploadLeasePolicy.isNonterminal("processing"));
+    assertFalse(UploadLeasePolicy.isNonterminal("cancelled"));
+  }
 }
