@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import App
 
@@ -31,5 +32,30 @@ final class IOSLifecycleNotificationTests: XCTestCase {
 
     func testUnknownBackgroundSessionIsNotClaimed() {
         XCTAssertFalse(IOSMultipartEngine.shared?.attachBackgroundEvents(identifier: "other.sdk.session") {} ?? false)
+    }
+
+    func testDrainWaitsForDurableDelegateBarrierAndDrainsMultipleHandoffsOnce() {
+        XCTAssertGreaterThan(BackgroundEventDrainPolicy.networkBudget, 0)
+        XCTAssertLessThanOrEqual(BackgroundEventDrainPolicy.networkBudget, 5)
+        let state = BackgroundEventDrainState()
+        var calls = 0
+        state.append { calls += 1 }; state.append { calls += 1 }
+        state.beginDelegateWrite()
+        XCTAssertTrue(state.beginDrain())
+        let beforeCommit = state.snapshot()
+        XCTAssertNil(state.finishIfStable(revision: beforeCommit.revision))
+        // Production didCompleteWithError stores pending ACK before ending this barrier.
+        state.endDelegateWrite()
+        let committed = state.snapshot()
+        let handlers = state.finishIfStable(revision: committed.revision)
+        handlers?.forEach { $0() }
+        XCTAssertEqual(calls, 2)
+        XCTAssertNil(state.finishIfStable(revision: committed.revision))
+    }
+
+    func testKeychainReadPolicyKeepsLockedDeviceRetryable() {
+        XCTAssertEqual(UploadCredentialPolicy.readError(for: errSecItemNotFound), .lost)
+        XCTAssertEqual(UploadCredentialPolicy.readError(for: errSecInteractionNotAllowed), .unavailable)
+        XCTAssertEqual(UploadCredentialPolicy.readError(for: errSecNotAvailable), .unavailable)
     }
 }

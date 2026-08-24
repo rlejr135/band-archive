@@ -113,6 +113,18 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertEqual(try store.allocateWorkID(), 42)
     }
 
+    func testPendingAckIsDurableBeforeBackgroundDrainCompletion() throws {
+        let (store, task) = try makeStoreTask()
+        XCTAssertTrue(try store.acquire(task.uploadID, owner: "engine"))
+        let drain = BackgroundEventDrainState(); var completionCalls = 0
+        drain.append { completionCalls += 1 }; drain.beginDelegateWrite(); XCTAssertTrue(drain.beginDrain())
+        XCTAssertTrue(try store.savePendingAck(uploadID: task.uploadID, part: 1, etag: "etag", bytes: 1, owner: "engine"))
+        drain.endDelegateWrite()
+        let stable = drain.snapshot(); drain.finishIfStable(revision: stable.revision)?.forEach { $0() }
+        XCTAssertEqual(try store.pendingAcks(uploadID: task.uploadID).count, 1)
+        XCTAssertEqual(completionCalls, 1)
+    }
+
     private func makeStoreTask() throws -> (IOSUploadStore, IOSUploadTask) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

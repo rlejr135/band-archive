@@ -29,7 +29,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
-        guard let engine = IOSMultipartEngine.shared, engine.attachBackgroundEvents(identifier: identifier, completion: completionHandler) else { completionHandler(); return }
+        guard let engine = IOSMultipartEngine.shared, engine.attachBackgroundEvents(identifier: identifier, completion: completionHandler) else { DispatchQueue.main.async(execute: completionHandler); return }
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

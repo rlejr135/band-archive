@@ -131,6 +131,37 @@ final class IOSUploadCoordinator {
         }
         return matching
     }
+    func hasReconciling() -> Bool { lock.lock(); defer { lock.unlock() }; return !reconciling.isEmpty }
+}
+
+/// Coordinates iOS's background-session completion handoff with synchronous
+/// delegate-to-SQLite commits. Network reconciliation is deliberately bounded;
+/// pending ACK/complete intent remains durable for the next foreground pump.
+final class BackgroundEventDrainState {
+    private let lock = NSLock()
+    private var handlers: [() -> Void] = []
+    private var delegateWrites = 0
+    private var revision = 0
+    private var draining = false
+    private var finishObserved = false
+
+    /// Returns true when URLSession's finish callback raced ahead of AppDelegate's handoff.
+    func append(_ handler: @escaping () -> Void) -> Bool { lock.lock(); defer { lock.unlock() }; handlers.append(handler); return finishObserved }
+    func markFinishObserved() { lock.lock(); finishObserved = true; lock.unlock() }
+    func beginDelegateWrite() { lock.lock(); delegateWrites += 1; revision += 1; lock.unlock() }
+    func endDelegateWrite() { lock.lock(); delegateWrites = max(0, delegateWrites - 1); revision += 1; lock.unlock() }
+    func beginDrain() -> Bool { lock.lock(); defer { lock.unlock() }; guard !draining, !handlers.isEmpty else { return false }; draining = true; return true }
+    func snapshot() -> (writes: Int, revision: Int) { lock.lock(); defer { lock.unlock() }; return (delegateWrites, revision) }
+    func finishIfStable(revision expected: Int) -> [() -> Void]? {
+        lock.lock(); defer { lock.unlock() }
+        guard draining, delegateWrites == 0, revision == expected else { return nil }
+        draining = false; let result = handlers; handlers.removeAll(); return result
+    }
+}
+
+enum BackgroundEventDrainPolicy {
+    /// Network work is opportunistic during an iOS wake; durable DB intent is the correctness boundary.
+    static let networkBudget: TimeInterval = 2
 }
 
 private final class LeaseHeartbeat {
@@ -175,10 +206,9 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     private let client: MultipartHTTPClient
     private let pumpQueue = DispatchQueue(label: "com.deutteun.archive.background-upload.pump")
     private let coordinator = IOSUploadCoordinator()
+    private let drainState = BackgroundEventDrainState()
     private var session: URLSession!
     var event: ((IOSUploadTask) -> Void)?
-    private let lifecycleLock = NSLock()
-    private var backgroundCompletions: [() -> Void] = []
 
     init(store: IOSUploadStore, credentials: UploadCredentialStoring, client: MultipartHTTPClient) throws {
         self.store = store; self.credentials = credentials; self.client = client
@@ -242,7 +272,7 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
             if (try? store.updateForOwner(task, owner: owner)) == true { publish(task) } else { stopActive(id) }
             return
         } catch {
-            task.state = .retryWait; task.error = "credential_unavailable"; task.updatedAt = Date()
+            task.state = .retryWait; task.error = "keychain_unavailable"; task.updatedAt = Date()
             if (try? store.updateForOwner(task, owner: owner)) == true { publish(task) } else { stopActive(id) }
             return
         }
@@ -361,10 +391,14 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        drainState.beginDelegateWrite()
+        defer { drainState.endDelegateWrite() }
         if let descriptor = MultipartPartDescriptor.parse(task.taskDescription), let http = response as? HTTPURLResponse, let etag = http.value(forHTTPHeaderField: "ETag") { coordinator.recordETag(etag.trimmingCharacters(in: CharacterSet(charactersIn: "\"")), taskIdentifier: task.taskIdentifier, descriptor: descriptor) }
         completionHandler(.allow)
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        drainState.beginDelegateWrite()
+        defer { drainState.endDelegateWrite() }
         guard let descriptor = MultipartPartDescriptor.parse(task.taskDescription), let finished = coordinator.finish(taskIdentifier: task.taskIdentifier, descriptor: descriptor) else { return }
         defer { try? FileManager.default.removeItem(at: finished.0.temporaryURL) }
         guard error == nil, let response = task.response as? HTTPURLResponse, (200..<300).contains(response.statusCode), let etag = finished.1 ?? response.value(forHTTPHeaderField: "ETag")?.trimmingCharacters(in: CharacterSet(charactersIn: "\"")), let upload = try? store.task(descriptor.uploadID) else { pump(descriptor.uploadID); return }
@@ -376,16 +410,17 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         pump(descriptor.uploadID)
     }
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        pump()
-        lifecycleLock.lock(); let completions = backgroundCompletions; backgroundCompletions.removeAll(); lifecycleLock.unlock()
-        DispatchQueue.main.async { completions.forEach { $0() } }
+        drainState.markFinishObserved()
+        requestBackgroundDrain()
     }
     /// Returns false for unknown sessions so AppDelegate can safely leave other SDK handlers untouched.
     func attachBackgroundEvents(identifier: String, completion: @escaping () -> Void) -> Bool {
         guard identifier == Self.backgroundSessionIdentifier else { return false }
-        lifecycleLock.lock(); backgroundCompletions.append(completion); lifecycleLock.unlock(); pump(); return true
+        let finishAlreadyObserved = drainState.append(completion); pump(); if finishAlreadyObserved { requestBackgroundDrain() }; return true
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        drainState.beginDelegateWrite()
+        defer { drainState.endDelegateWrite() }
         guard let descriptor = MultipartPartDescriptor.parse(task.taskDescription), coordinator.isCurrent(taskIdentifier: task.taskIdentifier, descriptor: descriptor), var upload = try? store.task(descriptor.uploadID) else { return }
         let sent = Int64(descriptor.part - 1) * (upload.partSize ?? upload.file.bytes) + totalBytesSent
         upload.progress = max(upload.progress, min(99, Int(sent * 100 / max(1, upload.file.bytes)))); upload.state = .uploading; upload.updatedAt = Date()
@@ -408,6 +443,38 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
               (try? store.syncProcessing(id, state: state, result: result, error: error)) == true,
               let task = try? store.task(id) else { return false }
         publish(task); return true
+    }
+
+    private func requestBackgroundDrain() {
+        guard drainState.beginDrain() else { return }
+        Task { [weak self] in await self?.drainBackgroundEvents() }
+    }
+    private func drainBackgroundEvents() async {
+        let deadline = Date().addingTimeInterval(BackgroundEventDrainPolicy.networkBudget)
+        var stableRevision: Int?
+        var pumpedRevision: Int?
+        while true {
+            // This retries pending ACK/complete while the OS wake window remains available. Every continuation
+            // is already represented by a pending ACK row or a durable completing/retry_wait task state.
+            let snapshot = drainState.snapshot()
+            if pumpedRevision != snapshot.revision { pump(); pumpedRevision = snapshot.revision }
+            if snapshot.writes == 0 {
+                if stableRevision == snapshot.revision {
+                    if !coordinator.hasReconciling() || Date() >= deadline,
+                       let handlers = drainState.finishIfStable(revision: snapshot.revision) {
+                        DispatchQueue.main.async { handlers.forEach { $0() } }
+                        return
+                    }
+                } else {
+                    stableRevision = snapshot.revision
+                }
+            } else {
+                stableRevision = nil
+            }
+            // Delegate writes are synchronous SQLite transactions. Waiting for them is necessary for durability;
+            // only best-effort network reconciliation is bounded by the deadline above.
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     private func request(_ path: String, method: String, body: [String: Any]?, capability: String?) async throws -> [String: Any] { guard let url = URL(string: path) else { throw URLError(.badURL) }; var request = URLRequest(url: url); request.httpMethod = method; if let capability { request.setValue(capability, forHTTPHeaderField: "X-Upload-Capability") }; if let body { request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONSerialization.data(withJSONObject: body) }; return try await client.json(request) }

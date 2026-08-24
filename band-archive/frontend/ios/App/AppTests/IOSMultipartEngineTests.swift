@@ -81,7 +81,25 @@ final class IOSMultipartEngineTests: XCTestCase {
         XCTAssertTrue(coordinator.isCurrent(taskIdentifier: 41, descriptor: descriptor))
         XCTAssertFalse(coordinator.recover(expected, descriptor: descriptor, taskIdentifier: 41, temporaryURL: URL(fileURLWithPath: expected.temporaryPath)))
     }
+
+    func testTransientKeychainReadPreservesRetryableTaskForForegroundPump() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("video"); try Data([1]).write(to: source)
+        let credentials = UnavailableCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        let id = UUID().uuidString
+        let task = IOSUploadTask(uploadID: id, workID: 1, createdAt: Date(), file: DurableUploadFile(uploadID: id, path: source.path, filename: "video.mp4", contentType: "video/mp4", bytes: 1, sha256: "x"), api: "https://example.invalid", targetKind: "member_id", targetID: "1", sessionID: "session", partSize: 1, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
+        try store.insert(task, capability: "capability")
+        let engine = try IOSMultipartEngine(store: store, credentials: credentials, client: TestClient(responses: []))
+        engine.pump(task.uploadID)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(try store.task(task.uploadID)?.state, .retryWait)
+        XCTAssertEqual(try store.task(task.uploadID)?.error, "keychain_unavailable")
+        XCTAssertTrue(try store.task(task.uploadID)?.state.isRunnable == true)
+    }
 }
 
 private final class TestCredentials: UploadCredentialStoring { var values:[String:String]=[:]; func save(_ token:String,uploadID:String)throws{values[uploadID]=token};func read(uploadID:String)throws->String?{values[uploadID]};func delete(uploadID:String)throws{values.removeValue(forKey:uploadID)} }
+private final class UnavailableCredentials: UploadCredentialStoring { func save(_ token: String, uploadID: String) throws {}; func read(uploadID: String) throws -> String? { throw UploadCredentialError.unavailable }; func delete(uploadID: String) throws {} }
 private final class TestClient: MultipartHTTPClient { var responses:[[String:Any]]; var requests:[URLRequest]=[]; init(responses:[[String:Any]]){self.responses=responses}; func json(_ request:URLRequest) async throws -> [String:Any] { requests.append(request); return responses.removeFirst() } }

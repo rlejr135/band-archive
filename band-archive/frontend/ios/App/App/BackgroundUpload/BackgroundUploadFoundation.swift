@@ -37,6 +37,14 @@ enum UploadCredentialError: Error, Equatable {
     case unavailable
 }
 
+enum UploadCredentialPolicy {
+    static func readError(for status: OSStatus) -> UploadCredentialError {
+        // Item-not-found is the only terminal credential state. Device-lock and security-daemon availability
+        // errors occur before first unlock or during a background relaunch and must remain retryable.
+        status == errSecItemNotFound ? .lost : .unavailable
+    }
+}
+
 enum UploadEngineError: Error {
     case ownershipLost
 }
@@ -207,8 +215,9 @@ final class KeychainUploadCredentialStore: UploadCredentialStoring {
         let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: uploadID,
                                        kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne]
         var result: CFTypeRef?; let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw BackgroundUploadError.keychain(status) }
+        if status == errSecItemNotFound { throw UploadCredentialPolicy.readError(for: status) }
+        if status == errSecInteractionNotAllowed || status == errSecNotAvailable { throw UploadCredentialPolicy.readError(for: status) }
+        guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else { throw UploadCredentialPolicy.readError(for: status) }
         return token
     }
 
