@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
 import useMediaUpload from '../../hooks/useMediaUpload';
-import { consumeNativeUpload, deleteNativeUpload, nativeTargetMatches } from '../../services/nativeUploadQueue';
+import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -41,8 +41,9 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   }, [rehearsals]);
 
   useEffect(() => {
-    rehearsals.forEach((rehearsal) => nativePending.filter((item) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })).forEach((item) => {
-      setRecoveredUploads((previous) => ({ ...previous, [item.id]:item }));
+    const matching = nativePending.filter((item) => rehearsals.some((rehearsal) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })));
+    setRecoveredUploads((previous) => mergeNativeUploadState(previous, matching));
+    rehearsals.forEach((rehearsal) => matching.filter((item) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })).forEach((item) => {
       if(item.state !== 'completed')return;
       consumeNativeUpload(transport,item.id,{ rehearsalId:rehearsal.id },async (terminal) => {
         setRecoveredUploads((previous) => ({ ...previous, [terminal.id]:terminal }));

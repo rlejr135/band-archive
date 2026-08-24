@@ -1,11 +1,14 @@
 import { API_URL } from './api';
-import { createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport';
+import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport';
 
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
 const MAX_PART_RETRIES = 3;
 const webTransport = createWebUploadTransport({ apiUrl: API_URL });
-export const getUploadTransport = () => resolveUploadTransport({ apiUrl: API_URL });
+const runtimeTransport = createTransportCache(() => resolveUploadTransport({ apiUrl: API_URL }));
+export const getUploadTransport = () => runtimeTransport.get();
+// Call after an explicit Capacitor host/plugin availability transition.
+export const invalidateUploadTransport = () => runtimeTransport.invalidate();
 
 // Processing endpoints return { status, error, audio_url, ... }, while regular
 // media endpoints use transcoding_status. Keep both endpoint shapes usable by UI.

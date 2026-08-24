@@ -10,7 +10,8 @@ const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 const snapshot = () => [...items.values()];
 const notify = () => { const value = snapshot(); listeners.forEach((listener) => listener(value)); };
-const publish = (item) => { if (!item?.id) return; items.set(item.id, item); notify(); };
+const sameValue = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const publish = (item) => { if (!item?.id || sameValue(items.get(item.id), item)) return; items.set(item.id, item); notify(); };
 const numeric = (value) => value === undefined || value === null || value === '' ? null : Number(value);
 
 export const nativeTargetMatches = (item, target = {}) => {
@@ -29,6 +30,16 @@ export const nativeTargetMatches = (item, target = {}) => {
 export const nativeUploadResult = (item) => { try { const value = typeof item?.result === 'string' ? JSON.parse(item.result) : item?.result; return value?.media || value?.personal_log || value || null; } catch { return null; } };
 export const nativeUploadKind = (item) => item?.target?.member_id ? 'personal_log' : 'media';
 export const filterNativeUploads = (target) => snapshot().filter((item) => nativeTargetMatches(item, target));
+export const mergeNativeUploadState = (previous, matching, project = (item) => item) => {
+  let next = previous;
+  matching.forEach((item) => {
+    const value = project(item);
+    if (sameValue(previous[item.id], value)) return;
+    if (next === previous) next = { ...previous };
+    next[item.id] = value;
+  });
+  return next;
+};
 export const updateNativeUpload = (item) => publish({ ...items.get(item.id), ...item });
 export const claimNativeProcessingRecovery = (id) => { if (recovered.has(id)) return false; recovered.add(id); return true; };
 export const releaseNativeProcessingRecovery = (id) => recovered.delete(id);

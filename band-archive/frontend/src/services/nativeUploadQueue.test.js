@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, nativeTargetMatches, resetNativeUploadQueueForTest, subscribeNativeUploadQueue, syncNativeProcessingStatus } from './nativeUploadQueue.js';
+import { consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, mergeNativeUploadState, nativeTargetMatches, resetNativeUploadQueueForTest, subscribeNativeUploadQueue, syncNativeProcessingStatus } from './nativeUploadQueue.js';
 
 test('native queue hydrates once and fans out one listener snapshot', async () => {
   resetNativeUploadQueueForTest(); let list = 0; let nativeListener; const acked = [];
@@ -44,4 +44,18 @@ test('unmounted or unrelated screens do not acknowledge terminal snapshots', asy
   const unsubscribe=subscribeNativeUploadQueue(()=>{}); unsubscribe(); await hydrateNativeUploadQueue(transport);
   assert.equal(await consumeNativeUpload(transport,'other',{ songId:1 },async()=>{}),false);
   assert.deepEqual(acked,[]); resetNativeUploadQueueForTest();
+});
+
+test('duplicate snapshots do not notify subscribers or update a target state', async () => {
+  resetNativeUploadQueueForTest(); let nativeListener; const item={ id:'song', state:'uploading', progress:10, target:{ song_id:4,rehearsal_id:null } };
+  const transport={ kind:'native', listPending:async()=>({ items:[item] }), addListener:async(_name,listener)=>{nativeListener=listener;return()=>{};} };
+  let notifications=0; const unsubscribe=subscribeNativeUploadQueue(()=>{notifications+=1;});
+  await hydrateNativeUploadQueue(transport); const afterInitial=notifications;
+  nativeListener({ ...item, target:{ ...item.target } });
+  assert.equal(notifications,afterInitial);
+  const previous=mergeNativeUploadState({},filterNativeUploads({ songId:4,rehearsalId:null }));
+  assert.strictEqual(mergeNativeUploadState(previous,filterNativeUploads({ songId:4,rehearsalId:null })),previous);
+  nativeListener({ id:'other',state:'uploading',progress:30,target:{ member_id:9 } });
+  assert.strictEqual(mergeNativeUploadState(previous,filterNativeUploads({ songId:4,rehearsalId:null })),previous);
+  unsubscribe(); resetNativeUploadQueueForTest();
 });

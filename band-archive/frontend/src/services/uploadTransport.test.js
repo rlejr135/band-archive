@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
+import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
 
 const response = (body = {}, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -42,4 +42,13 @@ test('native absence falls back to web and queue states are normalized', () => {
   assert.equal(mapUploadState('pending'), 'queued');
   assert.equal(mapUploadState('aborted'), 'cancelled');
   assert.equal(mapUploadState('unknown'), 'failed');
+});
+
+test('transport cache keeps identity until explicit invalidation', () => {
+  let created = 0;
+  const cache = createTransportCache(() => ({ id: ++created }));
+  assert.strictEqual(cache.get(), cache.get());
+  assert.equal(created, 1);
+  cache.invalidate();
+  assert.equal(cache.get().id, 2);
 });

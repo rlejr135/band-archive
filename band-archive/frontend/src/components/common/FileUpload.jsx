@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useId, useEffect, useMemo } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
-import { consumeNativeUpload, deleteNativeUpload, nativeTargetMatches, nativeUploadResult } from '../../services/nativeUploadQueue';
+import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches, nativeUploadResult } from '../../services/nativeUploadQueue';
 import './FileUpload.css';
 
 const FileUpload = ({ 
@@ -19,8 +19,10 @@ const FileUpload = ({
   const nativeTarget = useMemo(() => memberId ? { memberId } : { songId, rehearsalId }, [memberId,rehearsalId,songId]);
 
   useEffect(() => {
-    nativePending.filter((item) => nativeTargetMatches(item,nativeTarget))
-      .forEach((item) => setUploadProgress((previous) => ({ ...previous, [item.id]: { name: item.name || '업로드 파일', progress: item.progress || 0, status: item.state, error: item.error } })));
+    const matching = nativePending.filter((item) => nativeTargetMatches(item,nativeTarget));
+    setUploadProgress((previous) => mergeNativeUploadState(previous, matching, (item) => ({
+      name: item.name || '업로드 파일', progress: item.progress || 0, status: item.state, error: item.error,
+    })));
   }, [nativePending, nativeTarget]);
 
   useEffect(() => {

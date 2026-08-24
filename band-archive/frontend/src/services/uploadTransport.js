@@ -19,6 +19,16 @@ export class UploadTransportError extends Error {
   }
 }
 
+// The app chooses its transport once at startup. Explicitly invalidate this only
+// when a host/plugin availability change has been observed.
+export const createTransportCache = (factory) => {
+  let value;
+  return {
+    get: () => { if (!value) value = factory(); return value; },
+    invalidate: () => { value = null; },
+  };
+};
+
 const retryableStatus = (status) => status === 401 || status === 403 || status === 408 || status === 429 || status >= 500;
 
 export const createWebUploadTransport = ({ apiUrl, fetchImpl = fetch, xhrFactory = () => new XMLHttpRequest() } = {}) => {
