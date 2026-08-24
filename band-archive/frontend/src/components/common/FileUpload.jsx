@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useId, useEffect } from 'react';
+import React, { useState, useCallback, useId, useEffect, useMemo } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
+import { consumeNativeUpload, nativeTargetMatches, nativeUploadResult } from '../../services/nativeUploadQueue';
 import './FileUpload.css';
 
 const FileUpload = ({ 
@@ -15,11 +16,25 @@ const FileUpload = ({
   const [uploadProgress, setUploadProgress] = useState({});
   const { upload, cancel, transport, nativePending } = useMediaUpload();
   const inputId = useId();
+  const nativeTarget = useMemo(() => memberId ? { memberId } : { songId, rehearsalId }, [memberId,rehearsalId,songId]);
 
   useEffect(() => {
-    nativePending.filter((item) => (memberId ? item.target?.member_id === Number(memberId) : item.target?.song_id === Number(songId)))
+    nativePending.filter((item) => nativeTargetMatches(item,nativeTarget))
       .forEach((item) => setUploadProgress((previous) => ({ ...previous, [item.id]: { name: item.name || '업로드 파일', progress: item.progress || 0, status: item.state, error: item.error } })));
-  }, [memberId, nativePending, songId]);
+  }, [nativePending, nativeTarget]);
+
+  useEffect(() => {
+    nativePending.filter((item) => nativeTargetMatches(item,nativeTarget) && ['completed','failed'].includes(item.state)).forEach((item) => {
+      consumeNativeUpload(transport,item.id,nativeTarget,async (terminal) => {
+        const media=nativeUploadResult(terminal);
+        setUploadProgress((previous) => ({ ...previous, [terminal.id]: { name:terminal.name || '업로드 파일', progress:100, status:terminal.state, error:terminal.error } }));
+        if(terminal.state === 'completed') {
+          if(!media?.id) throw new Error('업로드 결과를 복구하지 못했습니다.');
+          await onMediaComplete?.(media);
+        }
+      }).catch(() => {});
+    });
+  }, [nativePending, nativeTarget, onMediaComplete, transport]);
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
@@ -138,6 +153,7 @@ const FileUpload = ({
                 {item.error && <span className="progress-error">{item.error}</span>}
               </div>
               {!onUpload && ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
+              {!onUpload && item.status === 'retry_wait' && <button type="button" className="upload-cancel" onClick={() => transport.resume?.({ id: fileId })}>재시도</button>}
             </div>
           ))}
         </div>

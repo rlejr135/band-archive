@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
 import useMediaUpload from '../../hooks/useMediaUpload';
+import { consumeNativeUpload, nativeTargetMatches } from '../../services/nativeUploadQueue';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -10,8 +11,9 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
   const [uploadingFor, setUploadingFor] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
+  const [recoveredUploads, setRecoveredUploads] = useState({});
   const [uploading, setUploading] = useState(false);
-  const { upload, transport } = useMediaUpload();
+  const { upload, cancel, transport, nativePending } = useMediaUpload();
 
   const dateStr = date.toLocaleDateString('ko-KR', {
     year: 'numeric',
@@ -37,6 +39,20 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     };
     if (rehearsals.length > 0) loadMedia();
   }, [rehearsals]);
+
+  useEffect(() => {
+    rehearsals.forEach((rehearsal) => nativePending.filter((item) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })).forEach((item) => {
+      setRecoveredUploads((previous) => ({ ...previous, [item.id]:item }));
+      if(!['completed','failed'].includes(item.state))return;
+      consumeNativeUpload(transport,item.id,{ rehearsalId:rehearsal.id },async (terminal) => {
+        setRecoveredUploads((previous) => ({ ...previous, [terminal.id]:terminal }));
+        if(terminal.state === 'completed') {
+          const media=await fetchRehearsalMedia(rehearsal.id);
+          setMediaMap((previous) => ({ ...previous, [rehearsal.id]:media }));
+        }
+      }).catch(() => {});
+    }));
+  }, [nativePending,rehearsals,transport]);
 
   const handleDelete = async (id) => {
     if (!window.confirm('이 일정을 삭제하시겠습니까?')) return;
@@ -250,6 +266,21 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {Object.values(recoveredUploads).filter((item) => nativeTargetMatches(item,{ rehearsalId:r.id })).length > 0 && (
+                <div className="rd-upload-queue">
+                  {Object.values(recoveredUploads).filter((item) => nativeTargetMatches(item,{ rehearsalId:r.id })).map((item) => (
+                    <div key={item.id} className={`rd-upload-queue-item ${item.state}`}>
+                      <span className="rd-queue-filename">{item.name || '업로드 파일'}</span>
+                      {item.state === 'uploading' && <progress value={item.progress || 0} max="100" className="rd-queue-progress" aria-label={`${item.name || '파일'} 업로드 ${item.progress || 0}%`} />}
+                      <span className="rd-queue-status-text">{{ preparing:'준비 중', queued:'대기 중', uploading:`업로드 ${item.progress || 0}%`, retry_wait:'재시도 대기', completing:'완료 처리 중', processing:'음원 추출 중', completed:'완료', failed:'실패', cancelled:'취소됨' }[item.state]}</span>
+                      {item.error && <span className="rd-queue-error">{item.error}</span>}
+                      {['preparing','queued','uploading','retry_wait','completing','processing'].includes(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
+                      {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => transport.resume?.({ id:item.id })}>재시도</button>}
+                    </div>
+                  ))}
                 </div>
               )}
 

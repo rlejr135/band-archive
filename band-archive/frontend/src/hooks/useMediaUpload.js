@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '../services/api';
 import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
 import { mapUploadState } from '../services/uploadTransport';
-import { hydrateNativeUploadQueue, subscribeNativeUploadQueue, acknowledgeNativeUpload } from '../services/nativeUploadQueue';
+import { claimNativeProcessingRecovery, consumeNativeUpload, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const processingStates = new Set(['queued', 'pending', 'processing']);
@@ -11,6 +11,7 @@ const processingChanged = (previous, next) => ['transcoding_status', 'audio_url'
 
 export default function useMediaUpload() {
   const activeRef = useRef(new Map());
+  const recoveryRef = useRef(new Map());
   const [nativePending, setNativePending] = useState([]);
   const cancel = useCallback((key) => {
     const active = activeRef.current.get(key);
@@ -24,7 +25,13 @@ export default function useMediaUpload() {
     abortMultipartUpload(active.session).catch(() => {});
   }, []);
   useEffect(() => () => [...activeRef.current.keys()].forEach(cancel), [cancel]);
-  useEffect(() => { const transport = getUploadTransport(); hydrateNativeUploadQueue(transport).then(setNativePending).catch(() => {}); return subscribeNativeUploadQueue((item) => setNativePending((previous) => [...previous.filter((value) => value.id !== item.id), item])); }, []);
+  useEffect(() => () => recoveryRef.current.forEach((item) => { item.cancelled=true; }), []);
+  useEffect(() => {
+    const transport = getUploadTransport(); let mounted=true;
+    hydrateNativeUploadQueue(transport,{ refresh:true }).then((items) => { if(mounted)setNativePending(items); }).catch(() => {});
+    return () => { mounted=false; };
+  }, []);
+  useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
 
   const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media') => {
     let failures = 0;
@@ -49,6 +56,24 @@ export default function useMediaUpload() {
     return media;
   }, []);
 
+  useEffect(() => {
+    const transport=getUploadTransport();
+    nativePending.filter((item) => item.state === 'processing' && nativeUploadResult(item)?.id).forEach((item) => {
+      if(!claimNativeProcessingRecovery(item.id))return;
+      const recovery={ cancelled:false, xhrs:new Set(), session:null };
+      recoveryRef.current.set(item.id,recovery);
+      const media=normalizeMedia(nativeUploadResult(item));
+      poll(media,recovery,(state,current) => updateNativeUpload({ id:item.id, state, result:current?JSON.stringify(current):item.result, error:current?.error || item.error }),
+        (current) => updateNativeUpload({ id:item.id, state:'processing', result:JSON.stringify(current), error:current?.error || item.error }),nativeUploadKind(item))
+        .then(async (current) => {
+          if(recovery.cancelled)return;
+          const state=current?.transcoding_status === 'failed' ? 'failed' : current?.audio_url ? 'completed' : 'processing';
+          updateNativeUpload({ id:item.id, state, result:current?JSON.stringify(current):item.result, error:current?.error || item.error });
+          if(state !== 'processing') await syncNativeProcessingStatus(transport,item.id,state,current);
+        }).catch(() => {}).finally(() => { releaseNativeProcessingRecovery(item.id); recoveryRef.current.delete(item.id); });
+    });
+  }, [nativePending,poll]);
+
   const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, onProgress, onStatus, onMediaUpdate }) => {
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
     activeRef.current.set(key, active);
@@ -66,19 +91,39 @@ export default function useMediaUpload() {
           };
           const begin = async () => {
             try {
-            active.removeNativeListener = subscribeNativeUploadQueue(async (event) => {
+            active.removeNativeListener = subscribeNativeUploadQueue(async (snapshot) => {
+              const event=snapshot.find((value) => value.id === file.id);
+              if(!event)return;
               if (event.id !== file.id || active.cancelled) return;
               const status = mapUploadState(event.state); onProgress((event.progress || 0) * file.size / 100, file.size); onStatus(status, event);
-              if (event.state === 'failed') { await acknowledgeNativeUpload(transport, event.id); finish(new Error(event.error || '네이티브 업로드에 실패했습니다.')); }
+              if (event.state === 'failed') {
+                await consumeNativeUpload(transport, event.id, nativeTargetPayload(target), async () => {});
+                finish(new Error(event.error || '네이티브 업로드에 실패했습니다.'));
+              }
               if (event.state === 'cancelled') finish(new DOMException('업로드가 취소되었습니다.', 'AbortError'));
               if (event.state === 'processing' || event.state === 'completed') {
                 let media;
                 try { media = normalizeMedia(JSON.parse(event.result || '{}')); } catch { media = null; }
                 media = normalizeMedia(media?.media || media?.personal_log || media);
                 if (!media?.id) { finish(new Error('서버가 업로드 결과를 반환하지 않았습니다.')); return; }
+                if (event.state === 'completed') {
+                  onStatus('completed', media);
+                  const consumed = await consumeNativeUpload(transport, event.id, nativeTargetPayload(target), async () => onMediaUpdate?.(media));
+                  if (consumed) finish(null, media);
+                  return;
+                }
                 onMediaUpdate?.(media);
-                if (event.state === 'completed') { onStatus('completed', media); await acknowledgeNativeUpload(transport, event.id); finish(null, media); }
-                else poll(media, active, onStatus, onMediaUpdate, target.kind).then((result) => finish(null, result)).catch(finish);
+                if (active.nativePolling) return;
+                active.nativePolling = true;
+                poll(media, active, onStatus, onMediaUpdate, target.kind)
+                  .then(async (result) => {
+                    if (active.cancelled) return;
+                    const state = result?.transcoding_status === 'failed' ? 'failed' : result?.audio_url ? 'completed' : 'processing';
+                    if (state === 'processing') { finish(null, result); return; }
+                    await syncNativeProcessingStatus(transport, event.id, state, result);
+                  })
+                  .catch(finish)
+                  .finally(() => { active.nativePolling = false; });
               }
             });
             await hydrateNativeUploadQueue(transport);

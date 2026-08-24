@@ -86,6 +86,7 @@ export const getNativeBackgroundUploadTransport = () => {
     resume: (options = {}) => BackgroundUpload.resume(options),
     cancel: (options) => BackgroundUpload.cancel(options),
     acknowledge: (options) => BackgroundUpload.acknowledge(options),
+    syncStatus: (options) => BackgroundUpload.syncProcessingStatus(options),
     listPending: () => BackgroundUpload.listPending(),
     addListener: async (event, listener) => {
       const handle = await BackgroundUpload.addListener(event, listener);
