@@ -7,7 +7,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Recreate the fixed background URLSession delegate after an OS relaunch. Completion-handler wiring is added in 6c.
+        _ = IOSMultipartEngine.shared
         return true
     }
 

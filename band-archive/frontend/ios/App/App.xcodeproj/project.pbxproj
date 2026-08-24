@@ -19,6 +19,9 @@
 		AA100000000000000000000002 /* BackgroundUploadFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000000001 /* BackgroundUploadFoundation.swift */; };
 		AA100000000000000000000004 /* BackgroundUploadFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */; };
 		AA100000000000000000000006 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA100000000000000000000005 /* XCTest.framework */; };
+		AA200000000000000000000002 /* IOSMultipartEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200000000000000000000001 /* IOSMultipartEngine.swift */; };
+		AA200000000000000000000004 /* BackgroundUploadPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200000000000000000000003 /* BackgroundUploadPlugin.swift */; };
+		AA200000000000000000000006 /* IOSMultipartEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200000000000000000000005 /* IOSMultipartEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -47,6 +50,9 @@
 		AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadFoundationTests.swift; sourceTree = "<group>"; };
 		AA100000000000000000000005 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		AA100000000000000000000007 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA200000000000000000000001 /* IOSMultipartEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMultipartEngine.swift; sourceTree = "<group>"; };
+		AA200000000000000000000003 /* BackgroundUploadPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadPlugin.swift; sourceTree = "<group>"; };
+		AA200000000000000000000005 /* IOSMultipartEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSMultipartEngineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,13 +112,13 @@
 		};
 		AA100000000000000000000016 /* BackgroundUpload */ = {
 			isa = PBXGroup;
-			children = (AA100000000000000000000001 /* BackgroundUploadFoundation.swift */,);
+			children = (AA100000000000000000000001 /* BackgroundUploadFoundation.swift */, AA200000000000000000000001 /* IOSMultipartEngine.swift */, AA200000000000000000000003 /* BackgroundUploadPlugin.swift */,);
 			path = BackgroundUpload;
 			sourceTree = "<group>";
 		};
 		AA100000000000000000000017 /* AppTests */ = {
 			isa = PBXGroup;
-			children = (AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */,);
+			children = (AA100000000000000000000003 /* BackgroundUploadFoundationTests.swift */, AA200000000000000000000005 /* IOSMultipartEngineTests.swift */,);
 			path = AppTests;
 			sourceTree = "<group>";
 		};
@@ -214,6 +220,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA200000000000000000000002 /* IOSMultipartEngine.swift in Sources */,
+				AA200000000000000000000004 /* BackgroundUploadPlugin.swift in Sources */,
 				AA100000000000000000000002 /* BackgroundUploadFoundation.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
@@ -223,7 +231,7 @@
 		AA100000000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (AA100000000000000000000004 /* BackgroundUploadFoundationTests.swift in Sources */,);
+			files = (AA100000000000000000000004 /* BackgroundUploadFoundationTests.swift in Sources */, AA200000000000000000000006 /* IOSMultipartEngineTests.swift in Sources */,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA100000000000000000000010 /* Resources */ = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
@@ -381,7 +389,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.deutteun.archive;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -403,19 +411,19 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.deutteun.archive;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
 		AA100000000000000000000013 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = com.deutteun.archive.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App"; };
+			buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = com.deutteun.archive.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.9; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App"; };
 			name = Debug;
 		};
 		AA100000000000000000000019 /* Release */ = {
 			isa = XCBuildConfiguration;
-			buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = com.deutteun.archive.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App"; };
+			buildSettings = { BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = com.deutteun.archive.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.9; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App"; };
 			name = Release;
 		};
 /* End XCBuildConfiguration section */

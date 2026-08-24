@@ -86,7 +86,7 @@ const BackgroundUpload = registerPlugin('BackgroundUpload');
 export const getNativeBackgroundUploadTransport = () => {
   // registerPlugin returns a proxy even in a browser, so platform detection must
   // precede it. This avoids claiming background support where no native plugin exists.
-  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return null;
+  if (!Capacitor.isNativePlatform() || !['android', 'ios'].includes(Capacitor.getPlatform())) return null;
   return {
     kind: 'native',
     supportsBackground: true,
