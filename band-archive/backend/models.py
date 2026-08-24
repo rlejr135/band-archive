@@ -101,10 +101,14 @@ class MultipartUploadSession(db.Model):
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)
     rehearsal_id = db.Column(db.Integer, db.ForeignKey('rehearsal.id'), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='initiated')
+    # The raw capability is returned only once by initiate.  Session IDs are
+    # deliberately not sufficient to read or mutate an upload.
+    capability_token_hash = db.Column(db.String(255), nullable=True)
     media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(hours=24), nullable=False)
     completed_at = db.Column(db.DateTime, nullable=True)
+    completion_started_at = db.Column(db.DateTime, nullable=True)
 
     parts = db.relationship('MultipartUploadPart', backref='session', lazy=True,
                             cascade='all, delete-orphan', order_by='MultipartUploadPart.part_number')
@@ -114,6 +118,10 @@ class MultipartUploadPart(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.String(36), db.ForeignKey('multipart_upload_session.id'), nullable=False)
     part_number = db.Column(db.Integer, nullable=False)
+    etag = db.Column(db.String(500), nullable=True)
+    uploaded_bytes = db.Column(db.BigInteger, nullable=True)
+    checksum = db.Column(db.String(200), nullable=True)
+    acknowledged_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     __table_args__ = (db.UniqueConstraint('session_id', 'part_number', name='uq_multipart_session_part'),)
@@ -206,10 +214,12 @@ class PersonalLogMultipartUploadSession(db.Model):
     declared_bytes = db.Column(db.BigInteger, nullable=False)
     member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='initiated')
+    capability_token_hash = db.Column(db.String(255), nullable=True)
     personal_log_id = db.Column(db.Integer, db.ForeignKey('personal_log.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(hours=24), nullable=False)
     completed_at = db.Column(db.DateTime, nullable=True)
+    completion_started_at = db.Column(db.DateTime, nullable=True)
     parts = db.relationship('PersonalLogMultipartUploadPart', backref='session', lazy=True,
                             cascade='all, delete-orphan', order_by='PersonalLogMultipartUploadPart.part_number')
 
@@ -218,6 +228,10 @@ class PersonalLogMultipartUploadPart(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.String(36), db.ForeignKey('personal_log_multipart_upload_session.id'), nullable=False)
     part_number = db.Column(db.Integer, nullable=False)
+    etag = db.Column(db.String(500), nullable=True)
+    uploaded_bytes = db.Column(db.BigInteger, nullable=True)
+    checksum = db.Column(db.String(200), nullable=True)
+    acknowledged_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     __table_args__ = (db.UniqueConstraint('session_id', 'part_number', name='uq_personal_log_multipart_session_part'),)
 

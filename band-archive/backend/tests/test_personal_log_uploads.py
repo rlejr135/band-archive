@@ -21,6 +21,10 @@ def _initiate(client, member_id, declared_bytes=64):
     })
 
 
+def _multipart_headers(data):
+    return {data['capability_header']: data['upload_capability_token']}
+
+
 def test_personal_log_presign_validates_member_and_target_isolation(client):
     member_id = _member(client)
     valid = client.post('/uploads/presign', json={
@@ -44,19 +48,27 @@ def test_personal_log_presign_validates_member_and_target_isolation(client):
 
 def test_personal_log_multipart_complete_creates_queued_log(client, app, monkeypatch):
     member_id = _member(client)
-    session_id = _initiate(client, member_id, 64).get_json()['session_id']
-    assert client.post(f'/uploads/multipart/{session_id}/parts', json={'part_number': 1}).status_code == 200
+    session = _initiate(client, member_id, 64).get_json()
+    session_id = session['session_id']
+    headers = _multipart_headers(session)
+    assert client.post(f'/uploads/multipart/{session_id}/parts', json={'part_number': 1}, headers=headers).status_code == 200
+    assert client.post(
+        f'/uploads/multipart/{session_id}/parts/1/ack',
+        json={'etag': 'part-one', 'bytes': 64}, headers=headers,
+    ).status_code == 200
     monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 64})
-    response = client.post(f'/uploads/multipart/{session_id}/complete', json={
-        'parts': [{'part_number': 1, 'etag': 'part-one'}],
-    })
+    response = client.post(f'/uploads/multipart/{session_id}/complete', headers=headers)
     assert response.status_code == 201
     log = response.get_json()['personal_log']
     assert log['member_id'] == member_id
     assert log['transcoding_status'] == 'queued'
-    repeated = client.post(f'/uploads/multipart/{session_id}/complete', json={'parts': []})
+    repeated = client.post(f'/uploads/multipart/{session_id}/complete', headers=headers)
     assert repeated.status_code == 200
     assert repeated.get_json()['personal_log']['id'] == log['id']
+    status = client.get(f'/uploads/multipart/{session_id}', headers=headers).get_json()
+    assert status['target']['kind'] == 'personal_log'
+    assert status['target']['member_id'] == member_id
+    assert status['result']['personal_log']['id'] == log['id']
 
 
 def test_single_personal_log_complete_uses_actual_size_and_rejects_mixed_target(client, app, monkeypatch):
@@ -115,6 +127,10 @@ def test_startup_migration_queues_existing_personal_video_with_default_status(tm
         CREATE TABLE media (id INTEGER PRIMARY KEY, file_type VARCHAR(20));
         CREATE TABLE personal_log (id INTEGER PRIMARY KEY, file_type VARCHAR(20));
         CREATE TABLE rehearsal (id INTEGER PRIMARY KEY);
+        CREATE TABLE multipart_upload_session (id VARCHAR(36) PRIMARY KEY);
+        CREATE TABLE personal_log_multipart_upload_session (id VARCHAR(36) PRIMARY KEY);
+        CREATE TABLE multipart_upload_part (id INTEGER PRIMARY KEY);
+        CREATE TABLE personal_log_multipart_upload_part (id INTEGER PRIMARY KEY);
         INSERT INTO personal_log (id, file_type) VALUES (1, 'video');
     ''')
     connection.commit()
@@ -126,8 +142,16 @@ def test_startup_migration_queues_existing_personal_video_with_default_status(tm
 
     connection = sqlite3.connect(db_path)
     status = connection.execute('SELECT transcoding_status FROM personal_log WHERE id = 1').fetchone()[0]
+    media_session_columns = {row[1] for row in connection.execute('PRAGMA table_info(multipart_upload_session)')}
+    personal_session_columns = {row[1] for row in connection.execute('PRAGMA table_info(personal_log_multipart_upload_session)')}
+    media_part_columns = {row[1] for row in connection.execute('PRAGMA table_info(multipart_upload_part)')}
+    personal_part_columns = {row[1] for row in connection.execute('PRAGMA table_info(personal_log_multipart_upload_part)')}
     connection.close()
     assert status == 'queued'
+    assert {'capability_token_hash', 'completion_started_at'} <= media_session_columns
+    assert {'capability_token_hash', 'completion_started_at'} <= personal_session_columns
+    assert {'etag', 'uploaded_bytes', 'checksum', 'acknowledged_at'} <= media_part_columns
+    assert {'etag', 'uploaded_bytes', 'checksum', 'acknowledged_at'} <= personal_part_columns
 
 
 def test_personal_log_delete_attempts_original_after_audio_failure_and_keeps_row(client, app, monkeypatch):

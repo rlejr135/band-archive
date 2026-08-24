@@ -125,6 +125,41 @@ def _run_migrations(app):
                      "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
         conn.execute('UPDATE personal_log SET processing_attempts = 0 WHERE processing_attempts IS NULL')
 
+        # Resumable multipart uploads persist only server-owned identifiers and
+        # a hash of the one-time capability returned by initiate.  SQLite ALTER
+        # additions remain nullable so existing sessions can be safely expired
+        # instead of becoming accessible by session ID alone.
+        multipart_additions = {
+            'multipart_upload_session': {
+                'capability_token_hash': 'VARCHAR(255)',
+                'completion_started_at': 'DATETIME',
+            },
+            'personal_log_multipart_upload_session': {
+                'capability_token_hash': 'VARCHAR(255)',
+                'completion_started_at': 'DATETIME',
+            },
+            'multipart_upload_part': {
+                'etag': 'VARCHAR(500)',
+                'uploaded_bytes': 'BIGINT',
+                'checksum': 'VARCHAR(200)',
+                'acknowledged_at': 'DATETIME',
+            },
+            'personal_log_multipart_upload_part': {
+                'etag': 'VARCHAR(500)',
+                'uploaded_bytes': 'BIGINT',
+                'checksum': 'VARCHAR(200)',
+                'acknowledged_at': 'DATETIME',
+            },
+        }
+        for table, additions in multipart_additions.items():
+            if table not in tables:
+                continue
+            columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})').fetchall()}
+            for column, definition in additions.items():
+                if column not in columns:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+                    app.logger.info('Migration: added %s column to %s table', column, table)
+
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')
 
@@ -173,6 +208,8 @@ def create_app(config_class=None, start_worker=None):
     with app.app_context():
         db.create_all()
         _run_migrations(app)
+        from routes.uploads import recover_multipart_upload_sessions
+        recover_multipart_upload_sessions(app)
 
     if start_worker is None:
         start_worker = not app.testing
