@@ -1,3 +1,4 @@
+import Foundation
 import Security
 import XCTest
 @testable import App
@@ -15,47 +16,34 @@ final class IOSLifecycleNotificationTests: XCTestCase {
         XCTAssertEqual(IOSMultipartEngine.backgroundSessionIdentifier, "com.deutteun.archive.background-upload.v1")
     }
 
-    func testBackgroundSessionCompletionIsDrainedExactlyOncePerGeneration() {
+    func testBackgroundSessionCompletionFIFOHandlesBothArrivalOrders() {
         let state = BackgroundEventDrainState(); var calls: [String] = []
-        let first = state.append { calls.append("first") }
-        XCTAssertEqual(state.markFinishObserved(), first)
-        XCTAssertTrue(state.beginDrain(generation: first))
+        state.append { calls.append("first") }
+        state.markFinishObserved()
+        XCTAssertTrue(state.beginDrain())
         let firstSnapshot = state.snapshot()
-        state.finishIfStable(generation: first, revision: firstSnapshot.revision)?.forEach { $0() }
+        state.finishIfStable(revision: firstSnapshot.revision)?()
 
-        // A stale finish from the consumed generation must not make this new
-        // AppDelegate completion runnable before its own finish callback.
-        XCTAssertNil(state.markFinishObserved())
-        let second = state.append { calls.append("second") }
-        XCTAssertFalse(state.beginDrain(generation: second))
-        XCTAssertEqual(state.markFinishObserved(), second)
-        XCTAssertTrue(state.beginDrain(generation: second))
+        // A later wake may report finish before the next AppDelegate callback.
+        // Its FIFO credit is consumed once, not inherited from the first wake.
+        state.markFinishObserved()
+        state.append { calls.append("second") }
+        XCTAssertTrue(state.beginDrain())
         let secondSnapshot = state.snapshot()
-        state.finishIfStable(generation: second, revision: secondSnapshot.revision)?.forEach { $0() }
+        state.finishIfStable(revision: secondSnapshot.revision)?()
         XCTAssertEqual(calls, ["first", "second"])
     }
 
-    func testFinishBeforeFirstAttachBindsOnlyThatGeneration() {
+    func testContinuousHandoffsAndDrainRaceStayFIFO() {
         let state = BackgroundEventDrainState()
-        XCTAssertNil(state.markFinishObserved())
-        let first = state.append {}
-        XCTAssertTrue(state.beginDrain(generation: first))
-        let snapshot = state.snapshot()
-        XCTAssertNotNil(state.finishIfStable(generation: first, revision: snapshot.revision))
-        let second = state.append {}
-        XCTAssertFalse(state.beginDrain(generation: second))
-    }
-
-    func testFinishAndNextAttachRaceWhilePreviousGenerationDrains() {
-        let state = BackgroundEventDrainState()
-        let first = state.append {}
-        XCTAssertEqual(state.markFinishObserved(), first)
-        XCTAssertTrue(state.beginDrain(generation: first))
-        // The next URLSession finish can precede its AppDelegate callback while
-        // the previous completion is still awaiting the durable barrier.
-        XCTAssertNil(state.markFinishObserved())
-        let second = state.append {}
-        XCTAssertTrue(state.beginDrain(generation: second))
+        var calls: [Int] = []
+        state.append { calls.append(1) }; state.markFinishObserved(); XCTAssertTrue(state.beginDrain())
+        // A new finish/handler pair arrives while the first durable barrier drains.
+        state.markFinishObserved(); state.append { calls.append(2) }
+        let first = state.snapshot(); state.finishIfStable(revision: first.revision)?()
+        XCTAssertTrue(state.beginDrain())
+        let second = state.snapshot(); state.finishIfStable(revision: second.revision)?()
+        XCTAssertEqual(calls, [1, 2])
     }
 
     func testUnknownBackgroundSessionIsNotClaimed() {
@@ -67,23 +55,23 @@ final class IOSLifecycleNotificationTests: XCTestCase {
         XCTAssertLessThanOrEqual(BackgroundEventDrainPolicy.networkBudget, 5)
         let state = BackgroundEventDrainState()
         var calls = 0
-        let first = state.append { calls += 1 }
-        let second = state.append { calls += 1 }
-        XCTAssertEqual(state.markFinishObserved(), first)
-        XCTAssertEqual(state.markFinishObserved(), second)
+        state.append { calls += 1 }
+        state.append { calls += 1 }
+        state.markFinishObserved()
+        state.markFinishObserved()
         state.beginDelegateWrite()
-        XCTAssertTrue(state.beginDrain(generation: first))
+        XCTAssertTrue(state.beginDrain())
         let beforeCommit = state.snapshot()
-        XCTAssertNil(state.finishIfStable(generation: first, revision: beforeCommit.revision))
+        XCTAssertNil(state.finishIfStable(revision: beforeCommit.revision))
         // Production didCompleteWithError stores pending ACK before ending this barrier.
         state.endDelegateWrite()
         let committed = state.snapshot()
-        let handlers = state.finishIfStable(generation: first, revision: committed.revision)
-        handlers?.forEach { $0() }
+        let handler = state.finishIfStable(revision: committed.revision)
+        handler?()
         XCTAssertEqual(calls, 1)
-        XCTAssertTrue(state.beginDrain(generation: second))
-        let secondHandlers = state.finishIfStable(generation: second, revision: committed.revision)
-        secondHandlers?.forEach { $0() }
+        XCTAssertTrue(state.beginDrain())
+        let secondHandler = state.finishIfStable(revision: committed.revision)
+        secondHandler?()
         XCTAssertEqual(calls, 2)
     }
 
@@ -94,15 +82,32 @@ final class IOSLifecycleNotificationTests: XCTestCase {
     }
 
     func testEngineProviderRetriesAfterProtectedDataFailure() {
-        var attempts = 0
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = RecoveryCredentials()
+        var attempts = 0; var notifications = 0
         let provider = IOSMultipartEngineProvider(factory: {
             attempts += 1
-            throw BackgroundUploadError.database("protected_data_unavailable")
+            if attempts == 1 { throw BackgroundUploadError.database("protected_data_unavailable") }
+            return try IOSMultipartEngine(store: IOSUploadStore(root: root, credentials: credentials), credentials: credentials, client: RecoveryClient())
         })
+        let token = provider.observe { _ in notifications += 1 }
         XCTAssertNil(provider.acquire())
-        // A second foreground/protected-data notification gets another factory
-        // attempt rather than inheriting a static `nil` from the first call.
-        XCTAssertNil(provider.acquire())
+        let recovered = provider.acquire()
+        XCTAssertNotNil(recovered)
+        XCTAssertTrue(provider.acquire() === recovered)
         XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(notifications, 1)
+        provider.removeObserver(token)
     }
+}
+
+private final class RecoveryCredentials: UploadCredentialStoring {
+    func save(_ token: String, uploadID: String) throws {}
+    func read(uploadID: String) throws -> String? { nil }
+    func delete(uploadID: String) throws {}
+}
+private final class RecoveryClient: MultipartHTTPClient {
+    func json(_ request: URLRequest) async throws -> [String: Any] { [:] }
 }

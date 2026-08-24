@@ -11,6 +11,16 @@ test('native queue hydrates once and fans out one listener snapshot', async () =
   await consumeNativeUpload(transport,'done',{ songId:3 },async () => {}); await consumeNativeUpload(transport,'done',{ songId:3 },async () => {}); assert.deepEqual(acked,['done']); unsubscribe(); resetNativeUploadQueueForTest();
 });
 
+test('started native queue explicitly refreshes recovered snapshots without adding a listener', async () => {
+  resetNativeUploadQueueForTest(); let list=0; let listenersAdded=0;
+  const transport={ kind:'native', listPending:async()=>({ items:++list === 1 ? [] : [{ id:'unlocked',state:'queued',target:{song_id:7} }] }), addListener:async()=>{listenersAdded+=1;return()=>{};} };
+  await hydrateNativeUploadQueue(transport);
+  await hydrateNativeUploadQueue(transport,{ refresh:true });
+  assert.equal(list,2); assert.equal(listenersAdded,1);
+  assert.equal(filterNativeUploads({songId:7})[0]?.id,'unlocked');
+  resetNativeUploadQueueForTest();
+});
+
 test('target filters keep song, rehearsal, and member uploads isolated', async () => {
   resetNativeUploadQueueForTest();
   const transport={ kind:'native', listPending:async()=>({ items:[

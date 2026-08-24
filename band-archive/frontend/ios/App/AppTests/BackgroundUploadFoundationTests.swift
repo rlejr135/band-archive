@@ -119,12 +119,12 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let (store, task) = try makeStoreTask()
         XCTAssertTrue(try store.acquire(task.uploadID, owner: "engine"))
         let drain = BackgroundEventDrainState(); var completionCalls = 0
-        let generation = drain.append { completionCalls += 1 }
-        XCTAssertEqual(drain.markFinishObserved(), generation)
-        drain.beginDelegateWrite(); XCTAssertTrue(drain.beginDrain(generation: generation))
+        drain.append { completionCalls += 1 }
+        drain.markFinishObserved()
+        drain.beginDelegateWrite(); XCTAssertTrue(drain.beginDrain())
         XCTAssertTrue(try store.savePendingAck(uploadID: task.uploadID, part: 1, etag: "etag", bytes: 1, owner: "engine"))
         drain.endDelegateWrite()
-        let stable = drain.snapshot(); drain.finishIfStable(generation: generation, revision: stable.revision)?.forEach { $0() }
+        let stable = drain.snapshot(); drain.finishIfStable(revision: stable.revision)?()
         XCTAssertEqual(try store.pendingAcks(uploadID: task.uploadID).count, 1)
         XCTAssertEqual(completionCalls, 1)
     }

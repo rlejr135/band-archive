@@ -13,8 +13,25 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
     ]
     private var engine: IOSMultipartEngine? { IOSMultipartEngine.shared }
     private let picker = VideoPicker()
+    private var providerObserver: UUID?
+    private weak var boundEngine: IOSMultipartEngine?
 
-    public override func load() { engine?.event = { [weak self] task in self?.notifyListeners("state", data: Self.json(task), retainUntilConsumed: true) }; engine?.pump() }
+    public override func load() {
+        // Register even while protected data is unavailable. The provider invokes
+        // this callback once it can recreate the durable engine in this process.
+        providerObserver = IOSMultipartEngine.provider.observe { [weak self] engine in self?.bind(engine) }
+        _ = engine
+    }
+    deinit { if let providerObserver { IOSMultipartEngine.provider.removeObserver(providerObserver) } }
+
+    private func bind(_ engine: IOSMultipartEngine) {
+        guard boundEngine !== engine else { return }
+        boundEngine = engine
+        engine.event = { [weak self] task in self?.notifyListeners("state", data: Self.json(task), retainUntilConsumed: true) }
+        // Rehydrate listeners registered while the provider was temporarily nil.
+        engine.retainedTasks().forEach { notifyListeners("state", data: Self.json($0), retainUntilConsumed: true) }
+        engine.pump()
+    }
 
     @objc func requestNotificationPermission(_ call: CAPPluginCall) { BackgroundUploadNotifier.shared.requestPermission { granted in call.resolve(["granted":granted,"backgroundLimited":!granted,"message":granted ? "" : "Notifications are off; background completion alerts will be unavailable.","forceQuitStopsTransfers":true]) } }
 
@@ -51,11 +68,12 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func syncProcessingStatus(_ call: CAPPluginCall) { guard let id=call.getString("id"), let state=call.getString("state"), let next=BackgroundUploadState(rawValue:state), next == .completed || next == .failed, let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.syncProcessing(id,state:next,result:call.getString("result"),error:call.getString("error"))]) }
     @objc func updateProcessing(_ call: CAPPluginCall) { syncProcessingStatus(call) }
     @objc func listPending(_ call: CAPPluginCall) {
-        guard engine != nil else {
+        guard let engine else {
             call.resolve(["items":[],"supportsBackground":true,"forceQuitStopsTransfers":true,"queueUnavailable":true,"retryable":true,"backgroundNotice":"The upload queue is temporarily unavailable; unlock the device and reopen the app to retry."])
             return
         }
-        let tasks=(try? IOSUploadStore().retainedTasks()) ?? []
+        engine.pump()
+        let tasks=engine.retainedTasks()
         call.resolve(["items":tasks.map(Self.json),"supportsBackground":true,"forceQuitStopsTransfers":true,"backgroundNotice":"Force-quitting the app cancels iOS background transfers; reopen and retry when needed."])
     }
     private func terminalDelete(_ call:CAPPluginCall){guard let id=call.getString("id"),let engine else{call.resolve(["changed":false]);return};call.resolve(["changed":engine.acknowledge(id)])}
