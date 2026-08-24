@@ -20,8 +20,8 @@ public final class UploadEvents {
     BackgroundUploadPlugin active = plugin.get(); if (active == null) return;
     JSObject event = json(task); active.emitNative("state", event);
     NotificationManager notifications = active.getContext().getSystemService(NotificationManager.class);
-    if ("completed".equals(task.state) || "failed".equals(task.state) || "cancelled".equals(task.state)) notifications.cancel(task.id.hashCode());
-    else notifications.notify(task.id.hashCode(), UploadNotifications.upload(active.getContext(), task.id, task.progress));
+    if ("completed".equals(task.state) || "failed".equals(task.state) || "cancelled".equals(task.state)) notifications.cancel(task.workId);
+    else notifications.notify(task.workId, UploadNotifications.upload(active.getContext(), task.id, task.workId, task.progress));
     if ("uploading".equals(task.state)) active.emitNative("progress", event);
     if ("completed".equals(task.state)) active.emitNative("completed", event);
     if ("failed".equals(task.state)) active.emitNative("failed", event);
