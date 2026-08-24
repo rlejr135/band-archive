@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useId, useEffect, useMemo } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
-import { consumeNativeUpload, nativeTargetMatches, nativeUploadResult } from '../../services/nativeUploadQueue';
+import { consumeNativeUpload, deleteNativeUpload, nativeTargetMatches, nativeUploadResult } from '../../services/nativeUploadQueue';
 import './FileUpload.css';
 
 const FileUpload = ({ 
@@ -24,7 +24,7 @@ const FileUpload = ({
   }, [nativePending, nativeTarget]);
 
   useEffect(() => {
-    nativePending.filter((item) => nativeTargetMatches(item,nativeTarget) && ['completed','failed'].includes(item.state)).forEach((item) => {
+    nativePending.filter((item) => nativeTargetMatches(item,nativeTarget) && item.state === 'completed').forEach((item) => {
       consumeNativeUpload(transport,item.id,nativeTarget,async (terminal) => {
         const media=nativeUploadResult(terminal);
         setUploadProgress((previous) => ({ ...previous, [terminal.id]: { name:terminal.name || '업로드 파일', progress:100, status:terminal.state, error:terminal.error } }));
@@ -35,6 +35,13 @@ const FileUpload = ({
       }).catch(() => {});
     });
   }, [nativePending, nativeTarget, onMediaComplete, transport]);
+
+  const deleteTerminal = useCallback(async (fileId) => {
+    const deleted = await deleteNativeUpload(transport, fileId, nativeTarget);
+    if (deleted) setUploadProgress((previous) => {
+      const next = { ...previous }; delete next[fileId]; return next;
+    });
+  }, [nativeTarget, transport]);
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
@@ -153,7 +160,8 @@ const FileUpload = ({
                 {item.error && <span className="progress-error">{item.error}</span>}
               </div>
               {!onUpload && ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
-              {!onUpload && item.status === 'retry_wait' && <button type="button" className="upload-cancel" onClick={() => transport.resume?.({ id: fileId })}>재시도</button>}
+              {!onUpload && item.status === 'retry_wait' && <button type="button" className="upload-cancel" onClick={() => (transport.retry || transport.resume)?.({ id: fileId })}>재시도</button>}
+              {!onUpload && ['failed', 'cancelled'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => deleteTerminal(fileId)}>삭제</button>}
             </div>
           ))}
         </div>

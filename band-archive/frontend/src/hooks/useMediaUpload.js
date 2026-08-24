@@ -97,7 +97,6 @@ export default function useMediaUpload() {
               if (event.id !== file.id || active.cancelled) return;
               const status = mapUploadState(event.state); onProgress((event.progress || 0) * file.size / 100, file.size); onStatus(status, event);
               if (event.state === 'failed') {
-                await consumeNativeUpload(transport, event.id, nativeTargetPayload(target), async () => {});
                 finish(new Error(event.error || '네이티브 업로드에 실패했습니다.'));
               }
               if (event.state === 'cancelled') finish(new DOMException('업로드가 취소되었습니다.', 'AbortError'));

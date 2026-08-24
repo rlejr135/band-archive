@@ -84,8 +84,10 @@ export const getNativeBackgroundUploadTransport = () => {
     requestNotificationPermission: () => BackgroundUpload.requestNotificationPermission(),
     enqueue: (options) => BackgroundUpload.enqueue(options),
     resume: (options = {}) => BackgroundUpload.resume(options),
+    retry: (options) => BackgroundUpload.retry(options),
     cancel: (options) => BackgroundUpload.cancel(options),
     acknowledge: (options) => BackgroundUpload.acknowledge(options),
+    delete: (options) => BackgroundUpload.delete(options),
     syncStatus: (options) => BackgroundUpload.syncProcessingStatus(options),
     listPending: () => BackgroundUpload.listPending(),
     addListener: async (event, listener) => {

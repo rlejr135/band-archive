@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
 import useMediaUpload from '../../hooks/useMediaUpload';
-import { consumeNativeUpload, nativeTargetMatches } from '../../services/nativeUploadQueue';
+import { consumeNativeUpload, deleteNativeUpload, nativeTargetMatches } from '../../services/nativeUploadQueue';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -43,7 +43,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   useEffect(() => {
     rehearsals.forEach((rehearsal) => nativePending.filter((item) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })).forEach((item) => {
       setRecoveredUploads((previous) => ({ ...previous, [item.id]:item }));
-      if(!['completed','failed'].includes(item.state))return;
+      if(item.state !== 'completed')return;
       consumeNativeUpload(transport,item.id,{ rehearsalId:rehearsal.id },async (terminal) => {
         setRecoveredUploads((previous) => ({ ...previous, [terminal.id]:terminal }));
         if(terminal.state === 'completed') {
@@ -53,6 +53,11 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
       }).catch(() => {});
     }));
   }, [nativePending,rehearsals,transport]);
+
+  const deleteRecoveredUpload = async (item, rehearsalId) => {
+    if (!await deleteNativeUpload(transport,item.id,{ rehearsalId })) return;
+    setRecoveredUploads((previous) => { const next={...previous}; delete next[item.id]; return next; });
+  };
 
   const handleDelete = async (id) => {
     if (!window.confirm('이 일정을 삭제하시겠습니까?')) return;
@@ -278,7 +283,8 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       <span className="rd-queue-status-text">{{ preparing:'준비 중', queued:'대기 중', uploading:`업로드 ${item.progress || 0}%`, retry_wait:'재시도 대기', completing:'완료 처리 중', processing:'음원 추출 중', completed:'완료', failed:'실패', cancelled:'취소됨' }[item.state]}</span>
                       {item.error && <span className="rd-queue-error">{item.error}</span>}
                       {['preparing','queued','uploading','retry_wait','completing','processing'].includes(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
-                      {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => transport.resume?.({ id:item.id })}>재시도</button>}
+                      {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
+                      {['failed','cancelled'].includes(item.state) && <button className="rd-queue-remove" onClick={() => deleteRecoveredUpload(item,r.id)}>삭제</button>}
                     </div>
                   ))}
                 </div>

@@ -35,7 +35,7 @@ public final class UploadEngine {
       requireLease(store, task, execution);
       JSONObject remote = get(task.api + "/uploads/multipart/" + session.id, session.capability);
       String remoteState = remote.optString("status");
-      if ("completed".equals(remoteState)) { task.result = minimalResult(remote); task.progress = 100; task.state = queueState(remote); update(context, store, task, execution); deleteSource(task); return "failed".equals(task.state) ? Outcome.FAILURE : Outcome.SUCCESS; }
+      if ("completed".equals(remoteState)) { task.result = minimalResult(remote); task.progress = 100; task.state = queueState(remote); update(context, store, task, execution); if(UploadRetentionPolicy.deleteSourceImmediately(task.state))deleteSource(context, task); return "failed".equals(task.state) ? Outcome.FAILURE : Outcome.SUCCESS; }
       if ("expired".equals(remoteState) || "aborted".equals(remoteState) || "failed".equals(remoteState)) throw new TerminalException("업로드 세션이 " + remoteState + " 상태입니다.");
       Set<Integer> acked = ackedParts(remote);
       long partSize = remote.optLong("part_size", session.partSize);
@@ -48,7 +48,7 @@ public final class UploadEngine {
       task.result = minimalResult(result); task.progress = 100;
       task.state = queueState(result);
       // "processing" deliberately remains nonterminal: upload ownership ends here and UI polling owns status observation.
-      update(context, store, task, execution); deleteSource(task); return Outcome.SUCCESS;
+      update(context, store, task, execution); if(UploadRetentionPolicy.deleteSourceImmediately(task.state))deleteSource(context, task); return Outcome.SUCCESS;
     } catch (UploadExecutionRegistry.UploadStoppedException lost) { return Outcome.SUCCESS; }
       catch (TerminalException error) { return fail(context, store, task, execution, error, false); }
       catch (Exception error) { return fail(context, store, task, execution, error, true); }
@@ -59,7 +59,7 @@ public final class UploadEngine {
     UploadStore store = new UploadStore(context); store.cancel(id); UploadExecutionRegistry.cancel(id); UploadStore.Task task = store.get(id); if (task == null) return; UploadEvents.emit(context,task);
     try { if (task.session != null && task.capability != null) post(task.api + "/uploads/multipart/" + task.session + "/abort", new JSONObject(), task.capability); }
     catch (Exception ignored) { /* server abort is idempotent; local cancellation still stops the job */ }
-    deleteSource(task);
+    deleteSource(context, task);
   }
 
   private static Outcome fail(Context context, UploadStore store, UploadStore.Task task, UploadExecutionRegistry.Handle execution, Exception error, boolean retryable) {
@@ -77,7 +77,7 @@ public final class UploadEngine {
     Uri uri = Uri.parse(t.uri); if (!"file".equals(uri.getScheme()) || uri.getPath() == null) throw new TerminalException("지속 저장된 파일을 찾을 수 없습니다.");
     return new File(uri.getPath());
   }
-  private static void deleteSource(UploadStore.Task t) { try { Uri uri=Uri.parse(t.uri); if ("file".equals(uri.getScheme()) && uri.getPath()!=null) new File(uri.getPath()).delete(); } catch (Exception ignored) {} }
+  private static void deleteSource(Context context, UploadStore.Task t) { UploadFileRetention.deleteSource(context, t.uri); }
   private static void verifyFile(File f, UploadStore.Task t) throws TerminalException {
     if (!f.exists() || f.length() != t.bytes) throw new TerminalException("선택한 파일이 변경되었거나 없어졌습니다.");
     if (t.fingerprint != null && !t.fingerprint.equals(sha256(f))) throw new TerminalException("선택한 파일의 내용이 변경되었습니다.");

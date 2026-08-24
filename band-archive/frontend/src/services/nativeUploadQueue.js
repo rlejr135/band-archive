@@ -6,6 +6,7 @@ const recovered = new Set();
 let started = false;
 let remove = null;
 let hydration = null;
+const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 const snapshot = () => [...items.values()];
 const notify = () => { const value = snapshot(); listeners.forEach((listener) => listener(value)); };
@@ -50,16 +51,23 @@ export const subscribeNativeUploadQueue = (listener) => { listeners.add(listener
 
 export const acknowledgeNativeUpload = async (transport, id, target) => {
   const item = items.get(id);
-  if (!item || !['completed', 'failed'].includes(item.state) || (target && !nativeTargetMatches(item, target)) || acknowledging.has(id)) return false;
+  if (!item || !terminalStates.has(item.state) || (target && !nativeTargetMatches(item, target)) || acknowledging.has(id)) return false;
   acknowledging.add(id);
   try { await transport.acknowledge?.({ id }); items.delete(id); notify(); return true; } finally { acknowledging.delete(id); }
 };
 
 export const consumeNativeUpload = async (transport, id, target, consume) => {
   const item = items.get(id);
-  if (!item || !['completed', 'failed'].includes(item.state) || !nativeTargetMatches(item, target) || acknowledging.has(id)) return false;
+  if (!item || !terminalStates.has(item.state) || !nativeTargetMatches(item, target) || acknowledging.has(id)) return false;
   acknowledging.add(id);
   try { await consume?.(item); await transport.acknowledge?.({ id }); items.delete(id); notify(); return true; } finally { acknowledging.delete(id); }
+};
+
+export const deleteNativeUpload = async (transport, id, target) => {
+  const item = items.get(id);
+  if (!item || !terminalStates.has(item.state) || !nativeTargetMatches(item, target) || acknowledging.has(id)) return false;
+  acknowledging.add(id);
+  try { await (transport.delete || transport.acknowledge)?.({ id }); items.delete(id); notify(); return true; } finally { acknowledging.delete(id); }
 };
 
 export const syncNativeProcessingStatus = async (transport, id, state, media) => {
