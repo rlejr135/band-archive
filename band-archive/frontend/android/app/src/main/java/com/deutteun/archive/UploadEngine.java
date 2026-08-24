@@ -29,7 +29,7 @@ public final class UploadEngine {
     execution.attach(Thread.currentThread()); if (!store.acquire(id, execution.owner)) { UploadExecutionRegistry.unregister(execution); return Outcome.SUCCESS; }
     EXECUTION.set(execution);
     try { try {
-      File file = durableFile(task); verifyFile(file, task);
+      File file = durableFile(context, task); verifyFile(file, task);
       task.state = "preparing"; update(context, store, task, execution);
       Session session = openOrResume(context, task, store, execution);
       requireLease(store, task, execution);
@@ -73,9 +73,12 @@ public final class UploadEngine {
   private static void update(Context context, UploadStore s, UploadStore.Task t, UploadExecutionRegistry.Handle execution) throws UploadExecutionRegistry.UploadStoppedException { if(!s.updateForOwner(t,execution.owner)) lost(execution); UploadEvents.emit(context,t); }
   private static void requireLease(UploadStore s, UploadStore.Task t, UploadExecutionRegistry.Handle execution) throws UploadExecutionRegistry.UploadStoppedException { if(!s.renew(t.id,execution.owner)) lost(execution); }
   private static void lost(UploadExecutionRegistry.Handle execution) throws UploadExecutionRegistry.UploadStoppedException { execution.cancel(); throw new UploadExecutionRegistry.UploadStoppedException(); }
-  private static File durableFile(UploadStore.Task t) throws TerminalException {
-    Uri uri = Uri.parse(t.uri); if (!"file".equals(uri.getScheme()) || uri.getPath() == null) throw new TerminalException("지속 저장된 파일을 찾을 수 없습니다.");
-    return new File(uri.getPath());
+  private static File durableFile(Context context, UploadStore.Task t) throws TerminalException {
+    File file = UploadFileRetention.safeSource(context, t.uri);
+    if (file == null || !UploadFileRetention.isSafeRegularChild(UploadFileRetention.uploadsDir(context), file)) {
+      throw new TerminalException("지속 저장된 파일을 찾을 수 없습니다.");
+    }
+    return file;
   }
   private static void deleteSource(Context context, UploadStore.Task t) { UploadFileRetention.deleteSource(context, t.uri); }
   private static void verifyFile(File f, UploadStore.Task t) throws TerminalException {

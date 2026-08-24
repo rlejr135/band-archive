@@ -19,6 +19,10 @@ public final class UploadFileRetention {
     } catch (IOException ignored) { return false; }
   }
 
+  static boolean isSafeRegularChild(File root, File candidate) {
+    return isSafeChild(root, candidate) && UploadSourcePolicy.isRegularFile(candidate);
+  }
+
   public static File safeSource(Context context, String value) {
     try {
       Uri uri = Uri.parse(value);
@@ -35,5 +39,12 @@ public final class UploadFileRetention {
 
   static boolean deleteFile(File root, File candidate) {
     return isSafeChild(root, candidate) && (!candidate.exists() || candidate.delete());
+  }
+
+  /** Used when a multi-select copy fails: never leave this batch's durable files behind. */
+  static boolean deleteBatchFiles(File root, Iterable<File> candidates) {
+    boolean deleted = true;
+    for (File candidate : candidates) deleted &= deleteFile(root, candidate);
+    return deleted;
   }
 }
