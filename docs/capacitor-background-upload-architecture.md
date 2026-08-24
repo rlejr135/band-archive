@@ -1,131 +1,81 @@
-# Capacitor 기반 Android/iOS 백그라운드 업로드 아키텍처
+# Capacitor 백그라운드 업로드: 구현·릴리스 기준
 
-상태: **1단계 아키텍처 확정 — 아직 Capacitor, 네이티브 plugin, API 변경은 구현·배포되지 않음.**
+상태: **구현 완료, 프로덕션 공개 전 내부 검증 단계.** 이 문서는 현재 코드와 `c74307f` 이후 Android, `e583b72` 이후 iOS, backend multipart session 구현을 기준으로 한다. 아직 production 배포·실기기 승인과 feature rollout은 수행하지 않았다.
 
-## 결정 요약
+## 범위와 전송 경계
 
-- 기존 React/Vite 화면·도메인 UI·업로드 큐를 공통으로 유지한다.
-- 웹에서는 현재 `mediaUploadManager`의 single/multipart R2 직접 업로드를 그대로 사용한다.
-- Capacitor 앱에서는 같은 JS 큐가 `BackgroundUpload` plugin을 호출하고, Android/iOS가 파일 기반 multipart PUT을 수행한다.
-- 서버는 R2 credential을 앱에 주지 않는다. session/part presign/complete/abort라는 서버 소유 경계를 유지하되, 앱 재시작 복구에 필요한 session 조회와 part URL 재발급 계약을 추가한다.
-- 네이티브 앱 도입 전에 upload API 전반에 사용자 인증·소유권 검증을 추가한다. 현재 API에는 공통 인증·인가가 없으므로, 현 상태로 장기 presigned upload를 mobile background 기능에 확장하지 않는다.
+공통 React/Vite UI는 `BackgroundUpload` transport를 native platform에서만 선택하고, plugin이 없거나 browser에서는 기존 web transport를 사용한다.
 
-## 현재 코드 기준선
-
-`frontend`은 Capacitor 패키지·Android·iOS 프로젝트가 없는 React 19/Vite SPA다. video는 1 GiB 상한이며 100 MiB 이상에서 현행 R2 multipart로 전환한다. 서버는 16 MiB part와 최대 10,000 part를 발급하고, `POST /uploads/multipart/initiate`, `POST /uploads/multipart/<session_id>/parts`, `complete`, `abort`를 제공한다. `media`(song/rehearsal) 및 `personal_log`(member) 대상은 같은 multipart endpoint를 공유한다.
-
-현재 session은 24시간 후 만료되며, 서버는 **part number가 한 번 발급된 뒤 다시 발급되는 것을 409으로 거부**한다. 완료 ETag는 browser가 메모리에서 들고 complete에 보낸다. 따라서 지금의 웹 계약은 탭 수명 안의 재시도에는 맞지만, 앱 재시작·presigned URL 만료 뒤 재개에는 충분하지 않다.
-
-비디오 처리 완료 후 R2에는 원본 video와 M4A만 남는다. 이 계획은 처리 queue와 라디오 재생 계약을 변경하지 않는다.
-
-## 공통 UI와 전송 adapter
-
-Vite/React 컴포넌트(`FileUpload`, 합주 업로드, 개인 기록 업로드)는 파일 선택, 대상 선택, 진행률, 취소, `queued → processing → completed/failed` 표시를 유지한다. transport 선택은 UI 컴포넌트가 아닌 `uploadMediaFile` 계층의 adapter에서 한다.
-
-| 실행 환경 | 전송 adapter | 책임 |
+| 환경 | 현재 동작 | 보장 범위 |
 | --- | --- | --- |
-| 웹 | 기존 XHR + R2 presigned single/multipart | 현재 aggregate progress, part PUT 3회 재시도, abort |
-| Capacitor Android/iOS | `BackgroundUpload` Capacitor plugin | OS가 관리하는 파일 upload, persistent 상태, notification/OS callback을 JS 이벤트로 전달 |
+| Web | R2 presigned single PUT 및 100 MiB 이상 foreground multipart | 탭/브라우저가 살아 있는 동안의 upload만 보장한다. browser background·재시작 복구를 보장하지 않는다. |
+| Android | native picker → app-private durable copy → SQLite/Keystore → UIDT 또는 WorkManager → R2 multipart | 앱 재시작·OS 중단 뒤 저장된 task를 재개하도록 구현되어 있으나 실제 기기/OEM 정책 검증이 필요하다. |
+| iOS | PHPicker current representation → Application Support durable copy → SQLite/Keychain → background URLSession part PUT | JS 없이 delegate 결과를 저장·재전달하도록 구현되어 있으나 macOS/Xcode 및 TestFlight 검증이 필요하다. iOS force-quit은 background transfer를 취소한다. |
 
-웹 fallback은 계속 가능해야 한다. native plugin이 없거나 지원하지 않는 파일/플랫폼이면 UI는 명확한 안내 후 현행 foreground 웹 upload로 전환하며, background 완료를 가장해서는 안 된다.
+모든 video는 최대 1 GiB다. backend/R2 산출물은 원본 video와 추출 M4A뿐이다. native UI도 기존 `queued → processing → completed/failed`와 media/personal-log 대상을 유지한다.
 
-## 플랫폼별 전송 실행기
+## 서버와 R2 계약
 
-### Android
+backend는 `POST /uploads/multipart/initiate`, `GET /uploads/multipart/<session_id>`, part URL 발급, `POST .../parts/<part>/ack`, `complete`, `abort`를 제공한다. session은 one-time capability token의 **hash**만 저장하고, raw token은 initiate 응답 한 번에서만 전달된다. client는 이후 `X-Upload-Capability` header를 사용한다.
 
-사용자가 화면에서 시작한 장시간 video upload에는 Android 14(API 34)+의 **User-Initiated Data Transfer (UIDT) Job**을 기본으로 선택한다. 이 API는 사용자 시작·즉시 실행·사용자에게 보이는 진행률 전송에 맞고 notification을 요구한다. plugin은 `RUN_USER_INITIATED_JOBS`, `JobService`, notification channel을 선언하고, network/저장공간 제약, 예상 송수신 바이트, notification의 진행률·취소 action을 제공한다.
+- part size는 16 MiB, 최대 10,000 part, video 상한은 1 GiB다.
+- native와 web은 session의 acknowledged parts를 조회해 이미 ACK된 part를 건너뛴다. URL 만료/403은 같은 part URL을 다시 발급받아 재시도한다.
+- complete/abort/ACK는 capability token으로 보호되고 complete는 멱등 결과를 반환한다. backend startup migration은 session capability hash, part ETag/bytes/checksum/ack timestamp 컬럼을 보강한다.
+- browser R2 PUT에는 CORS가 필요하다. production origin에서 `PUT`, `HEAD`(필요 시 `GET`)와 `Content-Type`을 허용하고 `ETag`를 expose 해야 한다. native URLSession/OkHttp PUT에는 browser CORS가 적용되지 않는다.
 
-Android 13 이하 또는 UIDT scheduling 불가 상황에는 WorkManager의 foreground-service worker를 fallback으로 사용한다. WorkManager는 짧고 중단 가능한 작업에는 적합하지만 장시간 사용자 시작 전송의 주 실행기로 가정하지 않는다. 일반 foreground service를 1순위로 선택하지 않는 이유는 최근 Android의 `dataSync` foreground-service 시간/시작 제한 때문이다. plugin은 UIDT가 시스템/사용자에 의해 중단되어 callback이 오지 않는 경우에도 디스크 상태만으로 재개할 수 있어야 한다. [Android UIDT 가이드](https://developer.android.com/develop/background-work/background-tasks/uidt?hl=en), [Android data-transfer 선택 가이드](https://developer.android.com/develop/background-work/background-tasks/data-transfer-options?hl=en)
+현재 인증·소유권 경계는 account session이 아니라 upload capability token이다. token 유출 시 해당 session의 유효 기간 동안 호출될 수 있으므로, 장기적으로 사용자 인증·대상 권한 검증을 capability 검증과 함께 추가해야 한다. token, presigned URL, R2 credential은 로그·notification·DB에 원문 저장하지 않는다.
 
-### iOS
+R2 multipart는 DB transaction과 원자적이지 않다. 만료/취소/실패 session과 R2 abandoned multipart upload lifecycle을 Cloudflare 계정의 현재 console/API 정책으로 주기적으로 점검한다. 완료 원본/M4A는 이 정리로 삭제하지 않는다. legacy single/multipart upload는 durable native state가 없으므로 재개 대상이 아니다.
 
-iOS는 고유 identifier의 `URLSessionConfiguration.background`와 `URLSessionUploadTask`를 사용한다. 각 R2 part PUT은 `uploadTask(with:fromFile:)`로 만들며, in-memory data/stream task에 의존하지 않는다. 원본은 앱 sandbox에서 background session이 읽을 수 있는 안정적인 로컬 file URL이어야 한다. Photos picker의 보안 범위/임시 URL은 앱 재시작 뒤 유효하지 않을 수 있으므로, enqueue 전에 앱 관리 디렉터리로 복사하거나 이동하고 파일 무결성·여유 디스크를 확인한다.
+## Android 구현
 
-iOS가 앱을 재기동해 background session event를 전달할 수 있으므로 AppDelegate/Scene lifecycle에서 completion handler를 보관하고 plugin이 session delegate callback을 복구해야 한다. JS 런타임이 없는 동안의 progress/결과는 native DB에 먼저 기록하고 다음 bridge 시작 시 전달한다. [Apple URLSessionUploadTask](https://developer.apple.com/documentation/foundation/urlsessionuploadtask), [Apple background session 구성](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/background%28withidentifier%3A%29)
+Android의 `BackgroundUpload` Capacitor plugin은 SAF picker 결과를 앱 upload directory에 atomic copy하고 SHA-256/크기/경로를 검증한다. token은 Keystore 암호문, task·part ACK·lease·persistent positive `work_id`는 SQLite에 저장한다.
 
-## 서버 API 보강 계약
+- API 34 이상은 사용자 시작 전송에 맞는 **User-Initiated Data Transfer Job**을 우선 사용한다. notification progress/cancel, `RUN_USER_INITIATED_JOBS`, `FOREGROUND_SERVICE_DATA_SYNC`를 선언한다.
+- UIDT가 불가능한 API/상황에서는 WorkManager foreground `dataSync` worker로 fallback한다.
+- engine write는 lease owner CAS이며 cancel은 durable state를 먼저 저장한다. retry는 URL 재발급/ACK/complete를 재조정하고, cancelled/terminal task는 재개하지 않는다.
+- notification 권한 거부는 upload 자체를 중단시키지 않지만 background 제한 안내를 보여야 한다.
 
-기존 initiate/complete/abort의 의미는 유지한다. native 재개를 위해 다음을 **새 버전 계약으로 추가**한다. 현재 코드에는 없다.
+프로젝트는 `minSdk 24`, `compileSdk/targetSdk 36`, Java 21을 사용한다. Android SDK platform `android-36`, build-tools 36.x, platform-tools와 JDK 21이 필요하다. `frontend/android/local.properties`의 `sdk.dir`은 로컬 ignore 파일이며 커밋하지 않는다.
 
-| API | 추가/변경 | 목적 |
-| --- | --- | --- |
-| `GET /uploads/multipart/<session_id>` | 추가 | 인증된 소유자에게 status, target kind/id, object key 식별자, declared bytes, part size, session 만료, 완료 media/log ID, 서버가 아는 part 상태를 반환 |
-| `POST /uploads/multipart/<session_id>/parts` | 변경 | 같은 part number 요청을 409으로 끝내지 않고, 아직 완료로 확인되지 않은 part에는 새 presigned URL을 idempotent하게 반환/갱신 |
-| `POST /uploads/multipart/<session_id>/parts/ack` | 추가 권장 | native가 PUT 성공 뒤 part number, ETag, bytes, checksum(선택)을 서버에 저장; 재시작 뒤 complete payload를 재구성 |
-| `POST /uploads/multipart/<session_id>/complete` | 변경 | 저장된 ETag와 전달 ETag를 대조하고, 이미 complete면 같은 결과를 멱등 반환 |
-| `POST /uploads/multipart/<session_id>/abort` | 유지 | 앱 취소 및 만료 정리에 멱등 사용 |
+## iOS 구현
 
-session에는 uploader/owner, 대상 종류와 ID, object key, R2 upload ID, declared bytes, part size, 만료, 상태, part별 ETag/bytes/checksum을 영속한다. `initiated → uploading → completing → completed | aborted | expired | failed`를 명시한다. session 조회·part 재발급·complete·abort는 같은 인증 주체와 같은 대상 권한을 매 요청 검증한다.
+iOS plugin은 `PHPicker`의 `.videos`, `.current` representation을 사용한다. `NSItemProvider.loadFileRepresentation` callback이 끝나기 전에 허용 확장자(`mp4`, `webm`, `mov`, `avi`, `mkv`)와 1 GiB/여유 공간을 검사하고 Application Support `background_uploads`로 동기 durable copy한다.
 
-presigned URL은 짧은 TTL이며 native DB에 credential처럼 장기 보관하지 않는다. 만료/403은 plugin이 해당 part의 새 URL을 서버에 요청하는 재시도 가능한 상태다. 서버 session 만료는 URL 만료와 분리해 관리하며, session이 만료되었거나 R2 multipart가 사라졌으면 새 session을 만들고 기존 것을 abort/expired로 기록한다.
+- capability는 Keychain (`AfterFirstUnlockThisDeviceOnly`), task/ACK/attempt/lease/work ID는 SQLite WAL에 보관한다.
+- 고정 identifier background `URLSession`의 file-based upload task로 R2 part PUT을 수행한다. source/part file은 canonical app-private child와 regular file인지 확인한다.
+- session task description, SQLite attempt mapping, single-flight coordinator, lease-owner CAS가 restart·duplicate part·stale callback을 막는다. pending ACK/complete intent는 foreground pump에서도 재시도한다.
+- background finish event와 AppDelegate completion handler는 FIFO credit/handler로 1:1 처리하고 bounded stale handler 정리를 둔다. protected-data 시점의 engine 생성 실패는 provider가 재시도하고 plugin observer가 bridge event 및 retained snapshot을 재결합한다.
+- R2 complete 뒤 processing으로 전환하면 durable source를 제거한다. cancelled는 즉시, retryable failure는 7일 보존한다. processing row는 JS polling/ack까지 유지한다.
 
-## JS ↔ native plugin 계약
+iOS force-quit은 system background URLSession transfer도 취소할 수 있다. 해당 제한은 UI 안내와 운영 테스트에서 명확히 취급한다. Windows에서는 Swift/Xcode compile을 실행할 수 없으므로 macOS `xcodebuild test`와 signing/TestFlight 검증이 release gate다. 상세 실기기 체크리스트는 [iOS background QA](../band-archive/frontend/ios/IOS_BACKGROUND_UPLOAD_QA.md)를 따른다.
 
-plugin 이름은 `BackgroundUpload`로 가정한다. JS는 browser `File`을 native에 넘기지 않고, Capacitor가 접근 가능한 로컬 URI와 immutable upload descriptor를 넘긴다.
+## 빌드·설정·비밀값
 
-```ts
-type UploadDescriptor = {
-  localUri: string;                 // plugin이 durable copy를 확보할 원본 URI
-  sessionId: string;                // initiate 뒤 받은 서버 session
-  apiBaseUrl: string;               // VITE_API_URL
-  target: { kind: 'media' | 'personal_log'; id: number };
-  declaredBytes: number;
-  contentType: string;
-  partSize: number;
-  uploadId: string;                 // native-local UUID, sessionId와 별개
-};
+frontend 작업 디렉터리는 `E:\Anything\band-archive\frontend`이다.
 
-type UploadState =
-  | 'preparing' | 'queued' | 'uploading' | 'paused'
-  | 'retry_wait' | 'completing' | 'processing'
-  | 'completed' | 'failed' | 'cancelled';
-
-interface BackgroundUploadPlugin {
-  enqueue(descriptor: UploadDescriptor): Promise<{ uploadId: string }>;
-  resume({ uploadId }: { uploadId: string }): Promise<void>;
-  cancel({ uploadId }: { uploadId: string }): Promise<void>;
-  listPending(): Promise<Array<PersistedUpload>>;
-  addListener('progress' | 'state' | 'completed' | 'failed', callback): Promise<ListenerHandle>;
-}
+```powershell
+npm ci
+npm test
+npm run build
+npx cap sync
+cd android
+.\gradlew.bat test --no-daemon
+.\gradlew.bat assembleDebug --no-daemon
 ```
 
-`progress`는 uploaded bytes, total bytes, active part 수를 포함한다. `completed`는 R2 part 완료가 아니라 server `complete`가 반환한 media/personal_log와 후속 processing 상태를 포함해야 한다. JS는 이벤트를 화면 큐에 반영하고 기존 audio processing polling을 시작한다.
+`VITE_API_URL`은 Vite build-time 공개 API base URL이다. production value는 HTTPS backend origin이어야 하며 mobile bundle을 다시 build해야 변경된다. `CAPACITOR_APP_ID`/`CAPACITOR_APP_NAME`은 CI에서 `capacitor.config.ts` 기본값을 override할 수 있다. package/app ID 변경은 Android application ID, iOS bundle ID, signing/provisioning/profile과 함께 계획적으로 수행한다.
 
-## 영속·재시도·취소·재시작 복구
+R2/Fly/Cloudflare API key, backend secret, Android keystore, iOS signing certificate·provisioning profile, Keychain capability token은 `.env`, CI secret store, OS secure storage에만 둔다. `local.properties`, signing file, private certificate와 credential은 commit/log/audit output에 넣지 않는다.
 
-native DB(예: Android Room / iOS SQLite)는 upload ID, durable file path, 파일 크기·수정시각·hash, session ID, part size, 완료 ETag 목록, 각 part retry/오류, 마지막 progress, 상태, 생성/갱신 시각을 저장한다. 파일이 삭제·변경되었거나 hash가 다르면 재개하지 않고 사용자에게 새 upload를 요구한다.
+## 릴리스 순서와 rollback
 
-1. JS가 target 검증 후 서버 initiate를 호출하고 native에 enqueue한다.
-2. native는 durable copy 확보 → OS job/task 등록 → part URL 획득 → file slice PUT → ETag ack를 반복한다.
-3. 재시작/OS 중단 뒤 plugin은 native DB와 `GET session`을 대조한다. ack된 part는 건너뛰고, 미완료 part는 새 URL을 받아 재개한다.
-4. 모든 part가 확인되면 complete를 한 번 호출한다. complete 충돌/timeout은 session 조회 후 결과를 확정한다.
-5. 취소는 먼저 OS task/job을 취소·상태 저장하고 서버 abort를 재시도한다. abort가 네트워크 문제로 지연되면 `cancelled_pending_abort`로 남겨 다음 기회에 처리한다.
+native app, frontend, backend는 독립적으로 배포할 수 있지만 **backend session schema/API를 먼저 또는 같은 release window에** 호환 배포해야 한다. 구버전 web client가 multipart를 계속 완료할 수 있어야 하며 backend rollback 시 새 session/part columns와 R2 원본/M4A를 삭제하지 않는다.
 
-자동 재시도는 network/5xx/URL 만료에 한하고 exponential backoff·최대 횟수·사용자 재개 action을 둔다. 4xx 권한 오류, 파일 불일치, session 만료는 자동 무한 재시도를 하지 않는다.
+권장 rollout은 internal feature flag 또는 internal build로 native transport를 제한한 뒤, media/personal_log, 100 MiB 경계, 1 GiB 근접, URL expiry, retry/cancel, processing/M4A ready를 관찰하는 방식이다. feature flag off 또는 frontend rollback은 web foreground fallback으로 되돌리되 이미 생성된 native task/session은 backend 호환 기간 동안 유지한다. rollback은 새 enqueue 중지 → active task 상태 보존/관찰 → frontend → backend 순으로 판단하며 R2 원본/M4A를 삭제하지 않는다.
 
-## 보안과 운영 경계
+## 검증 및 남은 제한
 
-- R2 access key/secret, Fly secret, presigned URL 원문을 JS log·notification·crash report에 기록하지 않는다.
-- 인증 access token은 OS secure storage(Keychain/Keystore)에만 저장하고, native HTTP client는 authorization header를 API 요청에만 붙인다. R2 PUT에는 presigned URL만 사용한다.
-- 현재 서버에 공통 인증이 없으므로, plugin 개발보다 먼저 upload session의 인증·대상 소유권·rate/size 정책을 도입한다.
-- CORS는 웹 R2 PUT에는 계속 필요하지만 native URLSession/OkHttp 직접 PUT의 대체 보안 기제는 아니다. native는 TLS, host validation, URL 만료·최소권한 session으로 보호한다.
-- 서버/DB와 R2는 원자적이지 않다. 만료·abort·complete 실패의 session과 R2 abandoned multipart를 주기적으로 점검하며, 완료 원본/M4A는 정리 작업이 확인 없이 삭제하지 않는다.
+CI/로컬 기본 검증은 backend pytest, frontend Node tests/build/Capacitor sync, Android Gradle unit test·debug build다. Windows에서 iOS source/PBX/plist 정적 검사만 가능하며 `xcodebuild`, PHPicker iCloud, background URLSession wake, lock/unlock, force-quit, cellular 전환은 macOS/실기기에서 확인해야 한다.
 
-## 검증 환경과 한계
-
-| Windows에서 가능한 검증 | macOS/Xcode 또는 실제 기기 필요 |
-| --- | --- |
-| React adapter unit test, API contract/pytest, multipart 재개 시나리오 mock, Android Gradle build·emulator/ADB 일부, R2 CORS/API integration test | iOS Capacitor build/signing, background URLSession lifecycle, 앱 강제 종료·재기동 callback, Photos file copy, 실제 cellular/Wi-Fi 전환, iPhone 열/저장공간 행동 |
-
-Android도 실제 device에서 notification, Task Manager 중단, battery/thermal, OEM 절전, background 재개를 검증해야 한다. Emulator만으로 장시간 이동통신 조건을 승인하지 않는다.
-
-## 단계별 구현·커밋·테스트 계획
-
-1. **BE session durability**: 인증/소유권 경계, session 조회·part ack·part URL 재발급, schema migration, TTL/abort cleanup을 추가한다. pytest로 media/personal_log 분리, 재개, ETag 중복, 만료, 권한 거부, complete 멱등성을 검증한다.
-2. **FE transport abstraction**: 기존 web adapter의 동작을 보존한 채 plugin adapter interface와 feature detection을 추가한다. Vitest 또는 현재 도입할 test runner로 web fallback·이벤트 state mapping을 테스트한다.
-3. **Capacitor scaffold**: 공통 Vite bundle을 감싸고 Android/iOS 프로젝트를 추가한다. 이 단계는 upload 기능을 아직 활성화하지 않으며 Android/iOS build CI를 만든다.
-4. **Android plugin**: UIDT API 34+와 WorkManager foreground fallback, notification progress/cancel, native DB 복구를 구현한다. 실제 Android API 34+와 하위 버전 기기에서 중단/재시작·network 변화 테스트를 한다.
-5. **iOS plugin**: background URLSession file upload, durable copy, native DB·delegate wake-up·completion handler를 구현한다. Xcode와 실제 iPhone에서 종료/재기동·network 변화·잠금 화면 테스트를 한다.
-6. **통합 rollout**: feature flag로 internal 사용자만 활성화한다. 100 MiB 이상 및 1 GiB 근접 video, media/personal_log, cancel/retry, URL 만료, R2 ETag, server M4A queue를 관찰한 뒤 확대한다.
-
-각 단계는 독립 커밋과 해당 단계의 테스트를 포함한다. API 계약·schema 변경이 배포되기 전에는 native 앱을 public rollout하지 않는다.
+2026-08-25에 실행한 `npm audit --omit=dev`는 production dependency 경로의 `react-router`/`react-router-dom`에서 **high 2건**을 보고했다. 자동 `npm audit fix`는 실행하지 않았으며, dependency update와 회귀 검증을 별도 변경으로 처리해야 한다.
