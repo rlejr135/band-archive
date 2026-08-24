@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { createUploadTarget, fetchMediaProcessing, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
+import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
+import { mapUploadState } from '../services/uploadTransport';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const processingStates = new Set(['queued', 'pending', 'processing']);
@@ -13,7 +14,8 @@ export default function useMediaUpload() {
     if (!active) return;
     active.cancelled = true;
     active.xhrs.forEach((xhr) => xhr.abort());
-    if (active.sessionId) fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/uploads/multipart/${active.sessionId}/abort`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+    active.onStatus?.(mapUploadState('cancelled'));
+    abortMultipartUpload(active.session).catch(() => {});
   }, []);
   useEffect(() => () => [...activeRef.current.keys()].forEach(cancel), [cancel]);
 
@@ -41,12 +43,12 @@ export default function useMediaUpload() {
   }, []);
 
   const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, onProgress, onStatus, onMediaUpdate }) => {
-    const active = { cancelled: false, xhrs: new Set(), sessionId: null };
+    const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
     activeRef.current.set(key, active);
     try {
       const target = createUploadTarget({ songId, rehearsalId, memberId, title });
-      onStatus('preparing');
-      const media = normalizeMedia(await uploadMediaFile({ file, target, onProgress, setSessionId: (id) => { active.sessionId = id; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
+      onStatus(mapUploadState('preparing'));
+      const media = normalizeMedia(await uploadMediaFile({ file, target, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       onProgress(file.size, file.size); onStatus('queued', media); onMediaUpdate?.(media);
       return await poll(media, active, onStatus, onMediaUpdate, target.kind);
@@ -58,7 +60,7 @@ export default function useMediaUpload() {
 
   const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media') => {
     const media = normalizeMedia(await retryMediaAudio(mediaId, kind));
-    const active = { cancelled: false, xhrs: new Set(), sessionId: null };
+    const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
     const key = `retry-${mediaId}`; activeRef.current.set(key, active);
     try { onStatus('queued', media); return await poll(media, active, onStatus, onMediaUpdate, kind); }
     finally { activeRef.current.delete(key); }
@@ -66,7 +68,7 @@ export default function useMediaUpload() {
 
   const watch = useCallback((media, onMediaUpdate, kind = 'media') => {
     const key = `watch-${media.id}`;
-    const active = { cancelled: false, xhrs: new Set(), sessionId: null };
+    const active = { cancelled: false, xhrs: new Set(), session: null };
     activeRef.current.set(key, active);
     poll(normalizeMedia(media), active, () => {}, onMediaUpdate, kind).finally(() => {
       if (activeRef.current.get(key) === active) activeRef.current.delete(key);
@@ -74,5 +76,7 @@ export default function useMediaUpload() {
     return () => cancel(key);
   }, [cancel, poll]);
 
-  return { upload, cancel, retryAudio, watch };
+  const listPending = useCallback(() => getUploadTransport().listPending(), []);
+  const transport = getUploadTransport();
+  return { upload, cancel, retryAudio, watch, listPending, transport };
 }

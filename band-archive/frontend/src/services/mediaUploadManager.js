@@ -1,8 +1,13 @@
 import { API_URL } from './api';
+import { createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport';
 
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
 const MAX_PART_RETRIES = 3;
+const webTransport = createWebUploadTransport({ apiUrl: API_URL });
+// No Capacitor dependency is installed yet. This remains web unless a later
+// scaffold supplies a compatible plugin explicitly.
+export const getUploadTransport = () => resolveUploadTransport({ apiUrl: API_URL });
 
 // Processing endpoints return { status, error, audio_url, ... }, while regular
 // media endpoints use transcoding_status. Keep both endpoint shapes usable by UI.
@@ -33,25 +38,6 @@ const requestJson = async (url, options = {}) => {
   }
   return response.json();
 };
-
-const putWithProgress = (url, blob, contentType, onProgress, registerXhr) => new Promise((resolve, reject) => {
-  const xhr = new XMLHttpRequest();
-  registerXhr?.(xhr);
-  xhr.upload.onprogress = (event) => {
-    if (event.lengthComputable) onProgress(event.loaded);
-  };
-  xhr.onload = () => {
-    if (xhr.status >= 200 && xhr.status < 300) {
-      const etag = xhr.getResponseHeader('ETag');
-      resolve(etag?.replaceAll('"', '') || null);
-    } else reject(new Error(`저장소 업로드에 실패했습니다 (${xhr.status}).`));
-  };
-  xhr.onerror = () => reject(new Error('저장소 네트워크 오류가 발생했습니다.'));
-  xhr.onabort = () => reject(new DOMException('업로드가 취소되었습니다.', 'AbortError'));
-  xhr.open('PUT', url);
-  xhr.setRequestHeader('Content-Type', contentType);
-  xhr.send(blob);
-});
 
 const isVideo = (file) => file.type.startsWith('video/') || /\.(mp4|mov|webm|avi|mkv)$/i.test(file.name);
 
@@ -92,18 +78,25 @@ const uploadSingle = async ({ file, target, onProgress, registerXhr }) => {
       ? { filename: file.name, content_type: contentType, upload_type: 'personal_log', member_id: target.memberId }
       : { filename: file.name, content_type: contentType, upload_type: 'media' }),
   });
-  await putWithProgress(presign.upload_url, file, contentType, (loaded) => onProgress(loaded, file.size), registerXhr);
+  await webTransport.putPart(presign.upload_url, file, contentType, (loaded) => onProgress(loaded, file.size), registerXhr);
   return requestJson(`${API_URL}${target.kind === 'personal_log' ? '/uploads/complete/personal-log' : '/uploads/complete/media'}`, { method: 'POST', body: JSON.stringify(targetPayload(target, file, presign.filename)) });
 };
 
-const uploadMultipart = async ({ file, target, onProgress, registerXhr, setSessionId }) => {
-  const initiated = await requestJson(`${API_URL}/uploads/multipart/initiate`, {
-    method: 'POST', body: JSON.stringify(initiatePayload(target, file)),
-  });
-  setSessionId?.(initiated.session_id);
+const acknowledgedParts = (session) => session?.acknowledged_parts || session?.ack_parts || session?.parts || [];
+
+const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession }) => {
+  const initiated = await webTransport.initiateMultipart(initiatePayload(target, file));
+  if (!initiated.capabilityToken) throw new Error('업로드 권한 토큰을 받지 못했습니다. 다시 시도하세요.');
+  const session = { sessionId: initiated.sessionId, capabilityToken: initiated.capabilityToken };
+  setSession?.(session);
+  const serverSession = await webTransport.getSession(session);
   const totalParts = Math.ceil(file.size / initiated.part_size);
   if (totalParts > initiated.max_parts) throw new Error('파일이 multipart 업로드 제한을 초과합니다.');
   const completed = new Map();
+  acknowledgedParts(serverSession).forEach((part) => {
+    const number = part.part_number ?? part.partNumber;
+    if (number) completed.set(number, part.bytes ?? Math.min(initiated.part_size, file.size - ((number - 1) * initiated.part_size)));
+  });
   const inFlight = new Map();
   const updateAggregate = () => {
     const uploaded = [...completed.values()].reduce((sum, bytes) => sum + bytes, 0);
@@ -113,42 +106,43 @@ const uploadMultipart = async ({ file, target, onProgress, registerXhr, setSessi
   const uploadPart = async (partNumber) => {
     const start = (partNumber - 1) * initiated.part_size;
     const blob = file.slice(start, Math.min(start + initiated.part_size, file.size));
-    // The backend issues one URL per part number and rejects a second issue (409).
-    // Reuse that URL for bounded PUT retries.
-    const { upload_url: uploadUrl } = await requestJson(`${API_URL}/uploads/multipart/${initiated.session_id}/parts`, { method: 'POST', body: JSON.stringify({ part_number: partNumber }) });
     let lastError;
+    let uploadUrl;
     for (let attempt = 0; attempt < MAX_PART_RETRIES; attempt += 1) {
       inFlight.set(partNumber, 0); updateAggregate();
       try {
-        const etag = await putWithProgress(uploadUrl, blob, file.type || 'application/octet-stream', (loaded) => {
+        if (!uploadUrl) uploadUrl = (await webTransport.requestPart(session, partNumber)).upload_url;
+        const etag = await webTransport.putPart(uploadUrl, blob, file.type || 'application/octet-stream', (loaded) => {
           inFlight.set(partNumber, loaded); updateAggregate();
         }, registerXhr);
         if (!etag) throw new Error('R2가 ETag를 노출하지 않았습니다. CORS expose headers를 확인하세요.');
+        await webTransport.acknowledgePart(session, partNumber, { etag, bytes: blob.size });
         inFlight.delete(partNumber); completed.set(partNumber, blob.size); updateAggregate();
-        return { part_number: partNumber, etag };
+        return;
       } catch (error) {
         inFlight.delete(partNumber); updateAggregate(); lastError = error;
         if (error.name === 'AbortError') throw error;
-        if (attempt < MAX_PART_RETRIES - 1) await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        if (attempt < MAX_PART_RETRIES - 1) {
+          onUploadState?.(mapUploadState('retry_wait'));
+          // A presigned part URL can expire or be rejected; request an idempotent replacement.
+          if (error.retryable || error.status === 403) uploadUrl = null;
+          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+          onUploadState?.(mapUploadState('uploading'));
+        }
       }
     }
     throw lastError;
   };
-  const parts = [];
   let nextPart = 1;
   const worker = async () => {
     while (nextPart <= totalParts) {
       const part = nextPart; nextPart += 1;
-      parts.push(await uploadPart(part));
+      if (!completed.has(part)) await uploadPart(part);
     }
   };
-  try {
-    await Promise.all(Array.from({ length: Math.min(3, totalParts) }, worker));
-    return requestJson(`${API_URL}/uploads/multipart/${initiated.session_id}/complete`, { method: 'POST', body: JSON.stringify({ parts: parts.sort((a, b) => a.part_number - b.part_number) }) });
-  } catch (error) {
-    requestJson(`${API_URL}/uploads/multipart/${initiated.session_id}/abort`, { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
-    throw error;
-  }
+  await Promise.all(Array.from({ length: Math.min(3, totalParts) }, worker));
+  onUploadState?.(mapUploadState('completing'));
+  return webTransport.complete(session);
 };
 
 export const uploadMediaFile = async (options) => {
@@ -161,9 +155,10 @@ export const uploadMediaFile = async (options) => {
 export const uploadGalleryImageFile = async ({ file, onProgress }) => {
   const contentType = file.type || 'application/octet-stream';
   const presign = await requestJson(`${API_URL}/uploads/presign`, { method: 'POST', body: JSON.stringify({ filename: file.name, content_type: contentType, upload_type: 'gallery' }) });
-  await putWithProgress(presign.upload_url, file, contentType, (loaded) => onProgress?.(loaded, file.size));
+  await webTransport.putPart(presign.upload_url, file, contentType, (loaded) => onProgress?.(loaded, file.size));
   return requestJson(`${API_URL}/uploads/complete/gallery`, { method: 'POST', body: JSON.stringify({ filename: presign.filename, original_filename: file.name, file_size: file.size }) });
 };
 
 export const fetchMediaProcessing = async (mediaId, kind = 'media') => normalizeMedia(await requestJson(`${API_URL}${kind === 'personal_log' ? '/personal-logs' : '/media'}/${mediaId}/processing`));
 export const retryMediaAudio = async (mediaId, kind = 'media') => normalizeMedia(await requestJson(`${API_URL}${kind === 'personal_log' ? '/personal-logs' : '/media'}/${mediaId}/retry-audio`, { method: 'POST', body: JSON.stringify({}) }));
+export const abortMultipartUpload = (session) => session?.sessionId && session?.capabilityToken ? webTransport.abort(session) : Promise.resolve();

@@ -274,7 +274,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                               <button className="rd-queue-remove" onClick={() => removePendingFile(i)}>✕</button>
                             )}
                             {item.status === 'uploading' && <progress value={item.progress} max="100" className="rd-queue-progress" aria-label={`${item.file.name} 업로드 ${item.progress}%`} />}
-                            <span className="rd-queue-status-text">{{ pending: '준비', uploading: `업로드 ${item.progress}%`, queued: '음원 대기', processing: '음원 추출 중', completed: '완료', failed: '실패' }[item.status]}</span>
+                            <span className="rd-queue-status-text">{{ pending: '준비', preparing: '준비 중', queued: '대기 중', uploading: `업로드 ${item.progress}%`, retry_wait: '재시도 대기', completing: '완료 처리 중', processing: '음원 추출 중', completed: '완료', failed: '실패', cancelled: '취소됨' }[item.status]}</span>
                             {item.error && <span className="rd-queue-error">{item.error}</span>}
                           </div>
                         ))}
