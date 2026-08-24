@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchSongs, getSong, createSong, updateSong, deleteSong, uploadMedia, deleteMedia, renameMedia } from '../services/api';
+import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia } from '../services/api';
 
 const SongContext = createContext();
 
@@ -52,26 +52,6 @@ export const SongProvider = ({ children }) => {
           setCurrentSong(null);
       }
   }
-
-  const addMediaToSong = async (songId, file, onProgress, rehearsalId) => {
-      try {
-        await uploadMedia(songId, file, onProgress, rehearsalId);
-        // Refresh the song data from backend after upload
-        const updatedSong = await getSong(songId);
-        const updatedSongs = songs.map(song =>
-          song.id === songId ? updatedSong : song
-        );
-        setSongs(updatedSongs);
-
-        // Update current song if it's the one being updated
-        if (currentSong && currentSong.id === songId) {
-          setCurrentSong(updatedSong);
-        }
-      } catch (error) {
-        console.error('Failed to upload media:', error);
-        throw error;
-      }
-  };
 
   const removeMediaFromSong = async (songId, mediaId) => {
     try {
@@ -155,7 +135,6 @@ export const SongProvider = ({ children }) => {
         startEdit,
         startCreate,
         cancelEdit,
-        addMediaToSong,
         removeMediaFromSong,
         renameMediaInSong,
         refreshSong

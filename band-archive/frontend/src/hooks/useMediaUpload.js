@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { fetchMediaProcessing, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
+import { createUploadTarget, fetchMediaProcessing, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const processingStates = new Set(['queued', 'pending', 'processing']);
@@ -44,12 +44,12 @@ export default function useMediaUpload() {
     const active = { cancelled: false, xhrs: new Set(), sessionId: null };
     activeRef.current.set(key, active);
     try {
+      const target = createUploadTarget({ songId, rehearsalId, memberId, title });
       onStatus('preparing');
-      const kind = memberId !== undefined && memberId !== null ? 'personal_log' : 'media';
-      const media = normalizeMedia(await uploadMediaFile({ file, songId, rehearsalId, memberId, title, onProgress, setSessionId: (id) => { active.sessionId = id; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
+      const media = normalizeMedia(await uploadMediaFile({ file, target, onProgress, setSessionId: (id) => { active.sessionId = id; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       onProgress(file.size, file.size); onStatus('queued', media); onMediaUpdate?.(media);
-      return await poll(media, active, onStatus, onMediaUpdate, kind);
+      return await poll(media, active, onStatus, onMediaUpdate, target.kind);
     } catch (error) {
       if (!active.cancelled) onStatus('failed', { error: error.message });
       throw error;

@@ -1,4 +1,5 @@
 import { API_URL } from './api';
+import { uploadGalleryImageFile } from './mediaUploadManager';
 
 export const fetchGalleryImages = async () => {
   const response = await fetch(`${API_URL}/gallery`);
@@ -7,16 +8,7 @@ export const fetchGalleryImages = async () => {
 };
 
 export const uploadGalleryImage = async (file, onProgress) => {
-  const { getPresignedUrl, uploadToStorage, completeGalleryUpload } = await import('./uploadApi');
-
-  const contentType = file.type || 'application/octet-stream';
-  const { upload_url, filename } = await getPresignedUrl(file.name, contentType, 'gallery');
-  await uploadToStorage(upload_url, file, contentType, onProgress);
-  return completeGalleryUpload({
-    filename,
-    original_filename: file.name,
-    file_size: file.size,
-  });
+  return uploadGalleryImageFile({ file, onProgress: (loaded, total) => onProgress?.(total ? (loaded / total) * 100 : 0) });
 };
 
 export const deleteGalleryImage = async (id) => {

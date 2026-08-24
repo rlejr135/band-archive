@@ -47,12 +47,3 @@ export const fetchRehearsalMedia = async (rehearsalId) => {
   if (!response.ok) throw new Error('Failed to fetch rehearsal media');
   return await response.json();
 };
-
-// Upload media from rehearsal (presigned URL → R2 직접 업로드)
-export const uploadRehearsalMedia = async (rehearsalId, songId, file, onProgress) => {
-  const { uploadMediaFile } = await import('./mediaUploadManager');
-  return uploadMediaFile({
-    file, songId, rehearsalId,
-    onProgress: (loaded, total) => onProgress?.(total ? (loaded / total) * 100 : 0),
-  });
-};

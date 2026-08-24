@@ -26,7 +26,7 @@ const SongPage = () => {
   const {
     songs, loading, error, currentSong, isEditing,
     selectSong, removeSong, startCreate, startEdit,
-    addMediaToSong, loadSongs, cancelEdit, addSong, editSong
+    loadSongs, cancelEdit, addSong, editSong
   } = useSongs();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -118,7 +118,6 @@ const SongPage = () => {
           <SongDetail
             song={currentSong}
             onEdit={startEdit}
-            onUploadMedia={addMediaToSong}
             onBack={handleBackToGenerals}
           />
         ) : (

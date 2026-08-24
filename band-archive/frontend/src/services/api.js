@@ -45,15 +45,6 @@ export const deleteSong = async (id) => {
   return await response.json();
 };
 
-// Upload media with progress tracking (presigned URL → R2 직접 업로드)
-export const uploadMedia = async (songId, file, onProgress, rehearsalId) => {
-  const { uploadMediaFile } = await import('./mediaUploadManager');
-  return uploadMediaFile({
-    file, songId, rehearsalId,
-    onProgress: (loaded, total) => onProgress?.(total ? (loaded / total) * 100 : 0),
-  });
-};
-
 // Link/unlink media to rehearsal
 export const linkMediaToRehearsal = async (mediaId, rehearsalId) => {
   const response = await fetch(`${API_URL}/media/${mediaId}/rehearsal`, {

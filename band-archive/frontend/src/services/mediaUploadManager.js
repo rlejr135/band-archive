@@ -55,40 +55,50 @@ const putWithProgress = (url, blob, contentType, onProgress, registerXhr) => new
 
 const isVideo = (file) => file.type.startsWith('video/') || /\.(mp4|mov|webm|avi|mkv)$/i.test(file.name);
 
-const personalTitle = (file, title) => title || file.name.replace(/\.[^.]+$/, '') || file.name;
-const isPersonalLog = ({ memberId }) => memberId !== undefined && memberId !== null && memberId !== '';
-
-const assertTarget = (options) => {
-  const personal = isPersonalLog(options);
-  if (personal && (options.songId !== undefined || options.rehearsalId !== undefined)) throw new Error('개인 연습 기록은 곡 또는 합주와 함께 업로드할 수 없습니다.');
-  if (!personal && !options.songId) throw new Error('곡 또는 멤버 업로드 대상이 필요합니다.');
-  return personal;
+export const normalizePositiveInteger = (value, fieldName, { optional = false } = {}) => {
+  if (optional && (value === undefined || value === null || value === '')) return null;
+  const normalized = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(normalized) || normalized <= 0) throw new Error(`${fieldName}가 올바르지 않습니다. 화면을 새로고침한 뒤 다시 시도하세요.`);
+  return normalized;
 };
 
-const uploadSingle = async ({ file, songId, rehearsalId, memberId, title, onProgress, registerXhr }) => {
-  const personal = isPersonalLog({ memberId });
+const personalTitle = (file, title) => title || file.name.replace(/\.[^.]+$/, '') || file.name;
+export const createUploadTarget = ({ songId, rehearsalId, memberId, title }) => {
+  const hasMember = memberId !== undefined && memberId !== null && memberId !== '';
+  const hasSongTarget = songId !== undefined && songId !== null && songId !== '';
+  const hasRehearsal = rehearsalId !== undefined && rehearsalId !== null && rehearsalId !== '';
+  if (hasMember && (hasSongTarget || hasRehearsal)) throw new Error('개인 연습 기록은 곡 또는 합주와 함께 업로드할 수 없습니다.');
+  if (hasMember) return { kind: 'personal_log', memberId: normalizePositiveInteger(memberId, '멤버 ID'), title };
+  if (!hasSongTarget) throw new Error('곡을 선택한 뒤 다시 시도하세요.');
+  return {
+    kind: 'media',
+    songId: normalizePositiveInteger(songId, '곡 ID'),
+    rehearsalId: normalizePositiveInteger(rehearsalId, '합주 ID', { optional: true }),
+  };
+};
+
+const targetPayload = (target, file, filename) => target.kind === 'personal_log'
+  ? { filename, original_filename: file.name, file_size: file.size, member_id: target.memberId, title: personalTitle(file, target.title) }
+  : { filename, original_filename: file.name, file_size: file.size, song_id: target.songId, rehearsal_id: target.rehearsalId };
+
+const initiatePayload = (target, file) => target.kind === 'personal_log'
+  ? { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, member_id: target.memberId, title: personalTitle(file, target.title) }
+  : { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, song_id: target.songId, rehearsal_id: target.rehearsalId };
+
+const uploadSingle = async ({ file, target, onProgress, registerXhr }) => {
   const contentType = file.type || 'application/octet-stream';
   const presign = await requestJson(`${API_URL}/uploads/presign`, {
-    method: 'POST', body: JSON.stringify(personal
-      ? { filename: file.name, content_type: contentType, upload_type: 'personal_log', member_id: Number(memberId) }
+    method: 'POST', body: JSON.stringify(target.kind === 'personal_log'
+      ? { filename: file.name, content_type: contentType, upload_type: 'personal_log', member_id: target.memberId }
       : { filename: file.name, content_type: contentType, upload_type: 'media' }),
   });
   await putWithProgress(presign.upload_url, file, contentType, (loaded) => onProgress(loaded, file.size), registerXhr);
-  return requestJson(`${API_URL}${personal ? '/uploads/complete/personal-log' : '/uploads/complete/media'}`, {
-    method: 'POST',
-    body: JSON.stringify(personal
-      ? { filename: presign.filename, original_filename: file.name, file_size: file.size, member_id: Number(memberId), title: personalTitle(file, title) }
-      : { filename: presign.filename, original_filename: file.name, file_size: file.size, song_id: songId, rehearsal_id: rehearsalId || null }),
-  });
+  return requestJson(`${API_URL}${target.kind === 'personal_log' ? '/uploads/complete/personal-log' : '/uploads/complete/media'}`, { method: 'POST', body: JSON.stringify(targetPayload(target, file, presign.filename)) });
 };
 
-const uploadMultipart = async ({ file, songId, rehearsalId, memberId, title, onProgress, registerXhr, setSessionId }) => {
-  const personal = isPersonalLog({ memberId });
+const uploadMultipart = async ({ file, target, onProgress, registerXhr, setSessionId }) => {
   const initiated = await requestJson(`${API_URL}/uploads/multipart/initiate`, {
-    method: 'POST',
-    body: JSON.stringify(personal
-      ? { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, member_id: Number(memberId), title: personalTitle(file, title) }
-      : { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, song_id: songId, rehearsal_id: rehearsalId || null }),
+    method: 'POST', body: JSON.stringify(initiatePayload(target, file)),
   });
   setSessionId?.(initiated.session_id);
   const totalParts = Math.ceil(file.size / initiated.part_size);
@@ -142,10 +152,17 @@ const uploadMultipart = async ({ file, songId, rehearsalId, memberId, title, onP
 };
 
 export const uploadMediaFile = async (options) => {
-  assertTarget(options);
+  const target = options.target || createUploadTarget(options);
   if (isVideo(options.file) && options.file.size > MAX_VIDEO_BYTES) throw new Error('영상 파일은 1GiB를 초과할 수 없습니다.');
-  if (isVideo(options.file) && options.file.size >= MULTIPART_THRESHOLD_BYTES) return uploadMultipart(options);
-  return uploadSingle(options);
+  if (isVideo(options.file) && options.file.size >= MULTIPART_THRESHOLD_BYTES) return uploadMultipart({ ...options, target });
+  return uploadSingle({ ...options, target });
+};
+
+export const uploadGalleryImageFile = async ({ file, onProgress }) => {
+  const contentType = file.type || 'application/octet-stream';
+  const presign = await requestJson(`${API_URL}/uploads/presign`, { method: 'POST', body: JSON.stringify({ filename: file.name, content_type: contentType, upload_type: 'gallery' }) });
+  await putWithProgress(presign.upload_url, file, contentType, (loaded) => onProgress?.(loaded, file.size));
+  return requestJson(`${API_URL}/uploads/complete/gallery`, { method: 'POST', body: JSON.stringify({ filename: presign.filename, original_filename: file.name, file_size: file.size }) });
 };
 
 export const fetchMediaProcessing = async (mediaId, kind = 'media') => normalizeMedia(await requestJson(`${API_URL}${kind === 'personal_log' ? '/personal-logs' : '/media'}/${mediaId}/processing`));

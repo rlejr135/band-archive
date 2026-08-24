@@ -7,6 +7,7 @@ const FileUpload = ({
   rehearsalId,
   memberId,
   onMediaComplete,
+  onUpload,
   accept = "audio/*,video/*,image/*,.pdf,.mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp",
   multiple = true 
 }) => {
@@ -39,18 +40,22 @@ const FileUpload = ({
       setUploadProgress(prev => ({ ...prev, [fileId]: { name: file.name, progress: 0, status: 'preparing' } }));
 
       try {
-        const media = await upload({
-          key: fileId, file, songId, rehearsalId, memberId,
-          onProgress: (loaded, total) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } })),
-          onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
-          onMediaUpdate: onMediaComplete,
-        });
+        const updateProgress = (loaded, total) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } }));
+        const media = onUpload
+          ? await onUpload(file, (percent) => updateProgress(percent, 100))
+          : await upload({
+            key: fileId, file, songId, rehearsalId, memberId,
+            onProgress: updateProgress,
+            onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
+            onMediaUpdate: onMediaComplete,
+          });
+        setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'completed', progress: 100 } }));
         onMediaComplete?.(media);
       } catch (error) {
         if (error.name !== 'AbortError') setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'failed', error: error.message } }));
       }
     }
-  }, [memberId, onMediaComplete, rehearsalId, songId, upload]);
+  }, [memberId, onMediaComplete, onUpload, rehearsalId, songId, upload]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
@@ -112,7 +117,7 @@ const FileUpload = ({
                 {item.status === 'uploading' && <div className="progress-bar"><div className="progress-fill" style={{ width: `${item.progress}%` }} /></div>}
                 {item.error && <span className="progress-error">{item.error}</span>}
               </div>
-              {['preparing', 'uploading', 'queued', 'processing'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
+              {!onUpload && ['preparing', 'uploading', 'queued', 'processing'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
             </div>
           ))}
         </div>
