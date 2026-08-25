@@ -10,6 +10,9 @@ class Config:
     S3_ACCESS_KEY = os.getenv('S3_ACCESS_KEY')
     S3_SECRET_KEY = os.getenv('S3_SECRET_KEY')
     S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
+    # Deliberately separate from R2 credentials: this only authorizes the
+    # narrow internal migration inventory response.
+    R2_MIGRATION_TOKEN = os.getenv('R2_MIGRATION_TOKEN')
     S3_PRESIGN_EXPIRES = 3600  # presigned URL 유효시간 (초)
     # Large source videos can legitimately exceed five minutes. Workers send a
     # heartbeat while FFmpeg runs; stale jobs are recovered on next startup.

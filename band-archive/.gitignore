@@ -13,6 +13,8 @@ __pycache__/
 instance/
 .pytest_cache/
 uploads/
+backend/tools/.state/
+backend/tools/__pycache__/
 
 # Frontend
 .DS_Store

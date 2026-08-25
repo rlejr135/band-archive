@@ -97,11 +97,29 @@ def audio_filename_for(filename):
 def processing_fields(record, key_prefix):
     """Shared JSON fields; callers retain their established endpoint names."""
     original_url = storage.generate_url(f'{key_prefix}/{record.filename}')
+    video_720_filename = getattr(record, 'video_720_filename', None)
+    video_720_url = None
+    if key_prefix == 'media' and record.file_type == 'video' and video_720_filename:
+        # This is a fully-qualified immutable R2 key, unlike normal media
+        # filenames that live below the ``media/`` prefix.
+        video_720_url = storage.generate_url(video_720_filename)
     audio_url = None
     if record.file_type == 'video' and record.transcoding_status == 'completed' and record.audio_filename:
         audio_url = storage.generate_url(f'{key_prefix}/{record.audio_filename}')
     return {
-        'url': original_url, 'audio_url': audio_url,
+        # Once a finalize has atomically linked a verified derivative, the
+        # regular video URL prefers it. The original remains explicit below.
+        'url': video_720_url or original_url,
+        'original_url': original_url,
+        'video_720_url': video_720_url,
+        'video_720_filename': video_720_filename,
+        'video_720_source_etag': getattr(record, 'video_720_source_etag', None),
+        'video_720_profile': getattr(record, 'video_720_profile', None),
+        'video_720_completed_at': (
+            record.video_720_completed_at.isoformat()
+            if getattr(record, 'video_720_completed_at', None) else None
+        ),
+        'audio_url': audio_url,
         'transcoding_status': record.transcoding_status, 'audio_filename': record.audio_filename,
         'processing_error': record.processing_error,
         'processing_started_at': record.processing_started_at.isoformat() if record.processing_started_at else None,
@@ -124,7 +142,14 @@ def processing_status_response(record, key_prefix):
 
 def delete_original_and_audio(record, key_prefix, logger=None):
     """Delete derivative then original; preserve DB state if either delete fails."""
-    keys = ([f'{key_prefix}/{record.audio_filename}'] if record.audio_filename else [])
+    keys = []
+    # A user deleting the Media is distinct from the migration's prohibited
+    # bulk original prune.  Its immutable 720p derivative belongs to the same
+    # record and must not be orphaned.
+    if key_prefix == 'media' and getattr(record, 'video_720_filename', None):
+        keys.append(record.video_720_filename)
+    if record.audio_filename:
+        keys.append(f'{key_prefix}/{record.audio_filename}')
     keys.append(f'{key_prefix}/{record.filename}')
     errors = []
     for key in keys:

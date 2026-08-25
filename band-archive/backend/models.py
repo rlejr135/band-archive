@@ -82,6 +82,12 @@ class Media(db.Model):
     processing_completed_at = db.Column(db.DateTime, nullable=True)
     processing_attempts = db.Column(db.Integer, default=0, nullable=False)
     processing_heartbeat_at = db.Column(db.DateTime, nullable=True)
+    # Immutable 720p migration derivative.  ``filename`` remains the original
+    # R2 key basename until an explicit, CAS-checked finalize references this.
+    video_720_filename = db.Column(db.String(300), nullable=True)
+    video_720_source_etag = db.Column(db.String(200), nullable=True)
+    video_720_profile = db.Column(db.String(100), nullable=True)
+    video_720_completed_at = db.Column(db.DateTime, nullable=True)
     is_featured = db.Column(db.Boolean, default=False)
     upvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     downvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
@@ -98,7 +104,9 @@ class Media(db.Model):
     def to_dict(self, viewer_vote=0):
         from media_processing import processing_fields
         fields = processing_fields(self, 'media')
-        qualities = {'original': fields['url']}
+        qualities = {'original': fields['original_url']}
+        if fields['video_720_url']:
+            qualities['720p'] = fields['video_720_url']
         if fields['audio_url']:
             qualities['audio'] = fields['audio_url']
         

@@ -126,6 +126,17 @@ def test_completed_video_has_only_original_and_audio_urls(app):
     }
 
 
+def test_completed_720_reference_becomes_default_but_keeps_original_url(app):
+    with app.app_context():
+        media = create_media(song_id=1, filename='clip.mp4', file_type='video')
+        media.video_720_filename = 'media/transcoded/720/1/etag.mp4'
+        media.video_720_source_etag = 'etag'
+        payload = media.to_dict()
+    assert payload['url'] == 'https://storage.test/media/transcoded/720/1/etag.mp4'
+    assert payload['qualities']['720p'] == payload['url']
+    assert payload['qualities']['original'] == 'https://storage.test/media/clip.mp4'
+
+
 def test_processing_status_and_retry_api(client, app, monkeypatch):
     with app.app_context():
         media = create_media(song_id=_song(client), filename='clip.mp4', file_type='video')

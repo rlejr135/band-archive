@@ -19,6 +19,7 @@ from routes.search import search_bp
 from routes.comments import comments_bp
 from routes.gallery import gallery_bp
 from routes.uploads import uploads_bp
+from routes.migrations import migrations_bp
 from config import DevelopmentConfig
 
 load_dotenv()
@@ -74,41 +75,38 @@ def _run_migrations(app):
             conn.execute('ALTER TABLE media ADD COLUMN original_filename VARCHAR(200)')
             app.logger.info('Migration: added original_filename column to media table')
 
-        # Check personal_log table
-        columns = [row[1] for row in conn.execute('PRAGMA table_info(personal_log)').fetchall()]
-        if 'original_filename' not in columns:
-            conn.execute('ALTER TABLE personal_log ADD COLUMN original_filename VARCHAR(200)')
-            app.logger.info('Migration: added original_filename column to personal_log table')
-        
-        if 'file_size' not in columns:
-            conn.execute('ALTER TABLE personal_log ADD COLUMN file_size INTEGER')
-            app.logger.info('Migration: added file_size column to personal_log table')
-        personal_log_columns = [row[1] for row in conn.execute('PRAGMA table_info(personal_log)').fetchall()]
-        personal_log_additions = {
-            'transcoding_status': "VARCHAR(20) DEFAULT 'not_required'",
-            'audio_filename': 'VARCHAR(200)',
-            'processing_error': 'VARCHAR(500)',
-            'processing_started_at': 'DATETIME',
-            'processing_completed_at': 'DATETIME',
-            'processing_attempts': 'INTEGER DEFAULT 0',
-            'processing_heartbeat_at': 'DATETIME',
-        }
-        for column, definition in personal_log_additions.items():
-            if column not in personal_log_columns:
-                conn.execute(f'ALTER TABLE personal_log ADD COLUMN {column} {definition}')
-                app.logger.info('Migration: added %s column to personal_log table', column)
+        # Each legacy table can be absent independently; do not let that stop
+        # media's 720p schema migration on a partially restored database.
+        if 'personal_log' in tables:
+            columns = [row[1] for row in conn.execute('PRAGMA table_info(personal_log)').fetchall()]
+            if 'original_filename' not in columns:
+                conn.execute('ALTER TABLE personal_log ADD COLUMN original_filename VARCHAR(200)')
+                app.logger.info('Migration: added original_filename column to personal_log table')
+            if 'file_size' not in columns:
+                conn.execute('ALTER TABLE personal_log ADD COLUMN file_size INTEGER')
+                app.logger.info('Migration: added file_size column to personal_log table')
+            personal_log_additions = {
+                'transcoding_status': "VARCHAR(20) DEFAULT 'not_required'", 'audio_filename': 'VARCHAR(200)',
+                'processing_error': 'VARCHAR(500)', 'processing_started_at': 'DATETIME',
+                'processing_completed_at': 'DATETIME', 'processing_attempts': 'INTEGER DEFAULT 0',
+                'processing_heartbeat_at': 'DATETIME',
+            }
+            for column, definition in personal_log_additions.items():
+                if column not in columns:
+                    conn.execute(f'ALTER TABLE personal_log ADD COLUMN {column} {definition}')
+                    app.logger.info('Migration: added %s column to personal_log table', column)
             
-        # Check rehearsal table
-        columns = [row[1] for row in conn.execute('PRAGMA table_info(rehearsal)').fetchall()]
-        if 'location' not in columns:
-            conn.execute('ALTER TABLE rehearsal ADD COLUMN location VARCHAR(200)')
-            app.logger.info('Migration: added location column to rehearsal table')
-        if 'latitude' not in columns:
-            conn.execute('ALTER TABLE rehearsal ADD COLUMN latitude FLOAT')
-            app.logger.info('Migration: added latitude column to rehearsal table')
-        if 'longitude' not in columns:
-            conn.execute('ALTER TABLE rehearsal ADD COLUMN longitude FLOAT')
-            app.logger.info('Migration: added longitude column to rehearsal table')
+        if 'rehearsal' in tables:
+            columns = [row[1] for row in conn.execute('PRAGMA table_info(rehearsal)').fetchall()]
+            if 'location' not in columns:
+                conn.execute('ALTER TABLE rehearsal ADD COLUMN location VARCHAR(200)')
+                app.logger.info('Migration: added location column to rehearsal table')
+            if 'latitude' not in columns:
+                conn.execute('ALTER TABLE rehearsal ADD COLUMN latitude FLOAT')
+                app.logger.info('Migration: added latitude column to rehearsal table')
+            if 'longitude' not in columns:
+                conn.execute('ALTER TABLE rehearsal ADD COLUMN longitude FLOAT')
+                app.logger.info('Migration: added longitude column to rehearsal table')
 
         # Check media table for rehearsal_id and is_featured
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
@@ -139,6 +137,17 @@ def _run_migrations(app):
         if 'processing_heartbeat_at' not in columns:
             conn.execute('ALTER TABLE media ADD COLUMN processing_heartbeat_at DATETIME')
             app.logger.info('Migration: added processing_heartbeat_at column to media table')
+        video_720_additions = {
+            'video_720_filename': 'VARCHAR(300)',
+            'video_720_source_etag': 'VARCHAR(200)',
+            'video_720_profile': 'VARCHAR(100)',
+            'video_720_completed_at': 'DATETIME',
+        }
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()}
+        for column, definition in video_720_additions.items():
+            if column not in columns:
+                conn.execute(f'ALTER TABLE media ADD COLUMN {column} {definition}')
+                app.logger.info('Migration: added %s column to media table', column)
 
         # SongVote is retained as legacy data because it cannot be mapped to a
         # specific Media without guessing.  New voting state is independent
@@ -173,13 +182,14 @@ def _run_migrations(app):
                      "WHERE (file_type IS NULL OR file_type != 'video') "
                      "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
         conn.execute('UPDATE media SET processing_attempts = 0 WHERE processing_attempts IS NULL')
-        conn.execute("UPDATE personal_log SET transcoding_status = 'queued' "
-                     "WHERE file_type = 'video' AND "
-                     "(transcoding_status IS NULL OR transcoding_status IN ('pending', 'not_required'))")
-        conn.execute("UPDATE personal_log SET transcoding_status = 'not_required' "
-                     "WHERE (file_type IS NULL OR file_type != 'video') "
-                     "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
-        conn.execute('UPDATE personal_log SET processing_attempts = 0 WHERE processing_attempts IS NULL')
+        if 'personal_log' in tables:
+            conn.execute("UPDATE personal_log SET transcoding_status = 'queued' "
+                         "WHERE file_type = 'video' AND "
+                         "(transcoding_status IS NULL OR transcoding_status IN ('pending', 'not_required'))")
+            conn.execute("UPDATE personal_log SET transcoding_status = 'not_required' "
+                         "WHERE (file_type IS NULL OR file_type != 'video') "
+                         "AND (transcoding_status IS NULL OR transcoding_status = 'pending')")
+            conn.execute('UPDATE personal_log SET processing_attempts = 0 WHERE processing_attempts IS NULL')
 
         # Resumable multipart uploads persist only server-owned identifiers and
         # a hash of the one-time capability returned by initiate.  SQLite ALTER
@@ -248,6 +258,7 @@ def create_app(config_class=None, start_worker=None):
     Migrate(app, db)
     register_error_handlers(app)
     app.register_blueprint(songs_bp)
+    app.register_blueprint(migrations_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
     app.register_blueprint(members_bp)
