@@ -54,36 +54,12 @@
   animation: fadeIn 0.2s ease-out;
 }
 
-/* Featured media badge */
-.media-featured-badge {
-  font-size: 0.6rem;
-  position: absolute;
-  top: -2px;
-  right: -2px;
-}
-
 /* Media body actions */
 .media-body-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-bottom: 10px;
-}
-
-.media-featured-btn {
-  background: none;
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  cursor: pointer;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  transition: all 0.2s;
-}
-
-.media-featured-btn:hover {
-  border-color: var(--primary-color);
-  color: var(--primary-color);
 }
 
 .media-delete-btn {

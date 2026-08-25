@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia } from '../services/api';
+import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia, voteSong } from '../services/api';
+import { normalizeSongVote, replaceSongAndSort, sortSongsByScore, toggleSongVote, voteStatePending, voteStateSettled } from '../services/songVoting.js';
 
 const SongContext = createContext();
 
@@ -11,6 +12,7 @@ export const SongProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [currentSong, setCurrentSong] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [voteStates, setVoteStates] = useState({});
 
   useEffect(() => {
     loadSongs();
@@ -21,7 +23,7 @@ export const SongProvider = ({ children }) => {
       setLoading(true);
       setError(null);
       const data = await fetchSongs();
-      setSongs(data);
+      setSongs(sortSongsByScore(data));
     } catch (err) {
       console.error('Failed to load songs:', err);
       setError('곡 목록을 불러오는 데 실패했습니다.');
@@ -32,25 +34,23 @@ export const SongProvider = ({ children }) => {
 
   const addSong = async (songData) => {
     const newSong = await createSong(songData);
-    setSongs([...songs, newSong]);
+    setSongs((previous) => sortSongsByScore([...previous, newSong]));
     return newSong;
   };
 
   const editSong = async (id, songData) => {
-      const updated = await updateSong(id, songData);
-      setSongs(songs.map(s => s.id === id ? updated : s));
-      if (currentSong && currentSong.id === id) {
-        setCurrentSong(updated);
-      }
-      return updated;
+    const updated = await updateSong(id, songData);
+    const existing = songs.find((song) => song.id === id) || currentSong;
+    const result = { ...updated, viewer_vote: normalizeSongVote(existing?.viewer_vote) };
+    setSongs((previous) => replaceSongAndSort(previous, result));
+    setCurrentSong((previous) => (previous?.id === id ? result : previous));
+    return result;
   }
 
   const removeSong = async (id) => {
       await deleteSong(id);
-      setSongs(songs.filter(s => s.id !== id));
-      if (currentSong && currentSong.id === id) {
-          setCurrentSong(null);
-      }
+      setSongs((previous) => previous.filter((song) => song.id !== id));
+      setCurrentSong((previous) => (previous?.id === id ? null : previous));
   }
 
   const removeMediaFromSong = async (songId, mediaId) => {
@@ -58,15 +58,10 @@ export const SongProvider = ({ children }) => {
       await deleteMedia(mediaId);
       // Refresh the song data from backend after deletion
       const updatedSong = await getSong(songId);
-      const updatedSongs = songs.map(song =>
-        song.id === songId ? updatedSong : song
-      );
-      setSongs(updatedSongs);
+      setSongs((previous) => replaceSongAndSort(previous, updatedSong));
 
       // Update current song if it's the one being updated
-      if (currentSong && currentSong.id === songId) {
-        setCurrentSong(updatedSong);
-      }
+      setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
     } catch (error) {
       console.error('Failed to delete media:', error);
       throw error;
@@ -78,15 +73,10 @@ export const SongProvider = ({ children }) => {
       await renameMedia(mediaId, newName);
       // Refresh the song data from backend after rename
       const updatedSong = await getSong(songId);
-      const updatedSongs = songs.map(song =>
-        song.id === songId ? updatedSong : song
-      );
-      setSongs(updatedSongs);
+      setSongs((previous) => replaceSongAndSort(previous, updatedSong));
 
       // Update current song if it's the one being updated
-      if (currentSong && currentSong.id === songId) {
-        setCurrentSong(updatedSong);
-      }
+      setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
     } catch (error) {
       console.error('Failed to rename media:', error);
       throw error;
@@ -95,9 +85,25 @@ export const SongProvider = ({ children }) => {
 
   const refreshSong = async (songId) => {
     const updatedSong = await getSong(songId);
-    setSongs(songs.map(s => s.id === songId ? updatedSong : s));
-    if (currentSong && currentSong.id === songId) {
-      setCurrentSong(updatedSong);
+    setSongs((previous) => replaceSongAndSort(previous, updatedSong));
+    setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
+  };
+
+  const voteForSong = async (songId, requestedVote) => {
+    const song = songs.find((item) => item.id === songId) || currentSong;
+    if (!song || song.id !== songId) return null;
+
+    const nextVote = toggleSongVote(song.viewer_vote, requestedVote);
+    setVoteStates((previous) => voteStatePending(previous, songId));
+    try {
+      const updatedSong = await voteSong(songId, nextVote);
+      setSongs((previous) => replaceSongAndSort(previous, updatedSong));
+      setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
+      setVoteStates((previous) => voteStateSettled(previous, songId));
+      return updatedSong;
+    } catch {
+      setVoteStates((previous) => voteStateSettled(previous, songId, '투표를 저장하지 못했습니다. 다시 시도하세요.'));
+      return null;
     }
   };
 
@@ -137,7 +143,9 @@ export const SongProvider = ({ children }) => {
         cancelEdit,
         removeMediaFromSong,
         renameMediaInSong,
-        refreshSong
+        refreshSong,
+        voteForSong,
+        voteStates,
     }}>
       {children}
     </SongContext.Provider>

@@ -1,15 +1,40 @@
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+import { getVoterId } from './voterIdentity.js';
+
+export const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000';
+
+export const songVoterHeaders = (voterId = getVoterId()) => ({
+  'X-Voter-ID': voterId,
+});
+
+export const createSongReadRequest = (path, voterId = getVoterId()) => ({
+  url: `${API_URL}${path}`,
+  options: { headers: songVoterHeaders(voterId) },
+});
+
+export const createSongVoteRequest = (id, vote, voterId = getVoterId()) => ({
+  url: `${API_URL}/songs/${id}/vote`,
+  options: {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...songVoterHeaders(voterId),
+    },
+    body: JSON.stringify({ vote }),
+  },
+});
 
 // Fetch all songs
 export const fetchSongs = async () => {
-  const response = await fetch(`${API_URL}/songs`);
+  const { url, options } = createSongReadRequest('/songs');
+  const response = await fetch(url, options);
   if (!response.ok) throw new Error('Failed to fetch songs');
   return await response.json();
 };
 
 // Get single song
 export const getSong = async (id) => {
-  const response = await fetch(`${API_URL}/songs/${id}`);
+  const { url, options } = createSongReadRequest(`/songs/${id}`);
+  const response = await fetch(url, options);
   if (!response.ok) throw new Error('Failed to fetch song');
   return await response.json();
 };
@@ -33,6 +58,13 @@ export const updateSong = async (id, songData) => {
     body: JSON.stringify(songData),
   });
   if (!response.ok) throw new Error('Failed to update song');
+  return await response.json();
+};
+
+export const voteSong = async (id, vote) => {
+  const { url, options } = createSongVoteRequest(id, vote);
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error('Failed to vote for song');
   return await response.json();
 };
 

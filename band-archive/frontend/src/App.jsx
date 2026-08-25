@@ -26,7 +26,7 @@ const SongPage = () => {
   const {
     songs, loading, error, currentSong, isEditing,
     selectSong, removeSong, startCreate, startEdit,
-    loadSongs, cancelEdit, addSong, editSong
+    loadSongs, cancelEdit, addSong, editSong, voteForSong, voteStates
   } = useSongs();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -99,6 +99,8 @@ const SongPage = () => {
             songs={filteredSongs}
             onSelectSong={handleSelectSong}
             onDeleteSong={handleDelete}
+            onVoteSong={voteForSong}
+            voteStates={voteStates}
             onAddSong={() => {
               startCreate();
               navigate('/songs/new'); // Optional: URL for new song
