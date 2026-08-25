@@ -1,4 +1,4 @@
-import { API_URL } from './api';
+import { API_URL, voterHeaders } from './api.js';
 
 export const fetchRehearsals = async (year, month) => {
   const params = year && month ? `?year=${year}&month=${month}` : '';
@@ -43,7 +43,9 @@ export const deleteRehearsal = async (id) => {
 
 // Fetch media linked to a rehearsal
 export const fetchRehearsalMedia = async (rehearsalId) => {
-  const response = await fetch(`${API_URL}/rehearsals/${rehearsalId}/media`);
+  const response = await fetch(`${API_URL}/rehearsals/${rehearsalId}/media`, {
+    headers: voterHeaders(),
+  });
   if (!response.ok) throw new Error('Failed to fetch rehearsal media');
   return await response.json();
 };

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia, voteSong } from '../services/api';
-import { isSongVoteSnapshot, normalizeSongVote, replaceSongAndSort, replaceVoteSongAndSort, sameSongVoteSnapshot, sortSongsByScore, toggleSongVote, voteStatePending, voteStateSettled } from '../services/songVoting.js';
-import { createSongVoteChannel } from '../services/songVoteChannel.js';
+import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia, voteMedia } from '../services/api';
+import { isMediaVoteSnapshot, normalizeMediaVote, replaceMediaInSong, replaceMediaInSongs, sortSongMediaByScore, toggleMediaVote, voteStatePending, voteStateSettled } from '../services/mediaVoting.js';
+import { createMediaVoteChannel } from '../services/mediaVoteChannel.js';
 
 const SongContext = createContext();
 
@@ -14,28 +14,24 @@ export const SongProvider = ({ children }) => {
   const [currentSong, setCurrentSong] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [voteStates, setVoteStates] = useState({});
-  const voteChannelRef = useRef(null);
+  const mediaVoteChannelRef = useRef(null);
 
   useEffect(() => {
     loadSongs();
   }, []);
 
   useEffect(() => {
-    const channel = createSongVoteChannel();
+    const channel = createMediaVoteChannel();
     if (!channel) return undefined;
-    voteChannelRef.current = channel;
-    const unsubscribe = channel.subscribe((updatedSong) => {
-      setSongs((previous) => replaceVoteSongAndSort(previous, updatedSong));
-      setCurrentSong((previous) => (
-        previous?.id === updatedSong.id && !sameSongVoteSnapshot(previous, updatedSong)
-          ? updatedSong
-          : previous
-      ));
+    mediaVoteChannelRef.current = channel;
+    const unsubscribe = channel.subscribe((updatedMedia) => {
+      setSongs((previous) => replaceMediaInSongs(previous, updatedMedia));
+      setCurrentSong((previous) => replaceMediaInSong(previous, updatedMedia));
     });
     return () => {
       unsubscribe();
       channel.close();
-      if (voteChannelRef.current === channel) voteChannelRef.current = null;
+      if (mediaVoteChannelRef.current === channel) mediaVoteChannelRef.current = null;
     };
   }, []);
 
@@ -44,7 +40,7 @@ export const SongProvider = ({ children }) => {
       setLoading(true);
       setError(null);
       const data = await fetchSongs();
-      setSongs(sortSongsByScore(data));
+      setSongs(data.map(sortSongMediaByScore));
     } catch (err) {
       console.error('Failed to load songs:', err);
       setError('곡 목록을 불러오는 데 실패했습니다.');
@@ -55,15 +51,15 @@ export const SongProvider = ({ children }) => {
 
   const addSong = async (songData) => {
     const newSong = await createSong(songData);
-    setSongs((previous) => sortSongsByScore([...previous, newSong]));
-    return newSong;
+    const result = sortSongMediaByScore(newSong);
+    setSongs((previous) => [...previous, result]);
+    return result;
   };
 
   const editSong = async (id, songData) => {
     const updated = await updateSong(id, songData);
-    const existing = songs.find((song) => song.id === id) || currentSong;
-    const result = { ...updated, viewer_vote: normalizeSongVote(existing?.viewer_vote) };
-    setSongs((previous) => replaceSongAndSort(previous, result));
+    const result = sortSongMediaByScore(updated);
+    setSongs((previous) => previous.map((song) => (song.id === id ? result : song)));
     setCurrentSong((previous) => (previous?.id === id ? result : previous));
     return result;
   }
@@ -78,8 +74,8 @@ export const SongProvider = ({ children }) => {
     try {
       await deleteMedia(mediaId);
       // Refresh the song data from backend after deletion
-      const updatedSong = await getSong(songId);
-      setSongs((previous) => replaceSongAndSort(previous, updatedSong));
+      const updatedSong = sortSongMediaByScore(await getSong(songId));
+      setSongs((previous) => previous.map((song) => (song.id === songId ? updatedSong : song)));
 
       // Update current song if it's the one being updated
       setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
@@ -93,8 +89,8 @@ export const SongProvider = ({ children }) => {
     try {
       await renameMedia(mediaId, newName);
       // Refresh the song data from backend after rename
-      const updatedSong = await getSong(songId);
-      setSongs((previous) => replaceSongAndSort(previous, updatedSong));
+      const updatedSong = sortSongMediaByScore(await getSong(songId));
+      setSongs((previous) => previous.map((song) => (song.id === songId ? updatedSong : song)));
 
       // Update current song if it's the one being updated
       setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
@@ -105,40 +101,42 @@ export const SongProvider = ({ children }) => {
   };
 
   const refreshSong = async (songId) => {
-    const updatedSong = await getSong(songId);
-    setSongs((previous) => replaceSongAndSort(previous, updatedSong));
+    const updatedSong = sortSongMediaByScore(await getSong(songId));
+    setSongs((previous) => previous.map((song) => (song.id === songId ? updatedSong : song)));
     setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
   };
 
-  const voteForSong = async (songId, requestedVote) => {
-    const song = songs.find((item) => item.id === songId) || currentSong;
-    if (!song || song.id !== songId) return null;
+  const voteForMedia = async (mediaId, requestedVote) => {
+    const media = currentSong?.media?.find((item) => item.id === mediaId)
+      || songs.flatMap((song) => song.media || []).find((item) => item.id === mediaId);
+    if (!media) return null;
 
-    const expectedVote = normalizeSongVote(song.viewer_vote);
-    const nextVote = toggleSongVote(expectedVote, requestedVote);
-    setVoteStates((previous) => voteStatePending(previous, songId));
+    const expectedVote = normalizeMediaVote(media.viewer_vote);
+    const nextVote = toggleMediaVote(expectedVote, requestedVote);
+    setVoteStates((previous) => voteStatePending(previous, mediaId));
     try {
-      const updatedSong = await voteSong(songId, nextVote, expectedVote);
-      setSongs((previous) => replaceSongAndSort(previous, updatedSong));
-      setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
-      setVoteStates((previous) => voteStateSettled(previous, songId));
-      voteChannelRef.current?.publish(updatedSong);
-      return updatedSong;
+      const updatedMedia = await voteMedia(mediaId, nextVote, expectedVote);
+      if (!isMediaVoteSnapshot(updatedMedia)) throw new Error('Invalid media vote response');
+      setSongs((previous) => replaceMediaInSongs(previous, updatedMedia));
+      setCurrentSong((previous) => replaceMediaInSong(previous, updatedMedia));
+      setVoteStates((previous) => voteStateSettled(previous, mediaId));
+      mediaVoteChannelRef.current?.publish(updatedMedia);
+      return updatedMedia;
     } catch (error) {
-      const conflictSong = error?.status === 409 && error?.payload?.code === 'vote_conflict'
-        ? error.payload.song
+      const conflictMedia = error?.status === 409 && error?.payload?.code === 'vote_conflict'
+        ? (error.payload.media || error.payload)
         : null;
-      if (conflictSong?.id === songId && isSongVoteSnapshot(conflictSong)) {
-        setSongs((previous) => replaceSongAndSort(previous, conflictSong));
-        setCurrentSong((previous) => (previous?.id === songId ? conflictSong : previous));
+      if (conflictMedia?.id === mediaId && isMediaVoteSnapshot(conflictMedia)) {
+        setSongs((previous) => replaceMediaInSongs(previous, conflictMedia));
+        setCurrentSong((previous) => replaceMediaInSong(previous, conflictMedia));
         setVoteStates((previous) => voteStateSettled(
           previous,
-          songId,
+          mediaId,
           '다른 화면에서 투표가 변경되어 최신 상태로 갱신했습니다. 다시 눌러주세요.',
         ));
         return null;
       }
-      setVoteStates((previous) => voteStateSettled(previous, songId, '투표를 저장하지 못했습니다. 다시 시도하세요.'));
+      setVoteStates((previous) => voteStateSettled(previous, mediaId, '투표를 저장하지 못했습니다. 다시 시도하세요.'));
       return null;
     }
   };
@@ -180,7 +178,7 @@ export const SongProvider = ({ children }) => {
         removeMediaFromSong,
         renameMediaInSong,
         refreshSong,
-        voteForSong,
+        voteForMedia,
         voteStates,
     }}>
       {children}

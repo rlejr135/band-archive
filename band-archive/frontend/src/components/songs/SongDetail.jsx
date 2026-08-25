@@ -7,10 +7,11 @@ import './SongMedia.css';
 import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
+import { sortMediaByScore } from '../../services/mediaVoting.js';
 
 const SongDetail = ({ song, onEdit, onBack }) => {
   const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
-  const { removeMediaFromSong, renameMediaInSong, editSong, refreshSong } = useSongs();
+  const { removeMediaFromSong, renameMediaInSong, editSong, refreshSong, voteForMedia, voteStates } = useSongs();
 
   const [renamingMediaId, setRenamingMediaId] = useState(null);
   const [newFilename, setNewFilename] = useState('');
@@ -180,6 +181,11 @@ const SongDetail = ({ song, onEdit, onBack }) => {
     });
   };
 
+  const handleMediaVote = (event, mediaId, vote) => {
+    event.stopPropagation();
+    voteForMedia(mediaId, vote);
+  };
+
   const statusLabel = { Practice: '연습중', Completed: '완료', OnHold: '보류' };
 
   return (
@@ -292,10 +298,13 @@ const SongDetail = ({ song, onEdit, onBack }) => {
         {/* Media List */}
         {song.media?.length > 0 ? (
           <div className="media-list">
-            {song.media.map((media) => {
+            {sortMediaByScore(song.media).map((media) => {
               const type = getMediaType(media);
               const isRenaming = renamingMediaId === media.id;
               const isExpanded = expandedMediaIds.has(media.id);
+              const voteState = voteStates[media.id] || {};
+              const viewerVote = media.viewer_vote === 1 || media.viewer_vote === -1 ? media.viewer_vote : 0;
+              const score = Number.isFinite(Number(media.vote_score)) ? Number(media.vote_score) : 0;
 
               return (
                 <div key={media.id} className={`media-item ${isExpanded ? 'expanded' : ''}`}>
@@ -321,6 +330,30 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                           <button className="rename-btn" onClick={(e) => { e.stopPropagation(); handleStartRename(media); }} title="이름 변경">✏️</button>
                         </span>
                       )}
+                      <div className="media-vote-controls" role="group" aria-label={`${getDisplayName(media.filename)} 투표`} onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className={`media-vote-btn vote-up ${viewerVote === 1 ? 'active' : ''}`}
+                          onClick={(event) => handleMediaVote(event, media.id, 1)}
+                          disabled={voteState.loading}
+                          aria-pressed={viewerVote === 1}
+                          aria-label={`${getDisplayName(media.filename)} 추천${viewerVote === 1 ? ' 취소' : ''}`}
+                        >
+                          👍 {media.upvote_count ?? 0}
+                        </button>
+                        <span className="media-vote-score" aria-label={`점수 ${score}`}>{score > 0 ? '+' : ''}{score}</span>
+                        <button
+                          type="button"
+                          className={`media-vote-btn vote-down ${viewerVote === -1 ? 'active' : ''}`}
+                          onClick={(event) => handleMediaVote(event, media.id, -1)}
+                          disabled={voteState.loading}
+                          aria-pressed={viewerVote === -1}
+                          aria-label={`${getDisplayName(media.filename)} 비추천${viewerVote === -1 ? ' 취소' : ''}`}
+                        >
+                          👎 {media.downvote_count ?? 0}
+                        </button>
+                        {voteState.error && <span className="media-vote-error" role="alert">{voteState.error}</span>}
+                      </div>
                       <span className="media-size">
                         {(media.file_size / 1024 / 1024).toFixed(2)} MB
                         {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}

@@ -2,22 +2,25 @@ import { getVoterId } from './voterIdentity.js';
 
 export const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000';
 
-export const songVoterHeaders = (voterId = getVoterId()) => ({
+export const voterHeaders = (voterId = getVoterId()) => ({
   'X-Voter-ID': voterId,
 });
 
+// Kept as an alias for callers that fetch songs with the viewer-vote header.
+export const songVoterHeaders = voterHeaders;
+
 export const createSongReadRequest = (path, voterId = getVoterId()) => ({
   url: `${API_URL}${path}`,
-  options: { headers: songVoterHeaders(voterId) },
+  options: { headers: voterHeaders(voterId) },
 });
 
-export const createSongVoteRequest = (id, vote, expectedViewerVote, voterId = getVoterId()) => ({
-  url: `${API_URL}/songs/${id}/vote`,
+export const createMediaVoteRequest = (id, vote, expectedViewerVote, voterId = getVoterId()) => ({
+  url: `${API_URL}/media/${id}/vote`,
   options: {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
-      ...songVoterHeaders(voterId),
+      ...voterHeaders(voterId),
     },
     body: JSON.stringify({ vote, expected_viewer_vote: expectedViewerVote }),
   },
@@ -54,15 +57,18 @@ export const createSong = async (songData) => {
 export const updateSong = async (id, songData) => {
   const response = await fetch(`${API_URL}/songs/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...voterHeaders(),
+    },
     body: JSON.stringify(songData),
   });
   if (!response.ok) throw new Error('Failed to update song');
   return await response.json();
 };
 
-export const voteSong = async (id, vote, expectedViewerVote) => {
-  const { url, options } = createSongVoteRequest(id, vote, expectedViewerVote);
+export const voteMedia = async (id, vote, expectedViewerVote) => {
+  const { url, options } = createMediaVoteRequest(id, vote, expectedViewerVote);
   const response = await fetch(url, options);
   let payload = null;
   try {
@@ -71,12 +77,13 @@ export const voteSong = async (id, vote, expectedViewerVote) => {
     // Keep a transport-level failure useful without requiring a JSON body.
   }
   if (!response.ok) {
-    const error = new Error(payload?.error || 'Failed to vote for song');
+    const error = new Error(payload?.error || 'Failed to vote for media');
     error.status = response.status;
     error.payload = payload;
     throw error;
   }
-  return payload;
+  // Accept either the media object directly or a future envelope such as { media }.
+  return payload?.media || payload;
 };
 
 // Delete song
