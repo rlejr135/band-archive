@@ -241,3 +241,78 @@ def test_song_vote_file_sqlite_concurrency_preserves_unique_row_and_counters(tmp
         with vote_app.app_context():
             db.session.remove()
             db.drop_all()
+
+
+def test_vote_conflict_snapshot_is_materialized_before_lock_release(tmp_path, monkeypatch):
+    db_path = tmp_path / 'vote-conflict-snapshot.db'
+
+    class FileTestingConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
+
+    vote_app = create_app(FileTestingConfig)
+    try:
+        seed_client = vote_app.test_client()
+        song_id = _song(seed_client, 'Conflict snapshot')
+        assert _vote(seed_client, song_id, 1, expected=0).status_code == 200
+        original_to_dict = Song.to_dict
+        snapshot_started = threading.Event()
+        release_snapshot = threading.Event()
+        writer_locked = threading.Event()
+
+        def held_conflict_to_dict(song, viewer_vote=0):
+            if song.id == song_id and viewer_vote == 1 and not snapshot_started.is_set():
+                snapshot_started.set()
+                probe = sqlite3.connect(db_path, timeout=0.1)
+                try:
+                    try:
+                        probe.execute('BEGIN IMMEDIATE')
+                    except sqlite3.OperationalError:
+                        writer_locked.set()
+                    else:
+                        probe.rollback()
+                finally:
+                    probe.close()
+                assert release_snapshot.wait(timeout=5)
+            return original_to_dict(song, viewer_vote=viewer_vote)
+
+        monkeypatch.setattr(Song, 'to_dict', held_conflict_to_dict)
+
+        def stale_cancel():
+            with vote_app.test_client() as thread_client:
+                return thread_client.patch(
+                    f'/songs/{song_id}/vote',
+                    json={'vote': 0, 'expected_viewer_vote': 0},
+                    headers={'X-Voter-ID': VOTER_A},
+                )
+
+        def current_switch():
+            with vote_app.test_client() as thread_client:
+                return thread_client.patch(
+                    f'/songs/{song_id}/vote',
+                    json={'vote': -1, 'expected_viewer_vote': 1},
+                    headers={'X-Voter-ID': VOTER_A},
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            stale_future = executor.submit(stale_cancel)
+            assert snapshot_started.wait(timeout=5)
+            switch_future = executor.submit(current_switch)
+            release_snapshot.set()
+            stale_response = stale_future.result(timeout=5)
+            switch_response = switch_future.result(timeout=5)
+
+        assert writer_locked.is_set()
+        assert stale_response.status_code == 409
+        assert stale_response.get_json()['song']['viewer_vote'] == 1
+        assert stale_response.get_json()['song']['upvote_count'] == 1
+        assert stale_response.get_json()['song']['downvote_count'] == 0
+        assert stale_response.get_json()['song']['vote_score'] == 1
+        assert switch_response.status_code == 200
+        assert switch_response.get_json()['viewer_vote'] == -1
+        with vote_app.app_context():
+            song = db.session.get(Song, song_id)
+            assert (song.upvote_count, song.downvote_count, song.vote_score) == (0, 1, -1)
+    finally:
+        with vote_app.app_context():
+            db.session.remove()
+            db.drop_all()

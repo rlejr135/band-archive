@@ -135,12 +135,15 @@ def vote_song(id):
         if previous_value != expected_value:
             # The caller read stale state in another tab.  Do not let a stale
             # idempotent/switch/cancel request overwrite the current vote.
+            # Materialize while the row lock is still held: after rollback a
+            # competing request could switch the vote before lazy attributes
+            # or relationships are read for the conflict response.
+            conflict_song = song.to_dict(viewer_vote=previous_value)
             db.session.rollback()
-            current_song = db.session.get(Song, id)
             return jsonify({
                 'error': 'vote_conflict',
                 'code': 'vote_conflict',
-                'song': current_song.to_dict(viewer_vote=previous_value),
+                'song': conflict_song,
             }), 409
         if previous_value != value:
             if previous_vote and value == 0:
