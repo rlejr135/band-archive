@@ -15,7 +15,7 @@ def test_production_cors_preflight_allows_upload_capability_header(monkeypatch, 
     browser_app = create_app(BrowserConfig)
     try:
         response = browser_app.test_client().options(
-            '/uploads/multipart/session-id',
+            '/media/123/vote',
             headers={
                 'Origin': origin,
                 'Access-Control-Request-Method': 'PATCH',

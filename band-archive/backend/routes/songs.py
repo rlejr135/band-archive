@@ -1,18 +1,17 @@
 import re
-import hashlib
-import uuid
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, redirect, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Song, SongVote, Media, Rehearsal
+from models import Song, SongVote, Media, MediaVote, Rehearsal
 from sqlalchemy import text
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
                               delete_original_and_audio, processing_status_response)
+from voting import voter_hash, media_viewer_votes
 from validators import (
     validate_status,
     validate_difficulty,
@@ -27,7 +26,6 @@ from validators import (
 )
 
 songs_bp = Blueprint('songs', __name__)
-VOTER_ID_HEADER = 'X-Voter-ID'
 
 
 def _get_song_or_404(id):
@@ -37,26 +35,8 @@ def _get_song_or_404(id):
     return song
 
 
-def _voter_hash(required=False):
-    """Hash a validated client UUID; never persist or log its raw value."""
-    voter_id = request.headers.get(VOTER_ID_HEADER)
-    if not voter_id:
-        if required:
-            raise ValidationError(f'{VOTER_ID_HEADER} header is required.')
-        return None
-    try:
-        canonical_id = str(uuid.UUID(voter_id.strip()))
-    except (AttributeError, ValueError):
-        raise ValidationError(f'{VOTER_ID_HEADER} must be a valid UUID.')
-    return hashlib.sha256(canonical_id.encode('utf-8')).hexdigest()
-
-
-def _song_with_viewer_vote(song, voter_hash=None):
-    viewer_vote = 0
-    if voter_hash:
-        vote = SongVote.query.filter_by(song_id=song.id, voter_hash=voter_hash).first()
-        viewer_vote = vote.value if vote else 0
-    return song.to_dict(viewer_vote=viewer_vote)
+def _song_with_media_viewer_votes(song, voter_hash=None):
+    return song.to_dict(media_viewer_votes=media_viewer_votes(song.media_files, voter_hash))
 
 
 
@@ -67,7 +47,7 @@ def home():
 
 @songs_bp.route('/songs', methods=['GET'])
 def get_songs():
-    voter_hash = _voter_hash()
+    voter_hash_value = voter_hash()
     query = Song.query
 
     q = request.args.get('q')
@@ -84,28 +64,28 @@ def get_songs():
     if genre:
         query = query.filter(Song.genre == genre)
 
-    songs = query.order_by(Song.vote_score.desc(), Song.id.asc()).all()
-    viewer_votes = {}
-    if voter_hash and songs:
-        viewer_votes = {
-            vote.song_id: vote.value
-            for vote in SongVote.query.filter(
-                SongVote.voter_hash == voter_hash,
-                SongVote.song_id.in_([song.id for song in songs]),
-            ).all()
-        }
-    return jsonify([song.to_dict(viewer_vote=viewer_votes.get(song.id, 0)) for song in songs])
+    # Restore the pre-song-vote list behavior: no vote-score ordering.
+    songs = query.order_by(Song.id.asc()).all()
+    viewer_votes = media_viewer_votes(
+        [media for song in songs for media in song.media_files], voter_hash_value,
+    )
+    return jsonify([song.to_dict(media_viewer_votes=viewer_votes) for song in songs])
 
 
 @songs_bp.route('/songs/<int:id>', methods=['GET'])
 def get_song(id):
     song = _get_song_or_404(id)
-    return jsonify(_song_with_viewer_vote(song, _voter_hash()))
+    return jsonify(_song_with_media_viewer_votes(song, voter_hash()))
 
 
 @songs_bp.route('/songs/<int:id>/vote', methods=['PATCH'])
 def vote_song(id):
-    voter_hash = _voter_hash(required=True)
+    """Legacy compatibility endpoint; new clients must vote on Media instead.
+
+    Historic SongVote rows/counters intentionally remain untouched because a
+    song vote cannot be losslessly assigned to one of its media items.
+    """
+    voter_hash_value = voter_hash(required=True)
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         raise ValidationError('Request body is required')
@@ -130,7 +110,7 @@ def vote_song(id):
         if not song:
             raise NotFoundError()
 
-        previous_vote = SongVote.query.filter_by(song_id=id, voter_hash=voter_hash).first()
+        previous_vote = SongVote.query.filter_by(song_id=id, voter_hash=voter_hash_value).first()
         previous_value = previous_vote.value if previous_vote else 0
         if previous_value != expected_value:
             # The caller read stale state in another tab.  Do not let a stale
@@ -138,7 +118,7 @@ def vote_song(id):
             # Materialize while the row lock is still held: after rollback a
             # competing request could switch the vote before lazy attributes
             # or relationships are read for the conflict response.
-            conflict_song = song.to_dict(viewer_vote=previous_value)
+            conflict_song = song.to_dict()
             db.session.rollback()
             return jsonify({
                 'error': 'vote_conflict',
@@ -151,7 +131,7 @@ def vote_song(id):
             elif previous_vote:
                 previous_vote.value = value
             else:
-                db.session.add(SongVote(song_id=id, voter_hash=voter_hash, value=value))
+                db.session.add(SongVote(song_id=id, voter_hash=voter_hash_value, value=value))
 
             upvote_delta = int(value == 1) - int(previous_value == 1)
             downvote_delta = int(value == -1) - int(previous_value == -1)
@@ -162,7 +142,64 @@ def vote_song(id):
     except Exception:
         db.session.rollback()
         raise
-    return jsonify(song.to_dict(viewer_vote=value)), 200
+    return jsonify(song.to_dict()), 200
+
+
+@songs_bp.route('/media/<int:media_id>/vote', methods=['PATCH'])
+def vote_media(media_id):
+    voter_hash_value = voter_hash(required=True)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ValidationError('Request body is required')
+    value = data.get('vote')
+    if isinstance(value, bool) or value not in (-1, 0, 1):
+        raise ValidationError('vote must be -1, 0, or 1.')
+    if 'expected_viewer_vote' not in data:
+        raise ValidationError('expected_viewer_vote is required.')
+    expected_value = data.get('expected_viewer_vote')
+    if isinstance(expected_value, bool) or expected_value not in (-1, 0, 1):
+        raise ValidationError('expected_viewer_vote must be -1, 0, or 1.')
+
+    try:
+        if db.engine.dialect.name == 'sqlite':
+            db.session.execute(text('BEGIN IMMEDIATE'))
+            media = db.session.get(Media, media_id)
+        else:
+            media = Media.query.filter_by(id=media_id).with_for_update().first()
+        if not media:
+            raise NotFoundError('Media not found')
+
+        previous_vote = MediaVote.query.filter_by(media_id=media_id, voter_hash=voter_hash_value).first()
+        previous_value = previous_vote.value if previous_vote else 0
+        if previous_value != expected_value:
+            # Materialize before rollback while the lock still protects all
+            # cache counters and the viewer's actual vote.
+            conflict_media = media.to_dict(viewer_vote=previous_value)
+            db.session.rollback()
+            return jsonify({
+                'error': 'vote_conflict',
+                'code': 'vote_conflict',
+                'media': conflict_media,
+            }), 409
+
+        if previous_value != value:
+            if previous_vote and value == 0:
+                db.session.delete(previous_vote)
+            elif previous_vote:
+                previous_vote.value = value
+            else:
+                db.session.add(MediaVote(media_id=media_id, voter_hash=voter_hash_value, value=value))
+
+            upvote_delta = int(value == 1) - int(previous_value == 1)
+            downvote_delta = int(value == -1) - int(previous_value == -1)
+            media.upvote_count = max(0, (media.upvote_count or 0) + upvote_delta)
+            media.downvote_count = max(0, (media.downvote_count or 0) + downvote_delta)
+            media.vote_score = media.upvote_count - media.downvote_count
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return jsonify(media.to_dict(viewer_vote=value)), 200
 
 
 @songs_bp.route('/songs', methods=['POST'])
@@ -237,7 +274,7 @@ def update_song(id):
         song.genre = data['genre']
 
     db.session.commit()
-    return jsonify(song.to_dict())
+    return jsonify(_song_with_media_viewer_votes(song, voter_hash()))
 
 
 @songs_bp.route('/songs/<int:id>', methods=['DELETE'])
@@ -297,8 +334,11 @@ def upload_sheet_music(id):
 
 @songs_bp.route('/songs/<int:id>/media', methods=['GET'])
 def get_media_list(id):
-    song = _get_song_or_404(id)
-    return jsonify([media.to_dict() for media in song.media_files])
+    _get_song_or_404(id)
+    voter_hash_value = voter_hash()
+    media_files = Media.query.filter_by(song_id=id).order_by(Media.vote_score.desc(), Media.id.asc()).all()
+    viewer_votes = media_viewer_votes(media_files, voter_hash_value)
+    return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 
 
 @songs_bp.route('/songs/<int:id>/media', methods=['POST'])

@@ -26,7 +26,11 @@ class Song(db.Model):
     votes = db.relationship('SongVote', backref='song', lazy=True,
                             cascade='all, delete-orphan')
 
-    def to_dict(self, viewer_vote=0):
+    def to_dict(self, media_viewer_votes=None):
+        media_viewer_votes = media_viewer_votes or {}
+        # Keep the pre-vote list order for Song itself.  Votes only rank media
+        # within a song; ties retain the historical ID/insertion order.
+        media = sorted(self.media_files, key=lambda item: (-item.vote_score, item.id))
         return {
             'id': self.id,
             'title': self.title,
@@ -38,12 +42,8 @@ class Song(db.Model):
             'genre': self.genre,
             'difficulty': self.difficulty,
             'sheet_music': self.sheet_music,
-            'upvote_count': self.upvote_count,
-            'downvote_count': self.downvote_count,
-            'vote_score': self.vote_score,
-            'viewer_vote': viewer_vote,
             'has_featured_media': any(m.is_featured for m in self.media_files),
-            'media': [media.to_dict() for media in self.media_files],
+            'media': [item.to_dict(viewer_vote=media_viewer_votes.get(item.id, 0)) for item in media],
             'rehearsals': [{'id': r.id, 'title': r.title, 'date': r.date.isoformat()} for r in self.rehearsals],
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -83,14 +83,19 @@ class Media(db.Model):
     processing_attempts = db.Column(db.Integer, default=0, nullable=False)
     processing_heartbeat_at = db.Column(db.DateTime, nullable=True)
     is_featured = db.Column(db.Boolean, default=False)
+    upvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    downvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    vote_score = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     song = db.relationship('Song', backref=db.backref('media_files', lazy=True, cascade='all, delete-orphan'))
     rehearsal = db.relationship('Rehearsal', backref=db.backref('media_files', lazy=True))
     comments = db.relationship('Comment', backref='media', lazy=True, cascade='all, delete-orphan',
                                foreign_keys='Comment.media_id')
+    votes = db.relationship('MediaVote', backref='media', lazy=True,
+                            cascade='all, delete-orphan')
 
-    def to_dict(self):
+    def to_dict(self, viewer_vote=0):
         from media_processing import processing_fields
         fields = processing_fields(self, 'media')
         qualities = {'original': fields['url']}
@@ -111,9 +116,29 @@ class Media(db.Model):
             **fields,
             'qualities': qualities,
             'is_featured': self.is_featured,
+            'upvote_count': self.upvote_count,
+            'downvote_count': self.downvote_count,
+            'vote_score': self.vote_score,
+            'viewer_vote': viewer_vote,
             'comment_count': len(self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class MediaVote(db.Model):
+    """One privacy-preserving vote per media item and browser/device identity."""
+    id = db.Column(db.Integer, primary_key=True)
+    media_id = db.Column(db.Integer, db.ForeignKey('media.id', ondelete='CASCADE'), nullable=False, index=True)
+    voter_hash = db.Column(db.String(64), nullable=False)
+    value = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('media_id', 'voter_hash', name='uq_media_vote_voter'),
+        db.CheckConstraint('value IN (-1, 1)', name='ck_media_vote_value'),
+    )
 
 
 class MultipartUploadSession(db.Model):

@@ -140,6 +140,32 @@ def _run_migrations(app):
             conn.execute('ALTER TABLE media ADD COLUMN processing_heartbeat_at DATETIME')
             app.logger.info('Migration: added processing_heartbeat_at column to media table')
 
+        # SongVote is retained as legacy data because it cannot be mapped to a
+        # specific Media without guessing.  New voting state is independent
+        # and is rebuilt from MediaVote rows to keep the cached counters safe.
+        media_columns = {row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()}
+        for column in ('upvote_count', 'downvote_count', 'vote_score'):
+            if column not in media_columns:
+                conn.execute(f'ALTER TABLE media ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0')
+                app.logger.info('Migration: added %s column to media table', column)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS media_vote (
+                id INTEGER PRIMARY KEY,
+                media_id INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                voter_hash VARCHAR(64) NOT NULL,
+                value INTEGER NOT NULL CHECK (value IN (-1, 1)),
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                CONSTRAINT uq_media_vote_voter UNIQUE (media_id, voter_hash)
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS ix_media_vote_media_id ON media_vote(media_id)')
+        conn.execute("UPDATE media SET upvote_count = (SELECT COUNT(*) FROM media_vote "
+                     "WHERE media_vote.media_id = media.id AND media_vote.value = 1)")
+        conn.execute("UPDATE media SET downvote_count = (SELECT COUNT(*) FROM media_vote "
+                     "WHERE media_vote.media_id = media.id AND media_vote.value = -1)")
+        conn.execute('UPDATE media SET vote_score = upvote_count - downvote_count')
+
         # Legacy rows predate the explicit lifecycle. Never leave non-video rows pending.
         conn.execute("UPDATE media SET transcoding_status = 'queued' "
                      "WHERE file_type = 'video' AND (transcoding_status IS NULL OR transcoding_status = 'pending')")

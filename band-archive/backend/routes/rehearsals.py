@@ -8,6 +8,7 @@ from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import create_media, save_media_and_start
+from voting import voter_hash, media_viewer_votes
 from validators import (
     validate_required_string,
     validate_string_length,
@@ -178,7 +179,9 @@ def delete_rehearsal(id):
 @rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['GET'])
 def get_rehearsal_media(id):
     rehearsal = _get_rehearsal_or_404(id)
-    return jsonify([m.to_dict() for m in rehearsal.media_files])
+    media_files = sorted(rehearsal.media_files, key=lambda media: (-media.vote_score, media.id))
+    viewer_votes = media_viewer_votes(media_files, voter_hash())
+    return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 
 
 @rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['POST'])
