@@ -18,16 +18,16 @@ def test_production_cors_preflight_allows_upload_capability_header(monkeypatch, 
             '/uploads/multipart/session-id',
             headers={
                 'Origin': origin,
-                'Access-Control-Request-Method': 'POST',
-                'Access-Control-Request-Headers': 'content-type,x-upload-capability',
+                'Access-Control-Request-Method': 'PATCH',
+                'Access-Control-Request-Headers': 'content-type,x-upload-capability,x-voter-id',
             },
         )
         assert response.status_code == 200
         assert response.headers['Access-Control-Allow-Origin'] == origin
         allowed_headers = {header.strip().lower() for header in response.headers['Access-Control-Allow-Headers'].split(',')}
-        assert {'content-type', 'x-upload-capability'} <= allowed_headers
+        assert {'content-type', 'x-upload-capability', 'x-voter-id'} <= allowed_headers
         allowed_methods = {method.strip().upper() for method in response.headers['Access-Control-Allow-Methods'].split(',')}
-        assert {'GET', 'POST', 'OPTIONS'} <= allowed_methods
+        assert {'GET', 'POST', 'PATCH', 'OPTIONS'} <= allowed_methods
     finally:
         with browser_app.app_context():
             db.session.remove()

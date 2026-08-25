@@ -1,11 +1,14 @@
 import re
+import hashlib
+import uuid
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, redirect, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Song, Media, Rehearsal
+from models import Song, SongVote, Media, Rehearsal
+from sqlalchemy import text
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
@@ -24,6 +27,7 @@ from validators import (
 )
 
 songs_bp = Blueprint('songs', __name__)
+VOTER_ID_HEADER = 'X-Voter-ID'
 
 
 def _get_song_or_404(id):
@@ -31,6 +35,28 @@ def _get_song_or_404(id):
     if not song:
         raise NotFoundError()
     return song
+
+
+def _voter_hash(required=False):
+    """Hash a validated client UUID; never persist or log its raw value."""
+    voter_id = request.headers.get(VOTER_ID_HEADER)
+    if not voter_id:
+        if required:
+            raise ValidationError(f'{VOTER_ID_HEADER} header is required.')
+        return None
+    try:
+        canonical_id = str(uuid.UUID(voter_id.strip()))
+    except (AttributeError, ValueError):
+        raise ValidationError(f'{VOTER_ID_HEADER} must be a valid UUID.')
+    return hashlib.sha256(canonical_id.encode('utf-8')).hexdigest()
+
+
+def _song_with_viewer_vote(song, voter_hash=None):
+    viewer_vote = 0
+    if voter_hash:
+        vote = SongVote.query.filter_by(song_id=song.id, voter_hash=voter_hash).first()
+        viewer_vote = vote.value if vote else 0
+    return song.to_dict(viewer_vote=viewer_vote)
 
 
 
@@ -41,34 +67,84 @@ def home():
 
 @songs_bp.route('/songs', methods=['GET'])
 def get_songs():
-    try:
-        query = Song.query
+    voter_hash = _voter_hash()
+    query = Song.query
 
-        q = request.args.get('q')
-        if q:
-            query = query.filter(
-                Song.title.ilike(f'%{q}%') | Song.artist.ilike(f'%{q}%')
-            )
+    q = request.args.get('q')
+    if q:
+        query = query.filter(
+            Song.title.ilike(f'%{q}%') | Song.artist.ilike(f'%{q}%')
+        )
 
-        status = request.args.get('status')
-        if status:
-            query = query.filter(Song.status == status)
+    status = request.args.get('status')
+    if status:
+        query = query.filter(Song.status == status)
 
-        genre = request.args.get('genre')
-        if genre:
-            query = query.filter(Song.genre == genre)
+    genre = request.args.get('genre')
+    if genre:
+        query = query.filter(Song.genre == genre)
 
-        songs = query.all()
-        return jsonify([song.to_dict() for song in songs])
-    except Exception as e:
-        current_app.logger.error(f"Error fetching songs: {str(e)}")
-        return jsonify({"error": str(e), "message": "Internal Server Error in get_songs"}), 500
+    songs = query.order_by(Song.vote_score.desc(), Song.id.asc()).all()
+    viewer_votes = {}
+    if voter_hash and songs:
+        viewer_votes = {
+            vote.song_id: vote.value
+            for vote in SongVote.query.filter(
+                SongVote.voter_hash == voter_hash,
+                SongVote.song_id.in_([song.id for song in songs]),
+            ).all()
+        }
+    return jsonify([song.to_dict(viewer_vote=viewer_votes.get(song.id, 0)) for song in songs])
 
 
 @songs_bp.route('/songs/<int:id>', methods=['GET'])
 def get_song(id):
     song = _get_song_or_404(id)
-    return jsonify(song.to_dict())
+    return jsonify(_song_with_viewer_vote(song, _voter_hash()))
+
+
+@songs_bp.route('/songs/<int:id>/vote', methods=['PATCH'])
+def vote_song(id):
+    voter_hash = _voter_hash(required=True)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ValidationError('Request body is required')
+    value = data.get('vote')
+    if isinstance(value, bool) or value not in (-1, 0, 1):
+        raise ValidationError('vote must be -1, 0, or 1.')
+
+    try:
+        # SQLite has no row-level SELECT FOR UPDATE.  BEGIN IMMEDIATE obtains a
+        # write reservation before reading the prior vote, preventing duplicate
+        # rows and stale cache-counter updates between simultaneous requests.
+        if db.engine.dialect.name == 'sqlite':
+            db.session.execute(text('BEGIN IMMEDIATE'))
+            song = db.session.get(Song, id)
+        else:
+            song = Song.query.filter_by(id=id).with_for_update().first()
+        if not song:
+            raise NotFoundError()
+
+        previous_vote = SongVote.query.filter_by(song_id=id, voter_hash=voter_hash).first()
+        previous_value = previous_vote.value if previous_vote else 0
+        if previous_value != value:
+            if previous_vote and value == 0:
+                db.session.delete(previous_vote)
+            elif previous_vote:
+                previous_vote.value = value
+            else:
+                db.session.add(SongVote(song_id=id, voter_hash=voter_hash, value=value))
+
+            upvote_delta = int(value == 1) - int(previous_value == 1)
+            downvote_delta = int(value == -1) - int(previous_value == -1)
+            song.upvote_count = max(0, (song.upvote_count or 0) + upvote_delta)
+            song.downvote_count = max(0, (song.downvote_count or 0) + downvote_delta)
+            song.vote_score = song.upvote_count - song.downvote_count
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return jsonify(song.to_dict(viewer_vote=value)), 200
 
 
 @songs_bp.route('/songs', methods=['POST'])

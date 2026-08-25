@@ -16,11 +16,17 @@ class Song(db.Model):
     genre = db.Column(db.String(50), nullable=True)
     difficulty = db.Column(db.Integer, default=3)
     sheet_music = db.Column(db.String(200), nullable=True)
+    upvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    downvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    vote_score = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc))
 
-    def to_dict(self):
+    votes = db.relationship('SongVote', backref='song', lazy=True,
+                            cascade='all, delete-orphan')
+
+    def to_dict(self, viewer_vote=0):
         return {
             'id': self.id,
             'title': self.title,
@@ -32,12 +38,32 @@ class Song(db.Model):
             'genre': self.genre,
             'difficulty': self.difficulty,
             'sheet_music': self.sheet_music,
+            'upvote_count': self.upvote_count,
+            'downvote_count': self.downvote_count,
+            'vote_score': self.vote_score,
+            'viewer_vote': viewer_vote,
             'has_featured_media': any(m.is_featured for m in self.media_files),
             'media': [media.to_dict() for media in self.media_files],
             'rehearsals': [{'id': r.id, 'title': r.title, 'date': r.date.isoformat()} for r in self.rehearsals],
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class SongVote(db.Model):
+    """One privacy-preserving vote per song and browser/device identity."""
+    id = db.Column(db.Integer, primary_key=True)
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id', ondelete='CASCADE'), nullable=False, index=True)
+    voter_hash = db.Column(db.String(64), nullable=False)
+    value = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('song_id', 'voter_hash', name='uq_song_vote_voter'),
+        db.CheckConstraint('value IN (-1, 1)', name='ck_song_vote_value'),
+    )
 
 
 class Media(db.Model):

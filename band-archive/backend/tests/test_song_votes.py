@@ -1,0 +1,149 @@
+import sqlite3
+
+from flask import Flask
+
+from app import _run_migrations
+from extensions import db
+from models import SongVote
+
+
+VOTER_A = '123e4567-e89b-12d3-a456-426614174000'
+VOTER_B = '123e4567-e89b-12d3-a456-426614174001'
+
+
+def _song(client, title='Vote song'):
+    return client.post('/songs', json={'title': title, 'artist': 'Band'}).get_json()['id']
+
+
+def _vote(client, song_id, value, voter=VOTER_A):
+    return client.patch(
+        f'/songs/{song_id}/vote', json={'vote': value}, headers={'X-Voter-ID': voter},
+    )
+
+
+def test_song_vote_first_repeat_switch_and_cancel_are_idempotent(client, app):
+    song_id = _song(client)
+    first = _vote(client, song_id, 1)
+    assert first.status_code == 200
+    assert first.get_json()['upvote_count'] == 1
+    assert first.get_json()['downvote_count'] == 0
+    assert first.get_json()['vote_score'] == 1
+    assert first.get_json()['viewer_vote'] == 1
+
+    repeated = _vote(client, song_id, 1)
+    assert repeated.status_code == 200
+    assert repeated.get_json()['upvote_count'] == 1
+    with app.app_context():
+        assert SongVote.query.filter_by(song_id=song_id).count() == 1
+
+    switched = _vote(client, song_id, -1)
+    assert switched.get_json()['upvote_count'] == 0
+    assert switched.get_json()['downvote_count'] == 1
+    assert switched.get_json()['vote_score'] == -1
+    assert switched.get_json()['viewer_vote'] == -1
+
+    cancelled = _vote(client, song_id, 0)
+    assert cancelled.get_json()['upvote_count'] == 0
+    assert cancelled.get_json()['downvote_count'] == 0
+    assert cancelled.get_json()['vote_score'] == 0
+    assert cancelled.get_json()['viewer_vote'] == 0
+    with app.app_context():
+        assert SongVote.query.filter_by(song_id=song_id).count() == 0
+
+
+def test_song_vote_aggregates_viewer_vote_and_deterministic_score_sorting(client):
+    first_id = _song(client, 'First')
+    second_id = _song(client, 'Second')
+    third_id = _song(client, 'Third')
+    _vote(client, second_id, 1, VOTER_A)
+    _vote(client, second_id, 1, VOTER_B)
+    _vote(client, third_id, -1, VOTER_B)
+
+    response = client.get('/songs', headers={'X-Voter-ID': VOTER_A})
+    assert response.status_code == 200
+    songs = response.get_json()
+    assert [song['id'] for song in songs] == [second_id, first_id, third_id]
+    assert songs[0]['upvote_count'] == 2
+    assert songs[0]['vote_score'] == 2
+    assert songs[0]['viewer_vote'] == 1
+    assert songs[1]['viewer_vote'] == 0
+    assert songs[2]['downvote_count'] == 1
+    assert songs[2]['viewer_vote'] == 0
+
+    no_header = client.get(f'/songs/{second_id}').get_json()
+    assert no_header['viewer_vote'] == 0
+    assert client.get(f'/songs/{second_id}', headers={'X-Voter-ID': VOTER_B}).get_json()['viewer_vote'] == 1
+
+
+def test_song_vote_rejects_invalid_identity_or_value_without_exposing_raw_identity(client, app):
+    song_id = _song(client)
+    assert client.patch(f'/songs/{song_id}/vote', json={'vote': 1}).status_code == 400
+    assert client.patch(
+        f'/songs/{song_id}/vote', json={'vote': 1}, headers={'X-Voter-ID': 'not-a-uuid'},
+    ).status_code == 400
+    assert client.get('/songs', headers={'X-Voter-ID': 'not-a-uuid'}).status_code == 400
+    assert _vote(client, song_id, True).status_code == 400
+    assert _vote(client, song_id, '1').status_code == 400
+
+    assert _vote(client, song_id, 1).status_code == 200
+    response = client.get('/songs', headers={'X-Voter-ID': VOTER_A})
+    assert VOTER_A not in response.get_data(as_text=True)
+    with app.app_context():
+        vote = SongVote.query.filter_by(song_id=song_id).first()
+        assert vote is not None
+        assert vote.voter_hash != VOTER_A
+        assert len(vote.voter_hash) == 64
+
+
+def test_song_delete_cascades_votes_and_keeps_counters_nonnegative(client, app):
+    song_id = _song(client)
+    _vote(client, song_id, 1, VOTER_A)
+    _vote(client, song_id, -1, VOTER_B)
+    _vote(client, song_id, 0, VOTER_A)
+    state = client.get(f'/songs/{song_id}').get_json()
+    assert state['upvote_count'] >= 0
+    assert state['downvote_count'] >= 0
+
+    assert client.delete(f'/songs/{song_id}').status_code == 200
+    with app.app_context():
+        assert SongVote.query.filter_by(song_id=song_id).count() == 0
+
+
+def test_song_vote_sqlite_migration_backfills_counters_and_is_idempotent(tmp_path):
+    db_path = tmp_path / 'legacy-votes.db'
+    connection = sqlite3.connect(db_path)
+    connection.executescript('''
+        CREATE TABLE song (id INTEGER PRIMARY KEY, title VARCHAR(100), artist VARCHAR(100));
+        CREATE TABLE media (id INTEGER PRIMARY KEY, file_type VARCHAR(20));
+        CREATE TABLE personal_log (id INTEGER PRIMARY KEY, file_type VARCHAR(20));
+        CREATE TABLE rehearsal (id INTEGER PRIMARY KEY);
+        INSERT INTO song (id, title, artist) VALUES (1, 'Legacy', 'Band');
+    ''')
+    connection.commit()
+    connection.close()
+
+    flask_app = Flask(__name__)
+    flask_app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+    _run_migrations(flask_app)
+
+    connection = sqlite3.connect(db_path)
+    connection.executemany(
+        'INSERT INTO song_vote (song_id, voter_hash, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        [(1, 'a' * 64, 1, '2026-01-01', '2026-01-01'), (1, 'b' * 64, -1, '2026-01-01', '2026-01-01')],
+    )
+    connection.execute('UPDATE song SET upvote_count = 99, downvote_count = 99, vote_score = 0 WHERE id = 1')
+    connection.commit()
+    connection.close()
+
+    _run_migrations(flask_app)
+    _run_migrations(flask_app)
+    connection = sqlite3.connect(db_path)
+    row = connection.execute(
+        'SELECT upvote_count, downvote_count, vote_score FROM song WHERE id = 1'
+    ).fetchone()
+    vote_count = connection.execute('SELECT COUNT(*) FROM song_vote WHERE song_id = 1').fetchone()[0]
+    indexes = {row[1] for row in connection.execute('PRAGMA index_list(song_vote)')}
+    connection.close()
+    assert row == (1, 1, 0)
+    assert vote_count == 2
+    assert 'ix_song_vote_song_id' in indexes

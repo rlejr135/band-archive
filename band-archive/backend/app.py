@@ -37,7 +37,33 @@ def _run_migrations(app):
         if 'media' not in tables:
             conn.close()
             return
-        
+
+        # Vote counters are cache fields.  They are rebuilt from SongVote on
+        # every SQLite startup migration so legacy/null values cannot drift.
+        if 'song' in tables:
+            song_columns = {row[1] for row in conn.execute('PRAGMA table_info(song)').fetchall()}
+            for column in ('upvote_count', 'downvote_count', 'vote_score'):
+                if column not in song_columns:
+                    conn.execute(f'ALTER TABLE song ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0')
+                    app.logger.info('Migration: added %s column to song table', column)
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS song_vote (
+                    id INTEGER PRIMARY KEY,
+                    song_id INTEGER NOT NULL REFERENCES song(id) ON DELETE CASCADE,
+                    voter_hash VARCHAR(64) NOT NULL,
+                    value INTEGER NOT NULL CHECK (value IN (-1, 1)),
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    CONSTRAINT uq_song_vote_voter UNIQUE (song_id, voter_hash)
+                )
+            ''')
+            conn.execute('CREATE INDEX IF NOT EXISTS ix_song_vote_song_id ON song_vote(song_id)')
+            conn.execute("UPDATE song SET upvote_count = (SELECT COUNT(*) FROM song_vote "
+                         "WHERE song_vote.song_id = song.id AND song_vote.value = 1)")
+            conn.execute("UPDATE song SET downvote_count = (SELECT COUNT(*) FROM song_vote "
+                         "WHERE song_vote.song_id = song.id AND song_vote.value = -1)")
+            conn.execute('UPDATE song SET vote_score = upvote_count - downvote_count')
+
         # Check media table
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
         if 'original_filename' not in columns:
