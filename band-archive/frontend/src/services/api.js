@@ -11,7 +11,7 @@ export const createSongReadRequest = (path, voterId = getVoterId()) => ({
   options: { headers: songVoterHeaders(voterId) },
 });
 
-export const createSongVoteRequest = (id, vote, voterId = getVoterId()) => ({
+export const createSongVoteRequest = (id, vote, expectedViewerVote, voterId = getVoterId()) => ({
   url: `${API_URL}/songs/${id}/vote`,
   options: {
     method: 'PATCH',
@@ -19,7 +19,7 @@ export const createSongVoteRequest = (id, vote, voterId = getVoterId()) => ({
       'Content-Type': 'application/json',
       ...songVoterHeaders(voterId),
     },
-    body: JSON.stringify({ vote }),
+    body: JSON.stringify({ vote, expected_viewer_vote: expectedViewerVote }),
   },
 });
 
@@ -61,11 +61,22 @@ export const updateSong = async (id, songData) => {
   return await response.json();
 };
 
-export const voteSong = async (id, vote) => {
-  const { url, options } = createSongVoteRequest(id, vote);
+export const voteSong = async (id, vote, expectedViewerVote) => {
+  const { url, options } = createSongVoteRequest(id, vote, expectedViewerVote);
   const response = await fetch(url, options);
-  if (!response.ok) throw new Error('Failed to vote for song');
-  return await response.json();
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // Keep a transport-level failure useful without requiring a JSON body.
+  }
+  if (!response.ok) {
+    const error = new Error(payload?.error || 'Failed to vote for song');
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
 };
 
 // Delete song

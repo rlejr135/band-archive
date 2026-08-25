@@ -45,9 +45,14 @@ const SongList = ({ songs, onSelectSong, onDeleteSong, onAddSong, onVoteSong, vo
             const score = Number.isFinite(Number(song.vote_score)) ? Number(song.vote_score) : 0;
             return (
             <li key={song.id} className="song-item">
-              <span onClick={() => onSelectSong(song)} className="song-title-span">
+              <button
+                type="button"
+                onClick={() => onSelectSong(song)}
+                className="song-title-button"
+                aria-label={`${song.title} 상세 보기`}
+              >
                 {song.title} <span className="song-artist-span">- {song.artist}</span>
-              </span>
+              </button>
               <div className="song-vote-controls" role="group" aria-label={`${song.title} 투표`}>
                 <button
                   type="button"
@@ -72,7 +77,7 @@ const SongList = ({ songs, onSelectSong, onDeleteSong, onAddSong, onVoteSong, vo
                 </button>
                 {voteState.error && <span className="song-vote-error" role="alert">{voteState.error}</span>}
               </div>
-              <button onClick={() => handleDeleteClick(song)} className="delete-btn" title="삭제">×</button>
+              <button type="button" onClick={() => handleDeleteClick(song)} className="delete-btn" title="삭제" aria-label={`${song.title} 삭제`}>×</button>
             </li>
             );
           })}

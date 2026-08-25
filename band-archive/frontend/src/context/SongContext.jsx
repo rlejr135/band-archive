@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia, voteSong } from '../services/api';
-import { normalizeSongVote, replaceSongAndSort, sortSongsByScore, toggleSongVote, voteStatePending, voteStateSettled } from '../services/songVoting.js';
+import { isSongVoteSnapshot, normalizeSongVote, replaceSongAndSort, replaceVoteSongAndSort, sameSongVoteSnapshot, sortSongsByScore, toggleSongVote, voteStatePending, voteStateSettled } from '../services/songVoting.js';
+import { createSongVoteChannel } from '../services/songVoteChannel.js';
 
 const SongContext = createContext();
 
@@ -13,9 +14,29 @@ export const SongProvider = ({ children }) => {
   const [currentSong, setCurrentSong] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [voteStates, setVoteStates] = useState({});
+  const voteChannelRef = useRef(null);
 
   useEffect(() => {
     loadSongs();
+  }, []);
+
+  useEffect(() => {
+    const channel = createSongVoteChannel();
+    if (!channel) return undefined;
+    voteChannelRef.current = channel;
+    const unsubscribe = channel.subscribe((updatedSong) => {
+      setSongs((previous) => replaceVoteSongAndSort(previous, updatedSong));
+      setCurrentSong((previous) => (
+        previous?.id === updatedSong.id && !sameSongVoteSnapshot(previous, updatedSong)
+          ? updatedSong
+          : previous
+      ));
+    });
+    return () => {
+      unsubscribe();
+      channel.close();
+      if (voteChannelRef.current === channel) voteChannelRef.current = null;
+    };
   }, []);
 
   const loadSongs = async () => {
@@ -93,15 +114,30 @@ export const SongProvider = ({ children }) => {
     const song = songs.find((item) => item.id === songId) || currentSong;
     if (!song || song.id !== songId) return null;
 
-    const nextVote = toggleSongVote(song.viewer_vote, requestedVote);
+    const expectedVote = normalizeSongVote(song.viewer_vote);
+    const nextVote = toggleSongVote(expectedVote, requestedVote);
     setVoteStates((previous) => voteStatePending(previous, songId));
     try {
-      const updatedSong = await voteSong(songId, nextVote);
+      const updatedSong = await voteSong(songId, nextVote, expectedVote);
       setSongs((previous) => replaceSongAndSort(previous, updatedSong));
       setCurrentSong((previous) => (previous?.id === songId ? updatedSong : previous));
       setVoteStates((previous) => voteStateSettled(previous, songId));
+      voteChannelRef.current?.publish(updatedSong);
       return updatedSong;
-    } catch {
+    } catch (error) {
+      const conflictSong = error?.status === 409 && error?.payload?.code === 'vote_conflict'
+        ? error.payload.song
+        : null;
+      if (conflictSong?.id === songId && isSongVoteSnapshot(conflictSong)) {
+        setSongs((previous) => replaceSongAndSort(previous, conflictSong));
+        setCurrentSong((previous) => (previous?.id === songId ? conflictSong : previous));
+        setVoteStates((previous) => voteStateSettled(
+          previous,
+          songId,
+          '다른 화면에서 투표가 변경되어 최신 상태로 갱신했습니다. 다시 눌러주세요.',
+        ));
+        return null;
+      }
       setVoteStates((previous) => voteStateSettled(previous, songId, '투표를 저장하지 못했습니다. 다시 시도하세요.'));
       return null;
     }

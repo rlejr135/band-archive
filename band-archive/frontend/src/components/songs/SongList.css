@@ -43,13 +43,23 @@
   border-color: var(--primary-color);
 }
 
-.song-title-span {
+.song-title-button {
   flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-weight: 600;
   color: var(--text-primary);
   cursor: pointer;
   display: flex;
   flex-direction: column; /* Mobile first stack, or row on desktop if needed */
+  text-align: left;
+}
+
+.song-title-button:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 3px;
 }
 
 .song-artist-span {

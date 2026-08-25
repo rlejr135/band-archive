@@ -19,6 +19,29 @@ export const replaceSongAndSort = (songs, updatedSong) => sortSongsByScore(
   songs.map((song) => (song.id === updatedSong.id ? updatedSong : song)),
 );
 
+export const isSongVoteSnapshot = (song) => (
+  song
+  && Number.isInteger(Number(song.id)) && Number(song.id) > 0
+  && Number.isInteger(Number(song.upvote_count)) && Number(song.upvote_count) >= 0
+  && Number.isInteger(Number(song.downvote_count)) && Number(song.downvote_count) >= 0
+  && Number.isInteger(Number(song.vote_score))
+  && normalizeSongVote(song.viewer_vote) === Number(song.viewer_vote)
+);
+
+export const sameSongVoteSnapshot = (left, right) => (
+  left?.id === right?.id
+  && Number(left?.upvote_count) === Number(right?.upvote_count)
+  && Number(left?.downvote_count) === Number(right?.downvote_count)
+  && Number(left?.vote_score) === Number(right?.vote_score)
+  && normalizeSongVote(left?.viewer_vote) === normalizeSongVote(right?.viewer_vote)
+);
+
+export const replaceVoteSongAndSort = (songs, updatedSong) => {
+  const existing = songs.find((song) => song.id === updatedSong?.id);
+  if (!existing || sameSongVoteSnapshot(existing, updatedSong)) return songs;
+  return replaceSongAndSort(songs, updatedSong);
+};
+
 export const voteStatePending = (states, songId) => ({
   ...states,
   [songId]: { loading: true, error: null },
