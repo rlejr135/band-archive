@@ -112,6 +112,11 @@ def vote_song(id):
     value = data.get('vote')
     if isinstance(value, bool) or value not in (-1, 0, 1):
         raise ValidationError('vote must be -1, 0, or 1.')
+    if 'expected_viewer_vote' not in data:
+        raise ValidationError('expected_viewer_vote is required.')
+    expected_value = data.get('expected_viewer_vote')
+    if isinstance(expected_value, bool) or expected_value not in (-1, 0, 1):
+        raise ValidationError('expected_viewer_vote must be -1, 0, or 1.')
 
     try:
         # SQLite has no row-level SELECT FOR UPDATE.  BEGIN IMMEDIATE obtains a
@@ -127,6 +132,16 @@ def vote_song(id):
 
         previous_vote = SongVote.query.filter_by(song_id=id, voter_hash=voter_hash).first()
         previous_value = previous_vote.value if previous_vote else 0
+        if previous_value != expected_value:
+            # The caller read stale state in another tab.  Do not let a stale
+            # idempotent/switch/cancel request overwrite the current vote.
+            db.session.rollback()
+            current_song = db.session.get(Song, id)
+            return jsonify({
+                'error': 'vote_conflict',
+                'code': 'vote_conflict',
+                'song': current_song.to_dict(viewer_vote=previous_value),
+            }), 409
         if previous_value != value:
             if previous_vote and value == 0:
                 db.session.delete(previous_vote)

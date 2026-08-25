@@ -34,10 +34,6 @@ def _run_migrations(app):
     try:
         conn = sqlite3.connect(db_path)
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if 'media' not in tables:
-            conn.close()
-            return
-
         # Vote counters are cache fields.  They are rebuilt from SongVote on
         # every SQLite startup migration so legacy/null values cannot drift.
         if 'song' in tables:
@@ -63,6 +59,14 @@ def _run_migrations(app):
             conn.execute("UPDATE song SET downvote_count = (SELECT COUNT(*) FROM song_vote "
                          "WHERE song_vote.song_id = song.id AND song_vote.value = -1)")
             conn.execute('UPDATE song SET vote_score = upvote_count - downvote_count')
+
+        # A partially restored legacy database can contain Song but not the
+        # media domain.  Vote schema must still migrate; leave the unrelated
+        # media/personal-log migrations untouched until those tables exist.
+        if 'media' not in tables:
+            conn.commit()
+            conn.close()
+            return
 
         # Check media table
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
