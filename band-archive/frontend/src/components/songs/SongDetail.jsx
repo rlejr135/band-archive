@@ -331,6 +331,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                         </span>
                       )}
                       <div className="media-vote-controls" role="group" aria-label={`${getDisplayName(media.filename)} 투표`} onClick={(event) => event.stopPropagation()}>
+                        <span className="media-vote-label" aria-hidden="true">밴드 픽</span>
                         <button
                           type="button"
                           className={`media-vote-btn vote-up ${viewerVote === 1 ? 'active' : ''}`}
@@ -338,10 +339,16 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                           disabled={voteState.loading}
                           aria-pressed={viewerVote === 1}
                           aria-label={`${getDisplayName(media.filename)} 추천${viewerVote === 1 ? ' 취소' : ''}`}
+                          title={viewerVote === 1 ? '추천 취소' : '이 연습 파일 추천'}
                         >
-                          👍 {media.upvote_count ?? 0}
+                          <span className="media-vote-icon" aria-hidden="true">👍</span>
+                          <span className="media-vote-action">추천</span>
+                          <span className="media-vote-count">{media.upvote_count ?? 0}</span>
                         </button>
-                        <span className="media-vote-score" aria-label={`점수 ${score}`}>{score > 0 ? '+' : ''}{score}</span>
+                        <span className={`media-vote-score ${score > 0 ? 'positive' : score < 0 ? 'negative' : ''}`} aria-label={`현재 점수 ${score}`}>
+                          <strong>{score > 0 ? '+' : ''}{score}</strong>
+                          <span>점수</span>
+                        </span>
                         <button
                           type="button"
                           className={`media-vote-btn vote-down ${viewerVote === -1 ? 'active' : ''}`}
@@ -349,8 +356,11 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                           disabled={voteState.loading}
                           aria-pressed={viewerVote === -1}
                           aria-label={`${getDisplayName(media.filename)} 비추천${viewerVote === -1 ? ' 취소' : ''}`}
+                          title={viewerVote === -1 ? '비추천 취소' : '이 연습 파일 비추천'}
                         >
-                          👎 {media.downvote_count ?? 0}
+                          <span className="media-vote-icon" aria-hidden="true">👎</span>
+                          <span className="media-vote-action">아쉬워요</span>
+                          <span className="media-vote-count">{media.downvote_count ?? 0}</span>
                         </button>
                         {voteState.error && <span className="media-vote-error" role="alert">{voteState.error}</span>}
                       </div>

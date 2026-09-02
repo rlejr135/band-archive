@@ -151,8 +151,11 @@ test('song list has no song vote controls while media UI retains accessible cont
   assert.match(detail, /sortMediaByScore\(song\.media\)/);
   assert.match(detail, /aria-pressed=/);
   assert.match(detail, /event\.stopPropagation\(\)/);
+  assert.match(detail, /밴드 픽/);
+  assert.match(detail, /아쉬워요/);
   assert.match(mediaCss, /min-width: 44px/);
   assert.match(mediaCss, /min-height: 44px/);
+  assert.match(mediaCss, /media-vote-label/);
   assert.match(context, /voteMedia\(mediaId, nextVote, expectedVote\)/);
   assert.match(context, /error\?\.status === 409/);
   assert.doesNotMatch(context, /voteForSong|sortSongsByScore/);
