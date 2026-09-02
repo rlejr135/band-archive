@@ -330,68 +330,17 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                           <button className="rename-btn" onClick={(e) => { e.stopPropagation(); handleStartRename(media); }} title="이름 변경">✏️</button>
                         </span>
                       )}
-                      <div className="media-vote-controls" role="group" aria-label={`${getDisplayName(media.filename)} 투표`} onClick={(event) => event.stopPropagation()}>
-                        <span className="media-vote-label" aria-hidden="true">밴드 픽</span>
-                        <button
-                          type="button"
-                          className={`media-vote-btn vote-up ${viewerVote === 1 ? 'active' : ''}`}
-                          onClick={(event) => handleMediaVote(event, media.id, 1)}
-                          disabled={voteState.loading}
-                          aria-pressed={viewerVote === 1}
-                          aria-label={`${getDisplayName(media.filename)} 추천${viewerVote === 1 ? ' 취소' : ''}`}
-                          title={viewerVote === 1 ? '추천 취소' : '이 연습 파일 추천'}
-                        >
-                          <span className="media-vote-icon" aria-hidden="true">👍</span>
-                          <span className="media-vote-action">추천</span>
-                          <span className="media-vote-count">{media.upvote_count ?? 0}</span>
-                        </button>
-                        <span className={`media-vote-score ${score > 0 ? 'positive' : score < 0 ? 'negative' : ''}`} aria-label={`현재 점수 ${score}`}>
+                      <div className="media-summary" aria-label={`${getDisplayName(media.filename)} 요약`}>
+                        <span className={`media-score-summary ${score > 0 ? 'positive' : score < 0 ? 'negative' : ''}`} aria-label={`현재 점수 ${score}`}>
                           <strong>{score > 0 ? '+' : ''}{score}</strong>
                           <span>점수</span>
                         </span>
-                        <button
-                          type="button"
-                          className={`media-vote-btn vote-down ${viewerVote === -1 ? 'active' : ''}`}
-                          onClick={(event) => handleMediaVote(event, media.id, -1)}
-                          disabled={voteState.loading}
-                          aria-pressed={viewerVote === -1}
-                          aria-label={`${getDisplayName(media.filename)} 비추천${viewerVote === -1 ? ' 취소' : ''}`}
-                          title={viewerVote === -1 ? '비추천 취소' : '이 연습 파일 비추천'}
-                        >
-                          <span className="media-vote-icon" aria-hidden="true">👎</span>
-                          <span className="media-vote-action">아쉬워요</span>
-                          <span className="media-vote-count">{media.downvote_count ?? 0}</span>
-                        </button>
-                        {voteState.error && <span className="media-vote-error" role="alert">{voteState.error}</span>}
+                        {media.rehearsal_title ? (
+                          <span className="media-rehearsal-summary">📅 {media.rehearsal_date} {media.rehearsal_title}</span>
+                        ) : (
+                          <span className="media-rehearsal-summary unlinked">합주 미연결</span>
+                        )}
                       </div>
-                      <span className="media-size">
-                        {(media.file_size / 1024 / 1024).toFixed(2)} MB
-                        {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
-                      </span>
-                      {rehearsalPickerMediaId === media.id ? (
-                        <div className="rehearsal-picker" onClick={(e) => e.stopPropagation()}>
-                          <select
-                            value={media.rehearsal_id || ''}
-                            onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
-                          >
-                            <option value="">연결 없음</option>
-                            {allRehearsals.map(r => (
-                              <option key={r.id} value={r.id}>{r.date} {r.title}</option>
-                            ))}
-                          </select>
-                          <button className="picker-cancel-btn" onClick={() => setRehearsalPickerMediaId(null)}>취소</button>
-                        </div>
-                      ) : (
-                        media.rehearsal_title ? (
-                          <span className="rehearsal-badge" onClick={(e) => { e.stopPropagation(); setRehearsalPickerMediaId(media.id); }}>
-                            📅 {media.rehearsal_date} {media.rehearsal_title}
-                          </span>
-                        ) : allRehearsals.length > 0 ? (
-                          <button className="link-rehearsal-btn" onClick={(e) => { e.stopPropagation(); setRehearsalPickerMediaId(media.id); }}>
-                            📅 합주 연결
-                          </button>
-                        ) : null
-                      )}
                     </div>
 
                     <span className="expand-indicator">{isExpanded ? '▲' : '▼'}</span>
@@ -399,6 +348,72 @@ const SongDetail = ({ song, onEdit, onBack }) => {
 
                   {isExpanded && (
                     <div className="media-item-body">
+                      <div className="media-expanded-meta">
+                        <div className="media-vote-controls" role="group" aria-label={`${getDisplayName(media.filename)} 투표`}>
+                          <span className="media-vote-label" aria-hidden="true">밴드 픽</span>
+                          <button
+                            type="button"
+                            className={`media-vote-btn vote-up ${viewerVote === 1 ? 'active' : ''}`}
+                            onClick={(event) => handleMediaVote(event, media.id, 1)}
+                            disabled={voteState.loading}
+                            aria-pressed={viewerVote === 1}
+                            aria-label={`${getDisplayName(media.filename)} 추천${viewerVote === 1 ? ' 취소' : ''}`}
+                            title={viewerVote === 1 ? '추천 취소' : '이 연습 파일 추천'}
+                          >
+                            <span className="media-vote-icon" aria-hidden="true">👍</span>
+                            <span className="media-vote-action">추천</span>
+                            <span className="media-vote-count">{media.upvote_count ?? 0}</span>
+                          </button>
+                          <span className={`media-vote-score ${score > 0 ? 'positive' : score < 0 ? 'negative' : ''}`} aria-label={`현재 점수 ${score}`}>
+                            <strong>{score > 0 ? '+' : ''}{score}</strong>
+                            <span>점수</span>
+                          </span>
+                          <button
+                            type="button"
+                            className={`media-vote-btn vote-down ${viewerVote === -1 ? 'active' : ''}`}
+                            onClick={(event) => handleMediaVote(event, media.id, -1)}
+                            disabled={voteState.loading}
+                            aria-pressed={viewerVote === -1}
+                            aria-label={`${getDisplayName(media.filename)} 비추천${viewerVote === -1 ? ' 취소' : ''}`}
+                            title={viewerVote === -1 ? '비추천 취소' : '이 연습 파일 비추천'}
+                          >
+                            <span className="media-vote-icon" aria-hidden="true">👎</span>
+                            <span className="media-vote-action">아쉬워요</span>
+                            <span className="media-vote-count">{media.downvote_count ?? 0}</span>
+                          </button>
+                          {voteState.error && <span className="media-vote-error" role="alert">{voteState.error}</span>}
+                        </div>
+                        <div className="media-expanded-details">
+                          <span className="media-size">
+                            용량 {(media.file_size / 1024 / 1024).toFixed(2)} MB
+                            {media.comment_count > 0 && <span className="comment-count-badge">💬 {media.comment_count}</span>}
+                          </span>
+                          {rehearsalPickerMediaId === media.id ? (
+                            <div className="rehearsal-picker">
+                              <select
+                                value={media.rehearsal_id || ''}
+                                onChange={(e) => handleLinkRehearsal(media.id, e.target.value || null)}
+                              >
+                                <option value="">연결 없음</option>
+                                {allRehearsals.map(r => (
+                                  <option key={r.id} value={r.id}>{r.date} {r.title}</option>
+                                ))}
+                              </select>
+                              <button className="picker-cancel-btn" onClick={() => setRehearsalPickerMediaId(null)}>취소</button>
+                            </div>
+                          ) : (
+                            media.rehearsal_title ? (
+                              <button className="rehearsal-badge" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                                📅 {media.rehearsal_date} {media.rehearsal_title}
+                              </button>
+                            ) : allRehearsals.length > 0 ? (
+                              <button className="link-rehearsal-btn" onClick={() => setRehearsalPickerMediaId(media.id)}>
+                                📅 합주 연결
+                              </button>
+                            ) : null
+                          )}
+                        </div>
+                      </div>
                       <div className="media-body-actions">
                         <button className="media-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️ 삭제</button>
                       </div>

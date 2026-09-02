@@ -165,6 +165,56 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-width: 0;
+}
+
+.media-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 6px;
+}
+
+.media-score-summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: rgba(15, 188, 249, 0.1);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.media-score-summary strong {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-score-summary.positive strong {
+  color: #6df3a4;
+}
+
+.media-score-summary.negative strong {
+  color: #ff9b97;
+}
+
+.media-rehearsal-summary {
+  min-width: 0;
+  color: var(--secondary-color);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-rehearsal-summary.unlinked {
+  color: var(--text-secondary);
 }
 
 .media-vote-controls {
@@ -178,6 +228,33 @@
   border-radius: 10px;
   background: rgba(30, 39, 46, 0.72);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), var(--shadow-sm);
+}
+
+.media-expanded-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid rgba(75, 101, 132, 0.72);
+  border-radius: var(--radius-default);
+  background: rgba(30, 39, 46, 0.45);
+}
+
+.media-expanded-meta .media-vote-controls {
+  margin-top: 0;
+}
+
+.media-expanded-details {
+  display: flex;
+  flex: 1 1 180px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 44px;
 }
 
 .media-vote-label {
@@ -331,7 +408,6 @@
 .media-size {
     font-size: 0.85rem;
     color: var(--text-secondary);
-    margin-top: 2px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -432,7 +508,11 @@
 
 /* Rehearsal badge on media items */
 .rehearsal-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
   font-size: 0.8rem;
   color: var(--secondary-color);
   cursor: pointer;
@@ -490,6 +570,10 @@
 }
 
 @media (max-width: 768px) {
+  .media-expanded-details {
+    justify-content: flex-start;
+  }
+
   .media-item {
     flex-wrap: wrap;
     gap: 8px;
