@@ -3,6 +3,7 @@ import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalAp
 import useMediaUpload from '../../hooks/useMediaUpload';
 import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
 import { getMediaIcon } from '../../services/mediaPresentation';
+import { getUploadStatusLabel, isUploadCancellable, isUploadTerminal } from '../../services/uploadPresentation';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -273,11 +274,11 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                     <div key={item.id} className={`rd-upload-queue-item ${item.state}`}>
                       <span className="rd-queue-filename">{item.name || '업로드 파일'}</span>
                       {item.state === 'uploading' && <progress value={item.progress || 0} max="100" className="rd-queue-progress" aria-label={`${item.name || '파일'} 업로드 ${item.progress || 0}%`} />}
-                      <span className="rd-queue-status-text">{{ preparing:'준비 중', queued:'대기 중', uploading:`업로드 ${item.progress || 0}%`, retry_wait:'재시도 대기', completing:'완료 처리 중', processing:'음원 추출 중', completed:'완료', failed:'실패', cancelled:'취소됨' }[item.state]}</span>
+                      <span className="rd-queue-status-text">{getUploadStatusLabel(item.state, item.progress || 0)}</span>
                       {item.error && <span className="rd-queue-error">{item.error}</span>}
-                      {['preparing','queued','uploading','retry_wait','completing','processing'].includes(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
+                      {isUploadCancellable(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
                       {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
-                      {['failed','cancelled'].includes(item.state) && <button className="rd-queue-remove" onClick={() => deleteRecoveredUpload(item,r.id)}>삭제</button>}
+                      {isUploadTerminal(item.state) && <button className="rd-queue-remove" onClick={() => deleteRecoveredUpload(item,r.id)}>삭제</button>}
                     </div>
                   ))}
                 </div>
@@ -316,7 +317,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                               <button className="rd-queue-remove" onClick={() => removePendingFile(i)}>✕</button>
                             )}
                             {item.status === 'uploading' && <progress value={item.progress} max="100" className="rd-queue-progress" aria-label={`${item.file.name} 업로드 ${item.progress}%`} />}
-                            <span className="rd-queue-status-text">{{ pending: '준비', preparing: '준비 중', queued: '대기 중', uploading: `업로드 ${item.progress}%`, retry_wait: '재시도 대기', completing: '완료 처리 중', processing: '음원 추출 중', completed: '완료', failed: '실패', cancelled: '취소됨' }[item.status]}</span>
+                            <span className="rd-queue-status-text">{getUploadStatusLabel(item.status, item.progress)}</span>
                             {item.error && <span className="rd-queue-error">{item.error}</span>}
                           </div>
                         ))}

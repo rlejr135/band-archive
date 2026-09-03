@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useId, useEffect, useMemo } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
+import { getUploadStatusLabel, isUploadCancellable, isUploadTerminal } from '../../services/uploadPresentation';
 import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches, nativeUploadResult } from '../../services/nativeUploadQueue';
 import './FileUpload.css';
 
@@ -157,13 +158,13 @@ const FileUpload = ({
             <div key={fileId} className="progress-item">
               <div className="progress-main">
                 <span className="progress-filename">{item.name}</span>
-                <span className="progress-status">{{ preparing: '준비 중', queued: '대기 중', uploading: '업로드 중', retry_wait: '재시도 대기 중', completing: '업로드 완료 처리 중', processing: '음원 추출 중', completed: '음원 추출 완료', failed: '실패', cancelled: '취소됨' }[item.status]}{item.status === 'uploading' ? ` (${item.progress}%)` : ''}</span>
+                <span className="progress-status">{getUploadStatusLabel(item.status, item.progress, 'file')}{item.status === 'uploading' ? ` (${item.progress}%)` : ''}</span>
                 {item.status === 'uploading' && <div className="progress-bar"><div className="progress-fill" style={{ width: `${item.progress}%` }} /></div>}
                 {item.error && <span className="progress-error">{item.error}</span>}
               </div>
-              {!onUpload && ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
+              {!onUpload && isUploadCancellable(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
               {!onUpload && item.status === 'retry_wait' && <button type="button" className="upload-cancel" onClick={() => (transport.retry || transport.resume)?.({ id: fileId })}>재시도</button>}
-              {!onUpload && ['failed', 'cancelled'].includes(item.status) && <button type="button" className="upload-cancel" onClick={() => deleteTerminal(fileId)}>삭제</button>}
+              {!onUpload && isUploadTerminal(item.status) && <button type="button" className="upload-cancel" onClick={() => deleteTerminal(fileId)}>삭제</button>}
             </div>
           ))}
         </div>
