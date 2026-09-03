@@ -126,10 +126,11 @@ def test_finalizer_preflights_r2_before_short_db_transaction_and_clears_existing
         def head(key): observed.append((key, db.session().in_transaction())); return original_head(key)
         r2.head = head
         assert finalize.finalize_items(r2, runner.data, Media, db.session, apply=False)[1] == 0
-        # First source HEAD belongs to streaming preflight; the second is the
-        # short lock-stage CAS recheck. Output HEAD remains preflight-only.
+        # A dry run performs all R2 checks before touching the DB.  The source
+        # CAS recheck is reserved for --apply, which is the only mode allowed
+        # to take SQLite's writer lock.
         source_states = [active for key, active in observed if key == 'media/take.mov']
-        assert source_states == [False, True]
+        assert source_states == [False]
         assert all(not active for key, active in observed if key != 'media/take.mov')
 
 

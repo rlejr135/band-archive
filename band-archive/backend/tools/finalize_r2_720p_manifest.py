@@ -98,10 +98,12 @@ def finalize_items(r2, manifest, media_model, session, apply=False, continue_on_
     if failed:
         return results, 1
 
-    # Only the short, all-or-nothing DB CAS section holds locks.  `get_bind()`
-    # works with scoped SQLAlchemy sessions whereas `.bind` can be None.
+    # A dry run is strictly read-only: it must not take SQLite's writer lock
+    # while an ordinary member action is trying to commit.  Only `--apply`
+    # enters the short, all-or-nothing DB CAS section.  `get_bind()` works
+    # with scoped SQLAlchemy sessions whereas `.bind` can be None.
     dialect = session.get_bind().dialect.name
-    if dialect == 'sqlite':
+    if apply and dialect == 'sqlite':
         session.execute(text('BEGIN IMMEDIATE'))
     prepared = []
     try:
@@ -112,14 +114,15 @@ def finalize_items(r2, manifest, media_model, session, apply=False, continue_on_
                 raise MigrationError('media_not_found_or_not_video')
             if media.filename != item['filename']:
                 raise MigrationError('media_filename_cas_conflict')
-            # The long SHA preflight is already complete.  Re-check only this
-            # original object's immutable identity while the short DB CAS lock
-            # is held, closing the preflight-to-commit change window without
-            # holding locks during network streaming.
-            source_head = r2.head(item['source_key'])
-            if (get_etag(source_head) != item['source']['etag'] or
-                    int(source_head.get('ContentLength', -1)) != item['source']['size']):
-                raise MigrationError('source_changed_during_finalize_lock')
+            if apply:
+                # The long SHA preflight is already complete.  Re-check only
+                # this original object's immutable identity while the short
+                # DB CAS lock is held, closing the preflight-to-commit change
+                # window without holding locks during network streaming.
+                source_head = r2.head(item['source_key'])
+                if (get_etag(source_head) != item['source']['etag'] or
+                        int(source_head.get('ContentLength', -1)) != item['source']['size']):
+                    raise MigrationError('source_changed_during_finalize_lock')
             existing = (media.video_720_filename, media.video_720_source_etag, media.video_720_profile)
             if any(existing) and existing != desired:
                 raise MigrationError('media_720_reference_conflict')
