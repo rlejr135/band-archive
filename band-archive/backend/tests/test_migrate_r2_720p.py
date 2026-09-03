@@ -123,7 +123,7 @@ def test_finalizer_preflights_r2_before_short_db_transaction_and_clears_existing
         from sqlalchemy import text
         db.session.execute(text('SELECT 1'))
         observed = []; original_head = r2.head
-        def head(key): observed.append((key, db.session.in_transaction())); return original_head(key)
+        def head(key): observed.append((key, db.session().in_transaction())); return original_head(key)
         r2.head = head
         assert finalize.finalize_items(r2, runner.data, Media, db.session, apply=False)[1] == 0
         # First source HEAD belongs to streaming preflight; the second is the

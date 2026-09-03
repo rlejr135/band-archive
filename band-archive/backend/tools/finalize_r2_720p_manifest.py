@@ -70,6 +70,14 @@ def finalize_items(r2, manifest, media_model, session, apply=False, continue_on_
     """
     from sqlalchemy import text
 
+    # Flask-SQLAlchemy exposes ``db.session`` as a scoped-session registry.
+    # Its query/commit proxy methods work directly, but SQLAlchemy 2's
+    # transaction-inspection API belongs to the concrete Session instance.
+    # Resolve it once so the command behaves the same in a Flask app process
+    # and in unit tests that pass a Session directly.
+    if not hasattr(session, 'in_transaction') and callable(session):
+        session = session()
+
     # The dedicated command must not inherit an application/request transaction.
     # Explicitly clear it before doing any long R2 preflight work.
     if session.in_transaction():
