@@ -26,46 +26,35 @@ export const createMediaVoteRequest = (id, vote, expectedViewerVote, voterId = g
   },
 });
 
-// Fetch all songs
-export const fetchSongs = async () => {
-  const { url, options } = createSongReadRequest('/songs');
-  const response = await fetch(url, options);
-  if (!response.ok) throw new Error('Failed to fetch songs');
-  return await response.json();
+// Keep ordinary JSON endpoints consistent without folding the media-vote
+// conflict contract into the generic path below.
+export const requestJson = async (path, options = {}, errorMessage = 'Request failed') => {
+  const response = await fetch(`${API_URL}${path}`, options);
+  if (!response.ok) throw new Error(errorMessage);
+  return response.json();
 };
+
+export const jsonRequest = (method, body, headers = {}) => ({
+  method,
+  headers: { 'Content-Type': 'application/json', ...headers },
+  body: JSON.stringify(body),
+});
+
+// Fetch all songs
+export const fetchSongs = () => requestJson('/songs', { headers: voterHeaders() }, 'Failed to fetch songs');
 
 // Get single song
-export const getSong = async (id) => {
-  const { url, options } = createSongReadRequest(`/songs/${id}`);
-  const response = await fetch(url, options);
-  if (!response.ok) throw new Error('Failed to fetch song');
-  return await response.json();
-};
+export const getSong = (id) => requestJson(`/songs/${id}`, { headers: voterHeaders() }, 'Failed to fetch song');
 
 // Create new song
-export const createSong = async (songData) => {
-  const response = await fetch(`${API_URL}/songs`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(songData),
-  });
-  if (!response.ok) throw new Error('Failed to create song');
-  return await response.json();
-};
+export const createSong = (songData) => requestJson('/songs', jsonRequest('POST', songData), 'Failed to create song');
 
 // Update song
-export const updateSong = async (id, songData) => {
-  const response = await fetch(`${API_URL}/songs/${id}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      ...voterHeaders(),
-    },
-    body: JSON.stringify(songData),
-  });
-  if (!response.ok) throw new Error('Failed to update song');
-  return await response.json();
-};
+export const updateSong = (id, songData) => requestJson(
+  `/songs/${id}`,
+  jsonRequest('PUT', songData, voterHeaders()),
+  'Failed to update song',
+);
 
 export const voteMedia = async (id, vote, expectedViewerVote) => {
   const { url, options } = createMediaVoteRequest(id, vote, expectedViewerVote);
@@ -87,166 +76,92 @@ export const voteMedia = async (id, vote, expectedViewerVote) => {
 };
 
 // Delete song
-export const deleteSong = async (id) => {
-  const response = await fetch(`${API_URL}/songs/${id}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) throw new Error('Failed to delete song');
-  return await response.json();
-};
+export const deleteSong = (id) => requestJson(`/songs/${id}`, { method: 'DELETE' }, 'Failed to delete song');
 
 // Link/unlink media to rehearsal
-export const linkMediaToRehearsal = async (mediaId, rehearsalId) => {
-  const response = await fetch(`${API_URL}/media/${mediaId}/rehearsal`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rehearsal_id: rehearsalId }),
-  });
-  if (!response.ok) throw new Error('Failed to link media to rehearsal');
-  return await response.json();
-};
+export const linkMediaToRehearsal = (mediaId, rehearsalId) => requestJson(
+  `/media/${mediaId}/rehearsal`,
+  jsonRequest('PATCH', { rehearsal_id: rehearsalId }),
+  'Failed to link media to rehearsal',
+);
 
 // Delete media
-export const deleteMedia = async (mediaId) => {
-  const response = await fetch(`${API_URL}/media/${mediaId}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) throw new Error('Failed to delete media');
-  return await response.json();
-};
+export const deleteMedia = (mediaId) => requestJson(`/media/${mediaId}`, { method: 'DELETE' }, 'Failed to delete media');
 
 // Rename media
-export const renameMedia = async (mediaId, newFilename) => {
-  const response = await fetch(`${API_URL}/media/${mediaId}/rename`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ filename: newFilename }),
-  });
-  if (!response.ok) throw new Error('Failed to rename media');
-  return await response.json();
-};
+export const renameMedia = (mediaId, newFilename) => requestJson(
+  `/media/${mediaId}/rename`,
+  jsonRequest('PUT', { filename: newFilename }),
+  'Failed to rename media',
+);
 
 // Set featured media
-export const setFeaturedMedia = async (mediaId) => {
-  const response = await fetch(`${API_URL}/media/${mediaId}/featured`, { method: 'PATCH' });
-  if (!response.ok) throw new Error('Failed to set featured media');
-  return response.json();
-};
+export const setFeaturedMedia = (mediaId) => requestJson(`/media/${mediaId}/featured`, { method: 'PATCH' }, 'Failed to set featured media');
 
 // Dashboard stats
-export const fetchDashboardStats = async () => {
-  const response = await fetch(`${API_URL}/dashboard/stats`);
-  if (!response.ok) throw new Error('Failed to fetch dashboard stats');
-  return await response.json();
-};
+export const fetchDashboardStats = () => requestJson('/dashboard/stats', {}, 'Failed to fetch dashboard stats');
 
 // Fetch all song suggestions
-export const fetchSuggestions = async () => {
-  const response = await fetch(`${API_URL}/suggestions`);
-  if (!response.ok) throw new Error('Failed to fetch suggestions');
-  return await response.json();
-};
+export const fetchSuggestions = () => requestJson('/suggestions', {}, 'Failed to fetch suggestions');
 
 // Create song suggestion
-export const createSuggestion = async (data) => {
-  const response = await fetch(`${API_URL}/suggestions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to create suggestion');
-  return await response.json();
-};
+export const createSuggestion = (data) => requestJson('/suggestions', jsonRequest('POST', data), 'Failed to create suggestion');
 
 // Delete song suggestion
-export const deleteSuggestion = async (id, password) => {
-  const response = await fetch(`${API_URL}/suggestions/${id}`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-  });
-  if (!response.ok) throw new Error('Failed to delete suggestion');
-  return await response.json();
-};
+export const deleteSuggestion = (id, password) => requestJson(
+  `/suggestions/${id}`,
+  jsonRequest('DELETE', { password }),
+  'Failed to delete suggestion',
+);
 
 // Vote on song suggestion
-export const voteSuggestion = async (id, voteType) => {
-  const response = await fetch(`${API_URL}/suggestions/${id}/vote`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vote_type: voteType }),
-  });
-  if (!response.ok) throw new Error('Failed to vote');
-  return await response.json();
-};
+export const voteSuggestion = (id, voteType) => requestJson(
+  `/suggestions/${id}/vote`,
+  jsonRequest('POST', { vote_type: voteType }),
+  'Failed to vote',
+);
 
 // Fetch current announcement
-export const fetchAnnouncement = async () => {
-  const response = await fetch(`${API_URL}/announcement`);
-  if (!response.ok) throw new Error('Failed to fetch announcement');
-  return await response.json();
-};
+export const fetchAnnouncement = () => requestJson('/announcement', {}, 'Failed to fetch announcement');
 
 // Update announcement (upsert)
-export const updateAnnouncement = async (content) => {
-  const response = await fetch(`${API_URL}/announcement`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  if (!response.ok) throw new Error('Failed to update announcement');
-  return await response.json();
-};
+export const updateAnnouncement = (content) => requestJson(
+  '/announcement',
+  jsonRequest('PUT', { content }),
+  'Failed to update announcement',
+);
 
 // Fetch comments for a target (media or personal-log)
-export const fetchComments = async (targetType, targetId) => {
-  const response = await fetch(`${API_URL}/${targetType}/${targetId}/comments`);
-  if (!response.ok) throw new Error('Failed to fetch comments');
-  return await response.json();
-};
+export const fetchComments = (targetType, targetId) => requestJson(
+  `/${targetType}/${targetId}/comments`,
+  {},
+  'Failed to fetch comments',
+);
 
 // Create a comment on a target
-export const createComment = async (targetType, targetId, { author, password, content }) => {
-  const response = await fetch(`${API_URL}/${targetType}/${targetId}/comments`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ author, password, content }),
-  });
-  if (!response.ok) throw new Error('Failed to create comment');
-  return await response.json();
-};
+export const createComment = (targetType, targetId, { author, password, content }) => requestJson(
+  `/${targetType}/${targetId}/comments`,
+  jsonRequest('POST', { author, password, content }),
+  'Failed to create comment',
+);
 
 // Create a reply to a comment
-export const createReply = async (commentId, { author, password, content }) => {
-  const response = await fetch(`${API_URL}/comments/${commentId}/replies`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ author, password, content }),
-  });
-  if (!response.ok) throw new Error('Failed to create reply');
-  return await response.json();
-};
+export const createReply = (commentId, { author, password, content }) => requestJson(
+  `/comments/${commentId}/replies`,
+  jsonRequest('POST', { author, password, content }),
+  'Failed to create reply',
+);
 
 // Update a comment (password required)
-export const updateComment = async (commentId, { password, content }) => {
-  const response = await fetch(`${API_URL}/comments/${commentId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password, content }),
-  });
-  if (!response.ok) throw new Error('Failed to update comment');
-  return await response.json();
-};
+export const updateComment = (commentId, { password, content }) => requestJson(
+  `/comments/${commentId}`,
+  jsonRequest('PUT', { password, content }),
+  'Failed to update comment',
+);
 
 // Delete a comment (password required)
-export const deleteComment = async (commentId, password) => {
-  const response = await fetch(`${API_URL}/comments/${commentId}`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-  });
-  if (!response.ok) throw new Error('Failed to delete comment');
-  return await response.json();
-};
+export const deleteComment = (commentId, password) => requestJson(
+  `/comments/${commentId}`,
+  jsonRequest('DELETE', { password }),
+  'Failed to delete comment',
+);

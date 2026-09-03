@@ -1,62 +1,22 @@
-import { API_URL } from './api';
+import { jsonRequest, requestJson } from './api';
 
 // Fetch all members
-export const fetchMembers = async () => {
-  const response = await fetch(`${API_URL}/members`);
-  if (!response.ok) throw new Error('Failed to fetch members');
-  return await response.json();
-};
+export const fetchMembers = () => requestJson('/members', {}, 'Failed to fetch members');
 
 // Create new member
-export const createMember = async (data) => {
-  const response = await fetch(`${API_URL}/members`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to create member');
-  return await response.json();
-};
+export const createMember = (data) => requestJson('/members', jsonRequest('POST', data), 'Failed to create member');
 
 // Fetch single member
-export const getMember = async (id) => {
-  const response = await fetch(`${API_URL}/members/${id}`);
-  if (!response.ok) throw new Error('Failed to fetch member');
-  return await response.json();
-};
+export const getMember = (id) => requestJson(`/members/${id}`, {}, 'Failed to fetch member');
 
 // Update member
-export const updateMember = async (id, data) => {
-  const response = await fetch(`${API_URL}/members/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error('Failed to update member');
-  return await response.json();
-};
+export const updateMember = (id, data) => requestJson(`/members/${id}`, jsonRequest('PUT', data), 'Failed to update member');
 
 // Delete member
-export const deleteMember = async (id) => {
-  const response = await fetch(`${API_URL}/members/${id}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) throw new Error('Failed to delete member');
-  return await response.json();
-};
+export const deleteMember = (id) => requestJson(`/members/${id}`, { method: 'DELETE' }, 'Failed to delete member');
 
 // Fetch personal logs for a member
-export const fetchMemberLogs = async (memberId) => {
-  const response = await fetch(`${API_URL}/members/${memberId}/logs`);
-  if (!response.ok) throw new Error('Failed to fetch member logs');
-  return await response.json();
-};
+export const fetchMemberLogs = (memberId) => requestJson(`/members/${memberId}/logs`, {}, 'Failed to fetch member logs');
 
 // Delete personal log
-export const deletePersonalLog = async (logId) => {
-  const response = await fetch(`${API_URL}/personal-logs/${logId}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) throw new Error('Failed to delete personal log');
-  return await response.json();
-};
+export const deletePersonalLog = (logId) => requestJson(`/personal-logs/${logId}`, { method: 'DELETE' }, 'Failed to delete personal log');
