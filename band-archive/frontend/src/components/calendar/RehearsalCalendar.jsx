@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Calendar from 'react-calendar';
 import { fetchRehearsals } from '../../services/rehearsalApi';
-import { fetchSongs } from '../../services/api';
+import { useSongs } from '../../context/SongContext';
 import RehearsalDetail from './RehearsalDetail';
 import RehearsalModal from './RehearsalModal';
 import 'react-calendar/dist/Calendar.css';
@@ -11,7 +11,7 @@ const RehearsalCalendar = () => {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeMonth, setActiveMonth] = useState(new Date());
   const [rehearsals, setRehearsals] = useState([]);
-  const [songs, setSongs] = useState([]);
+  const { songs } = useSongs();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRehearsal, setEditingRehearsal] = useState(null);
 
@@ -26,19 +26,9 @@ const RehearsalCalendar = () => {
     }
   }, []);
 
-  const loadSongs = useCallback(async () => {
-    try {
-      const data = await fetchSongs();
-      setSongs(data);
-    } catch (error) {
-      console.error('Failed to load songs:', error);
-    }
-  }, []);
-
   useEffect(() => {
     loadRehearsals(activeMonth);
-    loadSongs();
-  }, [activeMonth, loadRehearsals, loadSongs]);
+  }, [activeMonth, loadRehearsals]);
 
   const handleActiveStartDateChange = ({ activeStartDate }) => {
     setActiveMonth(activeStartDate);

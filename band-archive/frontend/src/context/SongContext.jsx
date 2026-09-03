@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react';
 import { fetchSongs, getSong, createSong, updateSong, deleteSong, deleteMedia, renameMedia, voteMedia } from '../services/api';
 import { isMediaVoteSnapshot, normalizeMediaVote, replaceMediaInSong, replaceMediaInSongs, sortSongMediaByScore, toggleMediaVote, voteStatePending, voteStateSettled } from '../services/mediaVoting.js';
 import { createMediaVoteChannel } from '../services/mediaVoteChannel.js';
@@ -15,10 +15,7 @@ export const SongProvider = ({ children }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [voteStates, setVoteStates] = useState({});
   const mediaVoteChannelRef = useRef(null);
-
-  useEffect(() => {
-    loadSongs();
-  }, []);
+  const songsRequestRef = useRef(null);
 
   useEffect(() => {
     const channel = createMediaVoteChannel();
@@ -35,19 +32,29 @@ export const SongProvider = ({ children }) => {
     };
   }, []);
 
-  const loadSongs = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await fetchSongs();
-      setSongs(data.map(sortSongMediaByScore));
-    } catch (err) {
-      console.error('Failed to load songs:', err);
-      setError('곡 목록을 불러오는 데 실패했습니다.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loadSongs = useCallback(() => {
+    if (songsRequestRef.current) return songsRequestRef.current;
+    const request = (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await fetchSongs();
+        setSongs(data.map(sortSongMediaByScore));
+      } catch (err) {
+        console.error('Failed to load songs:', err);
+        setError('곡 목록을 불러오는 데 실패했습니다.');
+      } finally {
+        setLoading(false);
+        songsRequestRef.current = null;
+      }
+    })();
+    songsRequestRef.current = request;
+    return request;
+  }, []);
+
+  useEffect(() => {
+    loadSongs();
+  }, [loadSongs]);
 
   const addSong = async (songData) => {
     const newSong = await createSong(songData);

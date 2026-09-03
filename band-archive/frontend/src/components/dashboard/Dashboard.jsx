@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { fetchDashboardStats, fetchSongs } from '../../services/api';
+import { fetchDashboardStats } from '../../services/api';
+import { useSongs } from '../../context/SongContext';
 import { fetchFeaturedImage } from '../../services/galleryApi';
 import RehearsalCalendar from '../calendar/RehearsalCalendar';
 import './Dashboard.css';
@@ -8,9 +9,8 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedStatus, setExpandedStatus] = useState(null);
-  const [statusSongs, setStatusSongs] = useState([]);
-  const [songsLoading, setSongsLoading] = useState(false);
   const [featuredImage, setFeaturedImage] = useState(null);
+  const { songs } = useSongs();
 
   useEffect(() => {
     loadStats();
@@ -28,24 +28,15 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
     }
   };
 
-  const handleStatusClick = async (status) => {
+  const handleStatusClick = (status) => {
     if (expandedStatus === status) {
       setExpandedStatus(null);
-      setStatusSongs([]);
       return;
     }
     setExpandedStatus(status);
-    setSongsLoading(true);
-    try {
-      const allSongs = await fetchSongs();
-      setStatusSongs(allSongs.filter((s) => s.status === status));
-    } catch (error) {
-      console.error('Failed to load songs:', error);
-      setStatusSongs([]);
-    } finally {
-      setSongsLoading(false);
-    }
   };
+
+  const statusSongs = expandedStatus ? songs.filter((song) => song.status === expandedStatus) : [];
 
   if (loading) {
     return <div className="dashboard"><div className="loading-small">로딩 중...</div></div>;
@@ -99,9 +90,7 @@ const Dashboard = ({ onSelectSong, onViewSongs }) => {
                 </div>
                 {expandedStatus === key && (
                   <div className="status-songs">
-                    {songsLoading ? (
-                      <div className="status-songs-loading">로딩 중...</div>
-                    ) : statusSongs.length > 0 ? (
+                    {statusSongs.length > 0 ? (
                       statusSongs.map((song) => (
                         <div
                           key={song.id}
