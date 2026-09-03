@@ -8,6 +8,7 @@ import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import { sortMediaByScore } from '../../services/mediaVoting.js';
+import { getMediaIcon, getMediaType } from '../../services/mediaPresentation.js';
 import { getYoutubeId } from '../../services/youtube.js';
 
 const SongDetail = ({ song, onEdit, onBack }) => {
@@ -71,7 +72,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
       await renameMediaInSong(song.id, mediaId, newFilename);
       setRenamingMediaId(null);
       setNewFilename('');
-    } catch (err) {
+    } catch {
       alert('파일 이름 변경에 실패했습니다.');
     }
   };
@@ -91,7 +92,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
     try {
       await editSong(song.id, { ...song, chords: chordsText });
       setEditingChords(false);
-    } catch (err) {
+    } catch {
       alert('코드 저장에 실패했습니다.');
     } finally {
       setChordsSaving(false);
@@ -113,7 +114,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
     try {
       await editSong(song.id, { ...song, memo: memoText });
       setEditingMemo(false);
-    } catch (err) {
+    } catch {
       alert('메모 저장에 실패했습니다.');
     } finally {
       setMemoSaving(false);
@@ -125,7 +126,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
       await linkMediaToRehearsal(mediaId, rehearsalId || null);
       setRehearsalPickerMediaId(null);
       await refreshSong(song.id);
-    } catch (err) {
+    } catch {
       alert('합주 연결에 실패했습니다.');
     }
   };
@@ -134,34 +135,8 @@ const SongDetail = ({ song, onEdit, onBack }) => {
     if (!window.confirm('정말 이 파일을 삭제하시겠습니까?')) return;
     try {
       await removeMediaFromSong(song.id, mediaId);
-    } catch (err) {
+    } catch {
       alert('파일 삭제에 실패했습니다.');
-    }
-  };
-
-  // Robust file type detection
-  const getMediaType = (media) => {
-    // Priority 1: Backend file_type if valid
-    if (media.file_type && media.file_type !== 'document') return media.file_type;
-
-    // Priority 2: Extension based fallback
-    const ext = media.filename?.split('.').pop().toLowerCase();
-
-    if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) return 'audio';
-    if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) return 'video';
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
-
-    return 'document';
-  };
-
-  const iconForType = (media) => {
-    const type = getMediaType(media);
-    switch (type) {
-      case 'video': return '🎬';
-      case 'audio': return '🎵';
-      case 'image': return '🖼️';
-      case 'document': return '📄';
-      default: return '📁';
     }
   };
 
@@ -305,7 +280,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
               return (
                 <div key={media.id} className={`media-item ${isExpanded ? 'expanded' : ''}`}>
                   <div className="media-item-header" onClick={() => !isRenaming && toggleMediaExpand(media.id)}>
-                    <span className="media-icon">{iconForType(media)}</span>
+                    <span className="media-icon">{getMediaIcon(media)}</span>
 
                     <div className="media-info">
                       {isRenaming ? (

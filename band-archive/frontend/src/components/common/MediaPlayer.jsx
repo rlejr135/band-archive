@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
+import { getMediaType } from '../../services/mediaPresentation';
 import './MediaPlayer.css';
 
 const MediaPlayer = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
@@ -19,15 +20,6 @@ const MediaPlayer = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
   }, [mediaKind, watch, watchMedia, watchable]);
 
   if (!file) return null;
-
-  const getMediaType = (file) => {
-    if (file.type && file.type !== 'document') return file.type;
-    const ext = file.name?.split('.').pop().toLowerCase();
-    if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext)) return 'audio';
-    if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) return 'video';
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return 'image';
-    return 'document';
-  };
 
   const mediaType = getMediaType(file);
   const isVideo = mediaType === 'video';

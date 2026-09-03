@@ -5,6 +5,7 @@ import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import useAsyncData from '../../hooks/useAsyncData';
+import { getMediaIcon } from '../../services/mediaPresentation';
 import './MemberDetail.css';
 
 const MemberDetail = () => {
@@ -116,7 +117,7 @@ const MemberDetail = () => {
               <div key={log.id} className="log-card">
                 <div className="log-icon-wrapper">
                   <span className="log-icon">
-                    {log.file_type === 'video' ? '🎬' : '🎵'}
+                    {getMediaIcon(log)}
                   </span>
                 </div>
                 <div className="log-info">

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
 import useMediaUpload from '../../hooks/useMediaUpload';
 import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
+import { getMediaIcon } from '../../services/mediaPresentation';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -149,15 +150,6 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     }
   };
 
-  const getMediaIcon = (type) => {
-    switch (type) {
-      case 'video': return '🎬';
-      case 'audio': return '🎵';
-      case 'image': return '🖼️';
-      default: return '📄';
-    }
-  };
-
   const toggleMediaExpand = (mediaId) => {
     setExpandedMediaIds(prev => {
       const next = new Set(prev);
@@ -244,7 +236,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                     return (
                       <div key={m.id} className={`rd-media-item ${isExpanded ? 'expanded' : ''}`}>
                         <div className="rd-media-item-header" onClick={() => toggleMediaExpand(m.id)}>
-                          <span className="rd-media-icon">{getMediaIcon(m.file_type)}</span>
+                          <span className="rd-media-icon">{getMediaIcon(m)}</span>
                           <div className="rd-media-info">
                             <span className="rd-media-name">{m.filename}</span>
                             <span className="rd-media-song">{m.song_title} - {m.song_artist}</span>
