@@ -1,13 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { fetchSuggestions, createSuggestion, deleteSuggestion, voteSuggestion } from '../../services/api';
+import { getYoutubeId } from '../../services/youtube.js';
 import PasswordModal from '../common/PasswordModal';
 import './SongSuggestion.css';
-
-const getYoutubeId = (url) => {
-  if (!url) return null;
-  const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]+)/);
-  return match ? match[1] : null;
-};
 
 const SongSuggestion = () => {
   const [suggestions, setSuggestions] = useState([]);

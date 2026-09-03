@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { isValidYoutubeUrl } from '../../services/youtube.js';
 import './SongForm.css';
 
 const STATUSES = [
@@ -6,12 +7,6 @@ const STATUSES = [
   { value: 'Completed', label: '완료' },
   { value: 'OnHold', label: '보류' },
 ];
-
-const isValidYoutubeUrl = (url) => {
-  if (!url) return true;
-  const pattern = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)[\w-]+/;
-  return pattern.test(url);
-};
 
 const SongForm = ({ song, onSave, onCancel }) => {
   const [linkError, setLinkError] = useState('');

@@ -8,6 +8,7 @@ import FileUpload from '../common/FileUpload';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import { sortMediaByScore } from '../../services/mediaVoting.js';
+import { getYoutubeId } from '../../services/youtube.js';
 
 const SongDetail = ({ song, onEdit, onBack }) => {
   const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
@@ -38,11 +39,6 @@ const SongDetail = ({ song, onEdit, onBack }) => {
     setMemoText(song?.memo || '');
     setRehearsalPickerMediaId(null);
   }, [song?.id]);
-
-  const getYoutubeId = (url) => {
-    const match = url.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]+)/);
-    return match ? match[1] : null;
-  };
 
   if (!song) {
     return <div className="song-detail-placeholder">곡을 선택해주세요.</div>;
