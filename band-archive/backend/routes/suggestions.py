@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from extensions import db
-from models import SongSuggestion
+from models import Song, SongSuggestion
 from errors import NotFoundError, ValidationError
 from route_helpers import get_or_404
 from validators import validate_string_length
@@ -59,6 +59,31 @@ def delete_suggestion(id):
     db.session.delete(suggestion)
     db.session.commit()
     return jsonify({"message": "Suggestion deleted"}), 200
+
+
+@suggestions_bp.route('/suggestions/<int:id>/promote', methods=['POST'])
+def promote_suggestion(id):
+    """Move one approved suggestion into the song list atomically."""
+    suggestion = _get_suggestion_or_404(id)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('password') != 'admin':
+        raise ValidationError("Invalid password")
+
+    song = Song(
+        title=suggestion.title,
+        artist=suggestion.artist,
+        link=suggestion.link,
+        memo=suggestion.memo,
+        status='Practice',
+    )
+    try:
+        db.session.add(song)
+        db.session.delete(suggestion)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return jsonify({'song': song.to_dict()}), 201
 
 
 @suggestions_bp.route('/suggestions/<int:id>/vote', methods=['POST'])

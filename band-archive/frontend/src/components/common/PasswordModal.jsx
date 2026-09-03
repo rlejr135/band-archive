@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import './PasswordModal.css';
 
-const PasswordModal = ({ isOpen, onClose, onConfirm, title = "비밀번호 확인", checkPassword }) => {
+const PasswordModal = ({
+  isOpen, onClose, onConfirm, title = '비밀번호 확인', checkPassword,
+  message = '삭제하려면 비밀번호를 입력하세요', confirmLabel = '확인',
+}) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isChecking, setIsChecking] = useState(false);
@@ -28,7 +31,7 @@ const PasswordModal = ({ isOpen, onClose, onConfirm, title = "비밀번호 확�
         setError('비밀번호가 올바르지 않습니다.');
         setPassword('');
       }
-    } catch (err) {
+    } catch {
       setError('오류가 발생했습니다.');
     } finally {
       setIsChecking(false);
@@ -57,7 +60,7 @@ const PasswordModal = ({ isOpen, onClose, onConfirm, title = "비밀번호 확�
         
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
-            <p className="modal-message">삭제하려면 비밀번호를 입력하세요</p>
+            <p className="modal-message">{message}</p>
             <input
               type="password"
               value={password}
@@ -76,8 +79,8 @@ const PasswordModal = ({ isOpen, onClose, onConfirm, title = "비밀번호 확�
             <button type="button" onClick={handleClose} className="modal-cancel-btn">
               취소
             </button>
-            <button type="submit" className="modal-confirm-btn">
-              확인
+            <button type="submit" className="modal-confirm-btn" disabled={isChecking}>
+              {isChecking ? '확인 중...' : confirmLabel}
             </button>
           </div>
         </form>

@@ -114,6 +114,12 @@ export const deleteSuggestion = (id, password) => requestJson(
   'Failed to delete suggestion',
 );
 
+export const promoteSuggestion = (id, password) => requestJson(
+  `/suggestions/${id}/promote`,
+  jsonRequest('POST', { password }),
+  'Failed to move suggestion to songs',
+);
+
 // Vote on song suggestion
 export const voteSuggestion = (id, voteType) => requestJson(
   `/suggestions/${id}/vote`,

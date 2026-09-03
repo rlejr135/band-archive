@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createMediaVoteRequest, createSongReadRequest, updateSong, voteMedia } from './api.js';
+import { createMediaVoteRequest, createSongReadRequest, promoteSuggestion, updateSong, voteMedia } from './api.js';
 import { createMediaVoteChannel, isMediaVoteChannelMessage } from './mediaVoteChannel.js';
 import { replaceMediaInSong, replaceMediaInSongs, sortMediaByScore, sortSongMediaByScore, toggleMediaVote, voteStatePending, voteStateSettled } from './mediaVoting.js';
 import { fetchRehearsalMedia } from './rehearsalApi.js';
@@ -93,6 +93,23 @@ test('media vote accepts a future envelope and keeps a 409 conflict payload', as
     globalThis.fetch = previousFetch;
     if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage);
     else delete globalThis.localStorage;
+  }
+});
+
+test('promoting a suggestion posts the admin password to the dedicated endpoint', async () => {
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ song: { id: 7 } }) };
+  };
+  try {
+    assert.deepEqual(await promoteSuggestion(12, 'admin'), { song: { id: 7 } });
+    assert.match(requests[0].url, /\/suggestions\/12\/promote$/);
+    assert.equal(requests[0].options.method, 'POST');
+    assert.equal(requests[0].options.body, JSON.stringify({ password: 'admin' }));
+  } finally {
+    globalThis.fetch = previousFetch;
   }
 });
 

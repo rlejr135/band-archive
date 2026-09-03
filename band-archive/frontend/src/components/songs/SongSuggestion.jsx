@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchSuggestions, createSuggestion, deleteSuggestion, voteSuggestion } from '../../services/api';
+import { fetchSuggestions, createSuggestion, deleteSuggestion, promoteSuggestion, voteSuggestion } from '../../services/api';
 import { getYoutubeId } from '../../services/youtube.js';
 import PasswordModal from '../common/PasswordModal';
 import './SongSuggestion.css';
@@ -10,6 +10,7 @@ const SongSuggestion = () => {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ title: '', artist: '', link: '', memo: '' });
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [promoteTarget, setPromoteTarget] = useState(null);
 
   useEffect(() => {
     loadSuggestions();
@@ -64,6 +65,22 @@ const SongSuggestion = () => {
   const handleDeleteSuccess = () => {
     setSuggestions(prev => prev.filter(s => s.id !== deleteTarget));
     setDeleteTarget(null);
+  };
+
+  const handleCheckPromotionPassword = async (password) => {
+    if (!promoteTarget) return false;
+    try {
+      await promoteSuggestion(promoteTarget.id, password);
+      return true;
+    } catch (error) {
+      console.error('Failed to move suggestion to songs:', error);
+      return false;
+    }
+  };
+
+  const handlePromoteSuccess = () => {
+    setSuggestions((previous) => previous.filter((suggestion) => suggestion.id !== promoteTarget?.id));
+    setPromoteTarget(null);
   };
 
   if (loading) {
@@ -174,6 +191,13 @@ const SongSuggestion = () => {
                 >
                   🗑️
                 </button>
+                <button
+                  className="promote-btn"
+                  onClick={() => setPromoteTarget(s)}
+                  title="곡 목록에 추가"
+                >
+                  이 곡 진행
+                </button>
               </div>
             </div>
           ))}
@@ -186,6 +210,15 @@ const SongSuggestion = () => {
         onConfirm={handleDeleteSuccess}
         checkPassword={handleCheckPassword}
         title="추천 삭제 (비밀번호: admin)"
+      />
+      <PasswordModal
+        isOpen={promoteTarget !== null}
+        onClose={() => setPromoteTarget(null)}
+        onConfirm={handlePromoteSuccess}
+        checkPassword={handleCheckPromotionPassword}
+        title="이 곡 진행 (비밀번호: admin)"
+        message={`“${promoteTarget?.title || ''}”을 곡 목록에 추가하고 추천 목록에서 삭제합니다.`}
+        confirmLabel="곡 목록에 추가"
       />
     </div>
   );
