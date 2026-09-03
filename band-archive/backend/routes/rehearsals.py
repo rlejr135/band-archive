@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, current_app
 from extensions import db
 from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
+from route_helpers import get_or_404
 from storage import storage
 from media_processing import create_media, save_media_and_start
 from voting import voter_hash, media_viewer_votes
@@ -23,10 +24,7 @@ rehearsals_bp = Blueprint('rehearsals', __name__)
 
 
 def _get_rehearsal_or_404(id):
-    rehearsal = db.session.get(Rehearsal, id)
-    if not rehearsal:
-        raise NotFoundError()
-    return rehearsal
+    return get_or_404(db.session, Rehearsal, id)
 
 
 def _parse_date(value, field_name):

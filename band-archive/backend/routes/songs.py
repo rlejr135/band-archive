@@ -8,6 +8,7 @@ from extensions import db
 from models import Song, SongVote, Media, MediaVote, Rehearsal
 from sqlalchemy import text
 from errors import ValidationError, NotFoundError
+from route_helpers import get_or_404
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
                               delete_original_and_audio, processing_status_response)
@@ -29,10 +30,7 @@ songs_bp = Blueprint('songs', __name__)
 
 
 def _get_song_or_404(id):
-    song = db.session.get(Song, id)
-    if not song:
-        raise NotFoundError()
-    return song
+    return get_or_404(db.session, Song, id)
 
 
 def _song_with_media_viewer_votes(song, voter_hash=None):

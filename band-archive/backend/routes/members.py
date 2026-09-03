@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Member
 from errors import NotFoundError, ValidationError
+from route_helpers import get_or_404
 from storage import storage
 from media_processing import delete_original_and_audio
 from validators import validate_required_string, validate_string_length
@@ -11,10 +12,7 @@ members_bp = Blueprint('members', __name__)
 
 
 def _get_member_or_404(id):
-    member = db.session.get(Member, id)
-    if not member:
-        raise NotFoundError("Member not found")
-    return member
+    return get_or_404(db.session, Member, id, "Member not found")
 
 
 @members_bp.route('/members', methods=['GET'])

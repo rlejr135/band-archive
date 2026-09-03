@@ -3,23 +3,15 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import GalleryImage
 from errors import ValidationError, NotFoundError
+from route_helpers import get_or_404
 from storage import storage
-from validators import allowed_file, generate_secure_filename, guess_content_type
+from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
+                        guess_content_type)
 
 gallery_bp = Blueprint('gallery', __name__)
 
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-
-
-def _allowed_image(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
-
-
 def _get_image_or_404(id):
-    image = db.session.get(GalleryImage, id)
-    if not image:
-        raise NotFoundError("Image not found")
-    return image
+    return get_or_404(db.session, GalleryImage, id, "Image not found")
 
 
 @gallery_bp.route('/gallery', methods=['GET'])
@@ -37,8 +29,8 @@ def upload_image():
     if file.filename == '':
         raise ValidationError("No file selected")
 
-    if not _allowed_image(file.filename):
-        raise ValidationError(f"Image files only. Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}")
+    if not allowed_image_file(file.filename):
+        raise ValidationError(f"Image files only. Allowed: {', '.join(IMAGE_EXTENSIONS)}")
 
     filename = generate_secure_filename(file.filename)
     content_type = guess_content_type(filename)

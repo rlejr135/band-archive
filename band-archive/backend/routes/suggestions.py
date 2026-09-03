@@ -3,16 +3,14 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import SongSuggestion
 from errors import NotFoundError, ValidationError
+from route_helpers import get_or_404
 from validators import validate_string_length
 
 suggestions_bp = Blueprint('suggestions', __name__)
 
 
 def _get_suggestion_or_404(id):
-    suggestion = db.session.get(SongSuggestion, id)
-    if not suggestion:
-        raise NotFoundError("Suggestion not found")
-    return suggestion
+    return get_or_404(db.session, SongSuggestion, id, "Suggestion not found")
 
 
 @suggestions_bp.route('/suggestions', methods=['GET'])

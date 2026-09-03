@@ -12,19 +12,15 @@ from models import (Media, Song, Rehearsal, Member, PersonalLog, GalleryImage,
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import create_media, save_media_and_start
-from validators import allowed_file, generate_secure_filename, detect_file_type, guess_content_type
+from validators import (allowed_file, allowed_image_file, generate_secure_filename,
+                        detect_file_type, guess_content_type)
 
 uploads_bp = Blueprint('uploads', __name__)
 
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 MAX_VIDEO_BYTES = 1024 * 1024 * 1024
 MULTIPART_PART_SIZE = 16 * 1024 * 1024
 MAX_MULTIPART_PARTS = 10_000
 UPLOAD_CAPABILITY_HEADER = 'X-Upload-Capability'
-
-
-def _allowed_image(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
 
 
 def _require_int(value, field_name, minimum=None, maximum=None):
@@ -182,7 +178,7 @@ def presign():
         raise ValidationError("upload_type must be 'media', 'gallery', or 'personal_log'")
     if upload_type == 'media' and not allowed_file(filename):
         raise ValidationError('File type not allowed')
-    if upload_type == 'gallery' and not _allowed_image(filename):
+    if upload_type == 'gallery' and not allowed_image_file(filename):
         raise ValidationError('Image files only. Allowed: png, jpg, jpeg, gif, webp')
     if upload_type == 'personal_log':
         if data.get('song_id') is not None or data.get('rehearsal_id') is not None:
@@ -253,7 +249,7 @@ def complete_gallery():
     original_filename = data.get('original_filename', '').strip()
     if not filename:
         raise ValidationError('filename is required')
-    if not _allowed_image(filename):
+    if not allowed_image_file(filename):
         raise ValidationError('Image files only.')
     actual_size = _object_size(f'gallery/{filename}')
     declared_size = data.get('file_size')

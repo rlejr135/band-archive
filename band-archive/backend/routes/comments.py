@@ -3,15 +3,13 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Comment, Media, PersonalLog
 from errors import NotFoundError, ValidationError
+from route_helpers import get_or_404
 
 comments_bp = Blueprint('comments', __name__)
 
 
 def _get_comment_or_404(id):
-    comment = db.session.get(Comment, id)
-    if not comment:
-        raise NotFoundError("Comment not found")
-    return comment
+    return get_or_404(db.session, Comment, id, "Comment not found")
 
 
 def _get_top_level_comments(query_filter):

@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, redirect, current_app
 from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
+from route_helpers import get_or_404
 from storage import storage
 from media_processing import (create_personal_log, save_personal_log_and_start,
                               retry_audio_processing_record, PERSONAL_LOG_SPEC,
@@ -25,10 +26,7 @@ ALLOWED_LOG_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 
 def _get_member_or_404(member_id):
-    member = db.session.get(Member, member_id)
-    if not member:
-        raise NotFoundError("Member not found")
-    return member
+    return get_or_404(db.session, Member, member_id, "Member not found")
 
 
 

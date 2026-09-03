@@ -3,9 +3,9 @@ import mimetypes
 
 from errors import ValidationError
 
-ALLOWED_EXTENSIONS = {
-    # Images
-    'png', 'jpg', 'jpeg', 'gif', 'webp',
+IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | {
     # Documents
     'pdf',
     # Audio
@@ -45,6 +45,10 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def allowed_image_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in IMAGE_EXTENSIONS
+
+
 def generate_secure_filename(filename):
     """Generate a randomized filename preserving the original extension."""
     ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
@@ -59,7 +63,7 @@ def detect_file_type(filename):
         return 'video'
     if ext in ('mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'):
         return 'audio'
-    if ext in ('png', 'jpg', 'jpeg', 'gif', 'webp'):
+    if ext in IMAGE_EXTENSIONS:
         return 'image'
     return 'document'
 
