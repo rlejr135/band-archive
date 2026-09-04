@@ -5,6 +5,7 @@ from models import GalleryImage
 from errors import ValidationError, NotFoundError
 from route_helpers import get_or_404
 from storage import storage
+from upload_helpers import prepare_upload
 from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
                         guess_content_type)
 
@@ -32,19 +33,14 @@ def upload_image():
     if not allowed_image_file(file.filename):
         raise ValidationError(f"Image files only. Allowed: {', '.join(IMAGE_EXTENSIONS)}")
 
-    filename = generate_secure_filename(file.filename)
-    content_type = guess_content_type(filename)
-
-    file.seek(0, 2)
-    file_size = file.tell()
-    file.seek(0)
-
-    storage.upload(f'gallery/{filename}', file, content_type=content_type)
+    upload = prepare_upload(file, generate_secure_filename(file.filename),
+                            guess_content_type(file.filename))
+    storage.upload(f'gallery/{upload.filename}', file, content_type=upload.content_type)
 
     image = GalleryImage(
-        filename=filename,
-        original_filename=file.filename,
-        file_size=file_size,
+        filename=upload.filename,
+        original_filename=upload.original_filename,
+        file_size=upload.file_size,
     )
     db.session.add(image)
     db.session.commit()

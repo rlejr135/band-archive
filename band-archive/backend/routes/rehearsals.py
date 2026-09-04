@@ -1,4 +1,3 @@
-import os
 from datetime import date
 
 from flask import Blueprint, jsonify, request, current_app
@@ -10,6 +9,7 @@ from route_helpers import get_or_404
 from storage import storage
 from media_processing import create_media, save_media_and_start
 from voting import voter_hash, media_viewer_votes
+from upload_helpers import prepare_upload
 from validators import (
     validate_required_string,
     validate_string_length,
@@ -203,22 +203,17 @@ def upload_rehearsal_media(id):
     if not allowed_file(file.filename):
         raise ValidationError(f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
 
-    filename = generate_secure_filename(file.filename)
-    content_type = guess_content_type(filename)
-
-    file.seek(0, os.SEEK_END)
-    file_size = file.tell()
-    file.seek(0)
-
-    storage.upload(f'media/{filename}', file, content_type=content_type)
+    upload = prepare_upload(file, generate_secure_filename(file.filename),
+                            guess_content_type(file.filename))
+    storage.upload(f'media/{upload.filename}', file, content_type=upload.content_type)
 
     media = create_media(
         song_id=song_id,
         rehearsal_id=id,
-        filename=filename,
-        original_filename=file.filename,
-        file_type=detect_file_type(filename),
-        file_size=file_size,
+        filename=upload.filename,
+        original_filename=upload.original_filename,
+        file_type=detect_file_type(upload.filename),
+        file_size=upload.file_size,
     )
     save_media_and_start(current_app._get_current_object(), media)
     return jsonify(media.to_dict()), 201

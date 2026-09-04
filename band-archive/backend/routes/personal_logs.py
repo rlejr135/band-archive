@@ -1,4 +1,3 @@
-import os
 import mimetypes
 
 from flask import Blueprint, jsonify, request, redirect, current_app
@@ -7,6 +6,7 @@ from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
 from route_helpers import get_or_404
+from upload_helpers import prepare_upload
 from storage import storage
 from media_processing import (create_personal_log, save_personal_log_and_start,
                               retry_audio_processing_record, PERSONAL_LOG_SPEC,
@@ -65,20 +65,16 @@ def create_log(member_id):
 
     filename = generate_secure_filename(file.filename)
     content_type, _ = mimetypes.guess_type(filename)
-
-    file.seek(0, os.SEEK_END)
-    file_size = file.tell()
-    file.seek(0)
-
-    storage.upload(f'personal_logs/{filename}', file, content_type=content_type)
+    upload = prepare_upload(file, filename, content_type)
+    storage.upload(f'personal_logs/{upload.filename}', file, content_type=upload.content_type)
 
     log = create_personal_log(
         member_id=member_id,
         title=title,
-        filename=filename,
-        original_filename=file.filename,
+        filename=upload.filename,
+        original_filename=upload.original_filename,
         file_type=detect_file_type(file.filename),
-        file_size=file_size,
+        file_size=upload.file_size,
     )
     save_personal_log_and_start(current_app._get_current_object(), log)
     return jsonify(log.to_dict()), 201
