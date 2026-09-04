@@ -3,6 +3,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask
+import pytest
 
 from app import _run_migrations, create_app
 from config import TestingConfig
@@ -143,6 +144,25 @@ def test_media_vote_validates_identity_and_does_not_expose_raw_id(client, app):
     with app.app_context():
         vote = MediaVote.query.filter_by(media_id=media_id).first()
         assert vote and vote.voter_hash != VOTER_A and len(vote.voter_hash) == 64
+
+
+@pytest.mark.parametrize(
+    ('payload', 'message'),
+    [
+        (None, 'Request body is required'),
+        ({'vote': True, 'expected_viewer_vote': 0}, 'vote must be -1, 0, or 1.'),
+        ({'vote': 1}, 'expected_viewer_vote is required.'),
+        ({'vote': 1, 'expected_viewer_vote': False}, 'expected_viewer_vote must be -1, 0, or 1.'),
+    ],
+)
+def test_song_and_media_vote_share_the_same_request_contract(client, app, payload, message):
+    song_id = _song(client)
+    media_id = _media(app, song_id, 'contract.mp3')
+    headers = {'X-Voter-ID': VOTER_A}
+    for path in (f'/songs/{song_id}/vote', f'/media/{media_id}/vote'):
+        response = client.patch(path, json=payload, headers=headers)
+        assert response.status_code == 400
+        assert response.get_json() == {'error': message}
 
 
 def test_media_delete_cascades_media_votes(client, app):

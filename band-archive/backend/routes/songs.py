@@ -12,7 +12,7 @@ from route_helpers import get_or_404
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
                               delete_original_and_audio, processing_status_response)
-from voting import voter_hash, media_viewer_votes
+from voting import voter_hash, media_viewer_votes, parse_vote_payload
 from validators import (
     validate_status,
     validate_difficulty,
@@ -84,17 +84,7 @@ def vote_song(id):
     song vote cannot be losslessly assigned to one of its media items.
     """
     voter_hash_value = voter_hash(required=True)
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        raise ValidationError('Request body is required')
-    value = data.get('vote')
-    if isinstance(value, bool) or value not in (-1, 0, 1):
-        raise ValidationError('vote must be -1, 0, or 1.')
-    if 'expected_viewer_vote' not in data:
-        raise ValidationError('expected_viewer_vote is required.')
-    expected_value = data.get('expected_viewer_vote')
-    if isinstance(expected_value, bool) or expected_value not in (-1, 0, 1):
-        raise ValidationError('expected_viewer_vote must be -1, 0, or 1.')
+    value, expected_value = parse_vote_payload(request.get_json(silent=True))
 
     try:
         # SQLite has no row-level SELECT FOR UPDATE.  BEGIN IMMEDIATE obtains a
@@ -146,17 +136,7 @@ def vote_song(id):
 @songs_bp.route('/media/<int:media_id>/vote', methods=['PATCH'])
 def vote_media(media_id):
     voter_hash_value = voter_hash(required=True)
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        raise ValidationError('Request body is required')
-    value = data.get('vote')
-    if isinstance(value, bool) or value not in (-1, 0, 1):
-        raise ValidationError('vote must be -1, 0, or 1.')
-    if 'expected_viewer_vote' not in data:
-        raise ValidationError('expected_viewer_vote is required.')
-    expected_value = data.get('expected_viewer_vote')
-    if isinstance(expected_value, bool) or expected_value not in (-1, 0, 1):
-        raise ValidationError('expected_viewer_vote must be -1, 0, or 1.')
+    value, expected_value = parse_vote_payload(request.get_json(silent=True))
 
     try:
         if db.engine.dialect.name == 'sqlite':

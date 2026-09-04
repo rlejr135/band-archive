@@ -10,6 +10,7 @@ from models import MediaVote
 
 
 VOTER_ID_HEADER = 'X-Voter-ID'
+VALID_VOTE_VALUES = (-1, 0, 1)
 
 
 def voter_hash(required=False):
@@ -24,6 +25,23 @@ def voter_hash(required=False):
     except (AttributeError, ValueError):
         raise ValidationError(f'{VOTER_ID_HEADER} must be a valid UUID.')
     return hashlib.sha256(canonical_id.encode('utf-8')).hexdigest()
+
+
+def parse_vote_payload(data):
+    """Validate the optimistic-concurrency vote request shared by both APIs."""
+    if not isinstance(data, dict):
+        raise ValidationError('Request body is required')
+
+    value = data.get('vote')
+    if isinstance(value, bool) or value not in VALID_VOTE_VALUES:
+        raise ValidationError('vote must be -1, 0, or 1.')
+
+    if 'expected_viewer_vote' not in data:
+        raise ValidationError('expected_viewer_vote is required.')
+    expected_value = data['expected_viewer_vote']
+    if isinstance(expected_value, bool) or expected_value not in VALID_VOTE_VALUES:
+        raise ValidationError('expected_viewer_vote must be -1, 0, or 1.')
+    return value, expected_value
 
 
 def media_viewer_votes(media_files, voter_hash_value=None):
