@@ -5,6 +5,8 @@ from datetime import timedelta
 import pytest
 
 from extensions import db
+from datetime import datetime, timezone
+
 from media_processing import (
     AudioProcessingError,
     create_media,
@@ -135,6 +137,24 @@ def test_completed_720_reference_becomes_default_but_keeps_original_url(app):
     assert payload['url'] == 'https://storage.test/media/transcoded/720/1/etag.mp4'
     assert payload['qualities']['720p'] == payload['url']
     assert payload['qualities']['original'] == 'https://storage.test/media/clip.mp4'
+
+
+def test_pruned_original_keeps_720p_and_radio_urls_without_exposing_original(app):
+    with app.app_context():
+        media = create_media(song_id=1, filename='clip.mp4', file_type='video')
+        media.video_720_filename = 'media/transcoded/720/1/etag.mp4'
+        media.video_720_source_etag = 'etag'
+        media.transcoding_status = 'completed'
+        media.audio_filename = 'clip_audio.m4a'
+        media.original_pruned_at = datetime.now(timezone.utc)
+        payload = media.to_dict()
+    assert payload['url'] == 'https://storage.test/media/transcoded/720/1/etag.mp4'
+    assert payload['original_url'] is None
+    assert payload['original_pruned'] is True
+    assert payload['qualities'] == {
+        '720p': 'https://storage.test/media/transcoded/720/1/etag.mp4',
+        'audio': 'https://storage.test/media/clip_audio.m4a',
+    }
 
 
 def test_processing_status_and_retry_api(client, app, monkeypatch):

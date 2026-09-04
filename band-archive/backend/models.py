@@ -88,6 +88,10 @@ class Media(db.Model):
     video_720_source_etag = db.Column(db.String(200), nullable=True)
     video_720_profile = db.Column(db.String(100), nullable=True)
     video_720_completed_at = db.Column(db.DateTime, nullable=True)
+    # Set only by the audited R2-prune command after the linked 720p video
+    # and extracted M4A have both been verified.  ``filename`` remains the
+    # historical original basename for auditability and record deletion.
+    original_pruned_at = db.Column(db.DateTime, nullable=True)
     is_featured = db.Column(db.Boolean, default=False)
     upvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     downvote_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
@@ -104,7 +108,9 @@ class Media(db.Model):
     def to_dict(self, viewer_vote=0):
         from media_processing import processing_fields
         fields = processing_fields(self, 'media')
-        qualities = {'original': fields['original_url']}
+        qualities = {}
+        if fields['original_url']:
+            qualities['original'] = fields['original_url']
         if fields['video_720_url']:
             qualities['720p'] = fields['video_720_url']
         if fields['audio_url']:

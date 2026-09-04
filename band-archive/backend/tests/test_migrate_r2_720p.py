@@ -200,4 +200,5 @@ def test_partial_sqlite_without_personal_log_still_adds_720_columns(tmp_path):
     connection = sqlite3.connect(path)
     columns = {row[1] for row in connection.execute('PRAGMA table_info(media)')}
     connection.close()
-    assert {'video_720_filename', 'video_720_source_etag', 'video_720_profile', 'video_720_completed_at'} <= columns
+    assert {'video_720_filename', 'video_720_source_etag', 'video_720_profile', 'video_720_completed_at',
+            'original_pruned_at'} <= columns

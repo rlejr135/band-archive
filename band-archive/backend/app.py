@@ -142,6 +142,7 @@ def _run_migrations(app):
             'video_720_source_etag': 'VARCHAR(200)',
             'video_720_profile': 'VARCHAR(100)',
             'video_720_completed_at': 'DATETIME',
+            'original_pruned_at': 'DATETIME',
         }
         columns = {row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()}
         for column, definition in video_720_additions.items():

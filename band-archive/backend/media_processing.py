@@ -96,7 +96,8 @@ def audio_filename_for(filename):
 
 def processing_fields(record, key_prefix):
     """Shared JSON fields; callers retain their established endpoint names."""
-    original_url = storage.generate_url(f'{key_prefix}/{record.filename}')
+    original_pruned = bool(getattr(record, 'original_pruned_at', None))
+    original_url = None if original_pruned else storage.generate_url(f'{key_prefix}/{record.filename}')
     video_720_filename = getattr(record, 'video_720_filename', None)
     video_720_url = None
     if key_prefix == 'media' and record.file_type == 'video' and video_720_filename:
@@ -111,6 +112,7 @@ def processing_fields(record, key_prefix):
         # regular video URL prefers it. The original remains explicit below.
         'url': video_720_url or original_url,
         'original_url': original_url,
+        'original_pruned': original_pruned,
         'video_720_url': video_720_url,
         'video_720_filename': video_720_filename,
         'video_720_source_etag': getattr(record, 'video_720_source_etag', None),
@@ -229,6 +231,8 @@ def retry_audio_processing(app, media):
 def retry_audio_processing_record(app, record, spec):
     if record.file_type != 'video':
         raise ValueError(f'Only video {spec.label}s can be retried.')
+    if getattr(record, 'original_pruned_at', None):
+        raise RuntimeError('The original video was pruned, so audio extraction cannot be retried.')
     if record.transcoding_status in ('queued', 'processing'):
         raise RuntimeError('Audio processing is already queued or running.')
     record.transcoding_status = 'queued'
