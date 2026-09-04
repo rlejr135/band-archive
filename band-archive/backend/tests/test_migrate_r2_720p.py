@@ -102,7 +102,7 @@ def test_remote_resume_and_finalize_are_cas_checked(app, tmp_path):
     r2.types[item['output']['key']] = 'video/quicktime'; item['state'] = 'completed'; runner.persist(remote=True)
     with app.app_context():
         song = Song(title='S', artist='A'); db.session.add(song); db.session.flush()
-        media = Media(song_id=song.id, filename='take.mov', file_type='video'); db.session.add(media); db.session.commit()
+        media = Media(id=7, song_id=song.id, filename='take.mov', file_type='video'); db.session.add(media); db.session.commit()
         result, status = finalize.finalize_items(r2, runner.data, Media, db.session, apply=True)
         assert status == 0 and result[0]['state'] == 'finalized'
         assert db.session.get(Media, media.id).video_720_filename == item['output']['key']
@@ -118,7 +118,7 @@ def test_finalizer_preflights_r2_before_short_db_transaction_and_clears_existing
     r2.objects[item['output']['key']] = b'720'; r2.types[item['output']['key']] = 'video/quicktime'
     r2.metadata[item['output']['key']] = {'migration-profile': tool.PROFILE, 'source-etag': item['source']['etag'], 'sha256': item['output']['sha256']}; item['state'] = 'completed'
     with app.app_context():
-        song = Song(title='S', artist='A'); db.session.add(song); db.session.flush(); db.session.add(Media(song_id=song.id, filename='take.mov', file_type='video')); db.session.commit()
+        song = Song(title='S', artist='A'); db.session.add(song); db.session.flush(); db.session.add(Media(id=7, song_id=song.id, filename='take.mov', file_type='video')); db.session.commit()
         # Deliberately leave a session transaction active; finalizer must roll it back.
         from sqlalchemy import text
         db.session.execute(text('SELECT 1'))
@@ -142,7 +142,7 @@ def test_finalizer_rejects_source_changed_between_preflight_and_lock_stage(app, 
     r2.metadata[item['output']['key']] = {'migration-profile': tool.PROFILE, 'source-etag': item['source']['etag'], 'sha256': item['output']['sha256']}; item['state'] = 'completed'
     with app.app_context():
         song = Song(title='S', artist='A'); db.session.add(song); db.session.flush()
-        media = Media(song_id=song.id, filename='take.mov', file_type='video'); db.session.add(media); db.session.commit()
+        media = Media(id=7, song_id=song.id, filename='take.mov', file_type='video'); db.session.add(media); db.session.commit()
         original_head, source_heads = r2.head, 0
         def head(key):
             nonlocal source_heads

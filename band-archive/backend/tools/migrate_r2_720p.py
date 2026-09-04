@@ -135,7 +135,7 @@ def fetch_targets(api_url=DEFAULT_API_URL, timeout=20, request_get=None, migrati
         raise MigrationError('migration_token_missing')
     url = _inventory_url(api_url, allow_test_url=request_get is not _default_get)
     try:
-        response = request_get(url, timeout=timeout, headers={
+        response = request_get(url=url, timeout=timeout, headers={
             'Accept': 'application/json', 'X-Migration-Token': token,
         })
         if hasattr(response, 'raise_for_status'):

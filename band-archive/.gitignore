@@ -39,3 +39,5 @@ FRONTEND_TASK_*.md
 # Docs
 docs/
 skills/
+.pytest-tmp/
+.venv-test/
