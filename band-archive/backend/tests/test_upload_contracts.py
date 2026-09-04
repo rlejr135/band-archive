@@ -99,3 +99,20 @@ def test_resumable_abort_is_idempotent_for_both_targets(client, monkeypatch, kin
     assert client.post(f"/uploads/multipart/{session['session_id']}/abort", headers=headers).status_code == 200
     assert client.post(f"/uploads/multipart/{session['session_id']}/abort", headers=headers).status_code == 200
     assert len(aborted) == 1
+
+
+@pytest.mark.parametrize('kind, endpoint', (
+    ('media', '/uploads/complete/media'),
+    ('personal_log', '/uploads/complete/personal-log'),
+))
+def test_direct_completion_rejects_client_size_mismatch_for_both_targets(client, monkeypatch, kind, endpoint):
+    payload = {'filename': 'direct.mp4', 'original_filename': 'direct.mp4', 'file_size': 31}
+    if kind == 'media':
+        payload['song_id'] = _song(client)
+    else:
+        payload.update(member_id=_member(client), title='Direct contract log')
+    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 32})
+
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 400
+    assert response.get_json() == {'error': 'Uploaded object size does not match file_size.'}

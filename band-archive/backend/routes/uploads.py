@@ -5,7 +5,9 @@ from models import (Media, Song, Rehearsal, Member, PersonalLog, GalleryImage,
                     )
 from errors import ValidationError, NotFoundError
 from storage import storage
-from media_processing import create_media, save_media_and_start
+from media_processing import (create_media, create_personal_log, save_media_and_start,
+                              save_personal_log_and_start)
+from upload_record_service import create_uploaded_record
 from multipart_upload_service import (
     MAX_MULTIPART_PARTS, MULTIPART_PART_SIZE, MEDIA_TARGET, PERSONAL_LOG_TARGET,
     abort_session, acknowledge_part, complete_session, completion_payload, create_session,
@@ -61,26 +63,29 @@ def _object_size(key):
 
 
 def _create_media_from_object(song_id, rehearsal_id, filename, original_filename, actual_size):
-    file_type = detect_file_type(filename)
-    if file_type == 'video' and actual_size > MAX_VIDEO_BYTES:
-        raise ValidationError('Video exceeds the 1 GiB upload limit.')
-    media = create_media(
-        song_id=song_id, rehearsal_id=rehearsal_id, filename=filename,
-        original_filename=original_filename or None, file_type=file_type, file_size=actual_size,
+    return create_uploaded_record(
+        filename=filename, original_filename=original_filename, actual_size=actual_size,
+        max_video_bytes=MAX_VIDEO_BYTES, create_record=create_media,
+        save_record=save_media_and_start, app=current_app._get_current_object(),
+        song_id=song_id, rehearsal_id=rehearsal_id,
     )
-    return save_media_and_start(current_app._get_current_object(), media)
 
 
 def _create_personal_log_from_object(member_id, filename, original_filename, title, actual_size):
-    file_type = detect_file_type(filename)
-    if file_type == 'video' and actual_size > MAX_VIDEO_BYTES:
-        raise ValidationError('Video exceeds the 1 GiB upload limit.')
-    from media_processing import create_personal_log, save_personal_log_and_start
-    log = create_personal_log(
-        member_id=member_id, title=title, filename=filename,
-        original_filename=original_filename or None, file_type=file_type, file_size=actual_size,
+    return create_uploaded_record(
+        filename=filename, original_filename=original_filename, actual_size=actual_size,
+        max_video_bytes=MAX_VIDEO_BYTES, create_record=create_personal_log,
+        save_record=save_personal_log_and_start, app=current_app._get_current_object(),
+        member_id=member_id, title=title,
     )
-    return save_personal_log_and_start(current_app._get_current_object(), log)
+
+
+def _verified_direct_upload_size(data, key_prefix, filename):
+    actual_size = _object_size(f'{key_prefix}/{filename}')
+    declared_size = data.get('file_size')
+    if declared_size is not None and _require_int(declared_size, 'file_size', minimum=0) != actual_size:
+        raise ValidationError('Uploaded object size does not match file_size.')
+    return actual_size
 
 
 def recover_multipart_upload_sessions(app):
@@ -138,10 +143,7 @@ def complete_media():
     if not allowed_file(filename):
         raise ValidationError('File type not allowed')
     song_id, rehearsal_id = _validate_media_target(data.get('song_id'), data.get('rehearsal_id'))
-    actual_size = _object_size(f'media/{filename}')
-    declared_size = data.get('file_size')
-    if declared_size is not None and _require_int(declared_size, 'file_size', minimum=0) != actual_size:
-        raise ValidationError('Uploaded object size does not match file_size.')
+    actual_size = _verified_direct_upload_size(data, 'media', filename)
     media = _create_media_from_object(song_id, rehearsal_id, filename, original_filename, actual_size)
     return jsonify(media.to_dict()), 201
 
@@ -161,10 +163,7 @@ def complete_personal_log():
     title = data.get('title', '').strip() or original_filename or filename
     if len(title) > 200:
         raise ValidationError('title must be 200 characters or less')
-    actual_size = _object_size(f'personal_logs/{filename}')
-    declared_size = data.get('file_size')
-    if declared_size is not None and _require_int(declared_size, 'file_size', minimum=0) != actual_size:
-        raise ValidationError('Uploaded object size does not match file_size.')
+    actual_size = _verified_direct_upload_size(data, 'personal_logs', filename)
     log = _create_personal_log_from_object(member_id, filename, original_filename, title, actual_size)
     return jsonify(log.to_dict()), 201
 
