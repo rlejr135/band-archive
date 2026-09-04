@@ -1,25 +1,23 @@
-import secrets
-from datetime import datetime, timezone
-
-from werkzeug.security import check_password_hash, generate_password_hash
-
 from flask import Blueprint, jsonify, request, current_app
 
 from extensions import db
 from models import (Media, Song, Rehearsal, Member, PersonalLog, GalleryImage,
-                    MultipartUploadSession, MultipartUploadPart,
-                    PersonalLogMultipartUploadSession, PersonalLogMultipartUploadPart)
+                    )
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import create_media, save_media_and_start
+from multipart_upload_service import (
+    MAX_MULTIPART_PARTS, MULTIPART_PART_SIZE, MEDIA_TARGET, PERSONAL_LOG_TARGET,
+    abort_session, acknowledge_part, complete_session, completion_payload, create_session,
+    get_session_or_404, issue_part, part_payload, recover_sessions, require_capability,
+    require_active_session, session_payload, spec_for_session,
+)
 from validators import (allowed_file, allowed_image_file, generate_secure_filename,
                         detect_file_type, guess_content_type)
 
 uploads_bp = Blueprint('uploads', __name__)
 
 MAX_VIDEO_BYTES = 1024 * 1024 * 1024
-MULTIPART_PART_SIZE = 16 * 1024 * 1024
-MAX_MULTIPART_PARTS = 10_000
 UPLOAD_CAPABILITY_HEADER = 'X-Upload-Capability'
 
 
@@ -85,51 +83,6 @@ def _create_personal_log_from_object(member_id, filename, original_filename, tit
     return save_personal_log_and_start(current_app._get_current_object(), log)
 
 
-def _get_session_or_404(session_id):
-    session = db.session.get(MultipartUploadSession, session_id)
-    if not session:
-        session = db.session.get(PersonalLogMultipartUploadSession, session_id)
-    if not session:
-        raise NotFoundError('Upload session not found')
-    _expire_session_if_needed(session)
-    return session
-
-
-def _is_personal_session(session):
-    return isinstance(session, PersonalLogMultipartUploadSession)
-
-
-def _session_part_model(session):
-    return PersonalLogMultipartUploadPart if _is_personal_session(session) else MultipartUploadPart
-
-
-def _now():
-    """Use naive UTC because SQLite strips timezone information."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def _expires_at_utc_naive(session):
-    expires_at = session.expires_at
-    if expires_at and expires_at.tzinfo is not None:
-        return expires_at.astimezone(timezone.utc).replace(tzinfo=None)
-    return expires_at
-
-
-def _expire_session_if_needed(session):
-    if session.status not in ('initiated', 'completing') or _expires_at_utc_naive(session) > _now():
-        return False
-    # Abort is best-effort here.  The terminal DB state prevents new part URLs;
-    # R2 bucket lifecycle remains the final cleanup guard if this request fails.
-    try:
-        storage.abort_multipart_upload(session.object_key, session.r2_upload_id)
-    except Exception:
-        current_app.logger.exception('Failed to abort expired multipart upload %s', session.id)
-    session.status = 'expired'
-    session.completion_started_at = None
-    db.session.commit()
-    return True
-
-
 def recover_multipart_upload_sessions(app):
     """Recover interrupted completion attempts and expire old R2 upload IDs.
 
@@ -137,31 +90,7 @@ def recover_multipart_upload_sessions(app):
     capabilities, so an old session without a capability remains inaccessible.
     """
     with app.app_context():
-        for model in (MultipartUploadSession, PersonalLogMultipartUploadSession):
-            for session in model.query.filter_by(status='completing').all():
-                if _expires_at_utc_naive(session) > _now():
-                    session.status = 'initiated'
-                    session.completion_started_at = None
-            db.session.commit()
-            for session in model.query.filter(model.status.in_(('initiated', 'completing'))).all():
-                _expire_session_if_needed(session)
-
-
-def _require_session_capability(session):
-    """Temporary ownership boundary until authenticated user ownership exists."""
-    token = request.headers.get(UPLOAD_CAPABILITY_HEADER)
-    if not token or not session.capability_token_hash:
-        raise ValidationError('A valid upload capability is required.', status_code=403)
-    if not check_password_hash(session.capability_token_hash, token):
-        raise ValidationError('A valid upload capability is required.', status_code=403)
-
-
-def _require_active_session(session_id):
-    session = _get_session_or_404(session_id)
-    _require_session_capability(session)
-    if session.status != 'initiated':
-        raise ValidationError(f'Upload session is {session.status}.', status_code=409)
-    return session
+        recover_sessions()
 
 
 @uploads_bp.route('/uploads/presign', methods=['POST'])
@@ -285,29 +214,18 @@ def initiate_multipart_media():
         song_id, rehearsal_id = _validate_media_target(data.get('song_id'), data.get('rehearsal_id'))
     content_type = data.get('content_type', '').strip() or guess_content_type(filename)
     secure_name = generate_secure_filename(filename)
-    object_key = f"{'personal_logs' if has_member else 'media'}/{secure_name}"
-    try:
-        r2_upload_id = storage.create_multipart_upload(object_key, content_type)
-    except Exception as exc:
-        raise ValidationError('Multipart upload could not be initiated.') from exc
-    # This random value is returned exactly once.  Only its password hash is
-    # persisted, and all later session operations require it in the header.
-    capability_token = secrets.token_urlsafe(32)
-    capability_token_hash = generate_password_hash(capability_token)
     if has_member:
-        session = PersonalLogMultipartUploadSession(
-            r2_upload_id=r2_upload_id, object_key=object_key, original_filename=filename,
-            title=title, content_type=content_type, declared_bytes=declared_bytes, member_id=member_id,
-            capability_token_hash=capability_token_hash,
+        session, capability_token = create_session(
+            PERSONAL_LOG_TARGET, original_filename=filename, filename=secure_name,
+            content_type=content_type, declared_bytes=declared_bytes,
+            member_id=member_id, title=title,
         )
     else:
-        session = MultipartUploadSession(
-            r2_upload_id=r2_upload_id, object_key=object_key, original_filename=filename,
-            content_type=content_type, declared_bytes=declared_bytes, song_id=song_id, rehearsal_id=rehearsal_id,
-            capability_token_hash=capability_token_hash,
+        session, capability_token = create_session(
+            MEDIA_TARGET, original_filename=filename, filename=secure_name,
+            content_type=content_type, declared_bytes=declared_bytes,
+            song_id=song_id, rehearsal_id=rehearsal_id,
         )
-    db.session.add(session)
-    db.session.commit()
     return jsonify({
         'session_id': session.id, 'filename': secure_name, 'part_size': MULTIPART_PART_SIZE,
         'max_parts': MAX_MULTIPART_PARTS, 'expires_at': session.expires_at.isoformat(),
@@ -318,62 +236,22 @@ def initiate_multipart_media():
 
 @uploads_bp.route('/uploads/multipart/<session_id>/parts', methods=['POST'])
 def presign_multipart_part(session_id):
-    session = _require_active_session(session_id)
+    session = require_active_session(session_id, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     data = request.get_json()
     if not data:
         raise ValidationError('Request body is required')
     part_number = _require_int(data.get('part_number'), 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
-    part_model = _session_part_model(session)
-    part = part_model.query.filter_by(session_id=session.id, part_number=part_number).first()
-    if part and part.acknowledged_at:
-        return jsonify(_part_payload(part)), 409
-    if not part:
-        part = part_model(session_id=session.id, part_number=part_number)
-        db.session.add(part)
-        db.session.commit()
-    try:
-        upload_url = storage.generate_upload_part_url(session.object_key, session.r2_upload_id, part_number)
-    except Exception as exc:
-        raise ValidationError('Part upload URL could not be created.') from exc
-    payload = _part_payload(part)
+    part, upload_url = issue_part(session, part_number)
+    if upload_url is False:
+        return jsonify(part_payload(part)), 409
+    payload = part_payload(part)
     payload.update({'upload_url': upload_url, 'status': 'issued'})
     return jsonify(payload), 200
 
 
-def _part_payload(part):
-    payload = {
-        'session_id': part.session_id,
-        'part_number': part.part_number,
-        'status': 'acknowledged' if part.acknowledged_at else 'issued',
-    }
-    if part.acknowledged_at:
-        payload.update({
-            'etag': part.etag,
-            'bytes': part.uploaded_bytes,
-            'checksum': part.checksum,
-            'acknowledged_at': part.acknowledged_at.isoformat(),
-        })
-    return payload
-
-
-def _acknowledged_completion_parts(session):
-    parts = list(session.parts)
-    if not parts:
-        raise ValidationError('At least one acknowledged part is required.', status_code=409)
-    unacknowledged = [part.part_number for part in parts if not part.acknowledged_at]
-    if unacknowledged:
-        raise ValidationError('All issued parts must be acknowledged before completion.', status_code=409)
-    if sum(part.uploaded_bytes for part in parts) != session.declared_bytes:
-        raise ValidationError('Acknowledged part bytes do not match declared_bytes.')
-    return [
-        {'PartNumber': part.part_number, 'ETag': part.etag}
-        for part in sorted(parts, key=lambda item: item.part_number)
-    ]
-
-
 @uploads_bp.route('/uploads/multipart/<session_id>/parts/<int:part_number>/ack', methods=['POST'])
 def acknowledge_multipart_part(session_id, part_number):
-    session = _require_active_session(session_id)
+    session = require_active_session(session_id, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     _require_int(part_number, 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
     data = request.get_json()
     if not data:
@@ -386,164 +264,39 @@ def acknowledge_multipart_part(session_id, part_number):
     if checksum is not None and (not isinstance(checksum, str) or not checksum.strip() or len(checksum) > 200):
         raise ValidationError('checksum must be a non-empty string of 200 characters or less.')
     checksum = checksum.strip() if checksum else None
-    part_model = _session_part_model(session)
-    part = part_model.query.filter_by(session_id=session.id, part_number=part_number).first()
-    if not part:
-        raise ValidationError('part_number has not been issued.', status_code=409)
-    if part.acknowledged_at:
-        if part.etag == etag.strip() and part.uploaded_bytes == uploaded_bytes and part.checksum == checksum:
-            return jsonify(_part_payload(part)), 200
-        raise ValidationError('Part acknowledgement conflicts with the stored result.', status_code=409)
-    part.etag = etag.strip()
-    part.uploaded_bytes = uploaded_bytes
-    part.checksum = checksum
-    part.acknowledged_at = _now()
-    db.session.commit()
-    return jsonify(_part_payload(part)), 200
-
-
-def _find_completed_item(session):
-    if _is_personal_session(session):
-        if session.personal_log_id:
-            return db.session.get(PersonalLog, session.personal_log_id)
-        return PersonalLog.query.filter_by(
-            member_id=session.member_id, filename=session.object_key.rsplit('/', 1)[1],
-        ).order_by(PersonalLog.id.desc()).first()
-    if session.media_id:
-        return db.session.get(Media, session.media_id)
-    return Media.query.filter_by(
-        song_id=session.song_id, rehearsal_id=session.rehearsal_id,
-        filename=session.object_key.rsplit('/', 1)[1],
-    ).order_by(Media.id.desc()).first()
-
-
-def _completion_payload(session, item):
-    key = 'personal_log' if _is_personal_session(session) else 'media'
-    return {'session_id': session.id, 'status': 'completed', key: item.to_dict() if item else None}
-
-
-def _mark_session_completed(session, item):
-    session.status = 'completed'
-    session.completion_started_at = None
-    session.completed_at = _now()
-    if _is_personal_session(session):
-        session.personal_log_id = item.id
-    else:
-        session.media_id = item.id
-    db.session.commit()
-
-
-def _session_payload(session):
-    target = (
-        {'kind': 'personal_log', 'member_id': session.member_id, 'title': session.title}
-        if _is_personal_session(session) else
-        {'kind': 'media', 'song_id': session.song_id, 'rehearsal_id': session.rehearsal_id}
-    )
-    item = _find_completed_item(session) if session.status == 'completed' else None
-    result_key = 'personal_log' if _is_personal_session(session) else 'media'
-    return {
-        'session_id': session.id,
-        'status': session.status,
-        'target': target,
-        'declared_bytes': session.declared_bytes,
-        'part_size': MULTIPART_PART_SIZE,
-        'expires_at': session.expires_at.isoformat() if session.expires_at else None,
-        'completed_at': session.completed_at.isoformat() if session.completed_at else None,
-        'result': {result_key: item.to_dict()} if item else None,
-        'parts': [_part_payload(part) for part in session.parts],
-    }
+    part = acknowledge_part(session, part_number, etag.strip(), uploaded_bytes, checksum)
+    return jsonify(part_payload(part)), 200
 
 
 @uploads_bp.route('/uploads/multipart/<session_id>', methods=['GET'])
 def get_multipart_session(session_id):
-    session = _get_session_or_404(session_id)
-    _require_session_capability(session)
-    return jsonify(_session_payload(session)), 200
+    session = get_session_or_404(session_id)
+    require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    return jsonify(session_payload(session)), 200
+
+
+def _create_multipart_item(session, actual_size):
+    spec = spec_for_session(session)
+    filename = session.object_key.rsplit('/', 1)[1]
+    if spec is PERSONAL_LOG_TARGET:
+        return _create_personal_log_from_object(
+            session.member_id, filename, session.original_filename, session.title, actual_size,
+        )
+    return _create_media_from_object(
+        session.song_id, session.rehearsal_id, filename, session.original_filename, actual_size,
+    )
 
 
 @uploads_bp.route('/uploads/multipart/<session_id>/complete', methods=['POST'])
 def complete_multipart_media(session_id):
-    session = _get_session_or_404(session_id)
-    _require_session_capability(session)
-    if session.status == 'completed':
-        return jsonify(_completion_payload(session, _find_completed_item(session))), 200
-    if session.status != 'initiated':
-        raise ValidationError(f'Upload session is {session.status}.', status_code=409)
-    parts = _acknowledged_completion_parts(session)
-    session_model = PersonalLogMultipartUploadSession if _is_personal_session(session) else MultipartUploadSession
-    claimed = session_model.query.filter_by(id=session.id, status='initiated').update({
-        'status': 'completing', 'completion_started_at': _now(),
-    })
-    db.session.commit()
-    if not claimed:
-        raise ValidationError('Upload session is already being completed.', status_code=409)
-    session = db.session.get(session_model, session.id)
-    try:
-        item = _find_completed_item(session)
-        if item:
-            _mark_session_completed(session, item)
-            return jsonify(_completion_payload(session, item)), 200
-        try:
-            storage.complete_multipart_upload(session.object_key, session.r2_upload_id, parts)
-        except Exception as complete_error:
-            # A timeout can happen after R2 accepted CompleteMultipartUpload.
-            # A matching final object is sufficient to finish the durable DB work.
-            try:
-                if _object_size(session.object_key) != session.declared_bytes:
-                    raise complete_error
-            except ValidationError:
-                raise complete_error
-        actual_size = _object_size(session.object_key)
-        if actual_size != session.declared_bytes:
-            raise ValidationError('Uploaded object size does not match declared_bytes.')
-        if _is_personal_session(session):
-            item = _create_personal_log_from_object(
-                session.member_id, session.object_key.rsplit('/', 1)[1], session.original_filename,
-                session.title, actual_size,
-            )
-        else:
-            item = _create_media_from_object(
-                session.song_id, session.rehearsal_id, session.object_key.rsplit('/', 1)[1],
-                session.original_filename, actual_size,
-            )
-        _mark_session_completed(session, item)
-    except ValidationError:
-        db.session.rollback()
-        session = db.session.get(session_model, session.id)
-        if session and session.status == 'completing':
-            session.status = 'failed'
-            session.completion_started_at = None
-            db.session.commit()
-        raise
-    except Exception:
-        db.session.rollback()
-        session = db.session.get(session_model, session.id)
-        if session and session.status == 'completing':
-            # Transport/R2 errors are retryable; persisted acknowledgements are
-            # retained and the next complete call claims the session again.
-            session.status = 'initiated'
-            session.completion_started_at = None
-            db.session.commit()
-        raise
-    return jsonify(_completion_payload(session, item)), 201
+    session = get_session_or_404(session_id)
+    require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    item, status = complete_session(session, _object_size, _create_multipart_item)
+    return jsonify(completion_payload(session, item)), status
 
 
 @uploads_bp.route('/uploads/multipart/<session_id>/abort', methods=['POST'])
 def abort_multipart_media(session_id):
-    session = _get_session_or_404(session_id)
-    _require_session_capability(session)
-    if session.status == 'aborted':
-        return jsonify({'session_id': session.id, 'status': 'aborted'}), 200
-    if session.status == 'completed':
-        return jsonify({'session_id': session.id, 'status': 'completed'}), 200
-    if session.status == 'expired':
-        return jsonify({'session_id': session.id, 'status': 'expired'}), 200
-    if session.status != 'initiated':
-        raise ValidationError(f'Upload session is {session.status}.', status_code=409)
-    try:
-        storage.abort_multipart_upload(session.object_key, session.r2_upload_id)
-    except Exception as exc:
-        raise ValidationError('Multipart upload could not be aborted.') from exc
-    session.status = 'aborted'
-    db.session.commit()
-    return jsonify({'session_id': session.id, 'status': 'aborted'}), 200
+    session = get_session_or_404(session_id)
+    require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    return jsonify({'session_id': session.id, 'status': abort_session(session)}), 200
