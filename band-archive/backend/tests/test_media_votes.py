@@ -8,7 +8,7 @@ import pytest
 from app import _run_migrations, create_app
 from config import TestingConfig
 from extensions import db
-from models import Media, MediaVote, SongVote
+from models import Media, MediaVote, Song, SongVote
 
 
 VOTER_A = '123e4567-e89b-12d3-a456-426614174000'
@@ -271,6 +271,40 @@ def test_media_vote_file_sqlite_concurrency_keeps_one_row_and_consistent_counts(
             media = db.session.get(Media, media_id)
             assert (media.upvote_count, media.downvote_count, media.vote_score) == (1, 0, 1)
             assert MediaVote.query.filter_by(media_id=media_id).count() == 1
+    finally:
+        with vote_app.app_context():
+            db.session.remove()
+            db.drop_all()
+
+
+def test_song_vote_file_sqlite_concurrency_keeps_one_row_and_consistent_counts(tmp_path):
+    db_path = tmp_path / 'song-vote-concurrency.db'
+
+    class FileTestingConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
+
+    vote_app = create_app(FileTestingConfig)
+    try:
+        seed_client = vote_app.test_client()
+        song_id = _song(seed_client, 'Concurrent song')
+        barrier = threading.Barrier(2)
+
+        def submit_vote():
+            with vote_app.test_client() as thread_client:
+                barrier.wait(timeout=5)
+                return thread_client.patch(
+                    f'/songs/{song_id}/vote',
+                    json={'vote': 1, 'expected_viewer_vote': 0},
+                    headers={'X-Voter-ID': VOTER_A},
+                ).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _index: submit_vote(), range(2)))
+        assert sorted(results) == [200, 409]
+        with vote_app.app_context():
+            song = db.session.get(Song, song_id)
+            assert (song.upvote_count, song.downvote_count, song.vote_score) == (1, 0, 1)
+            assert SongVote.query.filter_by(song_id=song_id).count() == 1
     finally:
         with vote_app.app_context():
             db.session.remove()

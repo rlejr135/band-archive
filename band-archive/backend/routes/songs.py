@@ -6,13 +6,13 @@ from werkzeug.utils import secure_filename
 
 from extensions import db
 from models import Song, SongVote, Media, MediaVote, Rehearsal
-from sqlalchemy import text
 from errors import ValidationError, NotFoundError
 from route_helpers import get_or_404
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
                               delete_original_and_audio, processing_status_response)
 from voting import voter_hash, media_viewer_votes, parse_vote_payload
+from vote_service import apply_vote
 from validators import (
     validate_status,
     validate_difficulty,
@@ -86,51 +86,18 @@ def vote_song(id):
     voter_hash_value = voter_hash(required=True)
     value, expected_value = parse_vote_payload(request.get_json(silent=True))
 
-    try:
-        # SQLite has no row-level SELECT FOR UPDATE.  BEGIN IMMEDIATE obtains a
-        # write reservation before reading the prior vote, preventing duplicate
-        # rows and stale cache-counter updates between simultaneous requests.
-        if db.engine.dialect.name == 'sqlite':
-            db.session.execute(text('BEGIN IMMEDIATE'))
-            song = db.session.get(Song, id)
-        else:
-            song = Song.query.filter_by(id=id).with_for_update().first()
-        if not song:
-            raise NotFoundError()
-
-        previous_vote = SongVote.query.filter_by(song_id=id, voter_hash=voter_hash_value).first()
-        previous_value = previous_vote.value if previous_vote else 0
-        if previous_value != expected_value:
-            # The caller read stale state in another tab.  Do not let a stale
-            # idempotent/switch/cancel request overwrite the current vote.
-            # Materialize while the row lock is still held: after rollback a
-            # competing request could switch the vote before lazy attributes
-            # or relationships are read for the conflict response.
-            conflict_song = song.to_dict()
-            db.session.rollback()
-            return jsonify({
-                'error': 'vote_conflict',
-                'code': 'vote_conflict',
-                'song': conflict_song,
-            }), 409
-        if previous_value != value:
-            if previous_vote and value == 0:
-                db.session.delete(previous_vote)
-            elif previous_vote:
-                previous_vote.value = value
-            else:
-                db.session.add(SongVote(song_id=id, voter_hash=voter_hash_value, value=value))
-
-            upvote_delta = int(value == 1) - int(previous_value == 1)
-            downvote_delta = int(value == -1) - int(previous_value == -1)
-            song.upvote_count = max(0, (song.upvote_count or 0) + upvote_delta)
-            song.downvote_count = max(0, (song.downvote_count or 0) + downvote_delta)
-            song.vote_score = song.upvote_count - song.downvote_count
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        raise
-    return jsonify(song.to_dict()), 200
+    result = apply_vote(
+        item_model=Song, vote_model=SongVote, foreign_key='song_id', item_id=id,
+        voter_hash_value=voter_hash_value, value=value, expected_value=expected_value,
+        conflict_snapshot=lambda song, _previous_value: song.to_dict(),
+    )
+    if result.is_conflict:
+        return jsonify({
+            'error': 'vote_conflict',
+            'code': 'vote_conflict',
+            'song': result.conflict_snapshot,
+        }), 409
+    return jsonify(result.item.to_dict()), 200
 
 
 @songs_bp.route('/media/<int:media_id>/vote', methods=['PATCH'])
@@ -138,46 +105,19 @@ def vote_media(media_id):
     voter_hash_value = voter_hash(required=True)
     value, expected_value = parse_vote_payload(request.get_json(silent=True))
 
-    try:
-        if db.engine.dialect.name == 'sqlite':
-            db.session.execute(text('BEGIN IMMEDIATE'))
-            media = db.session.get(Media, media_id)
-        else:
-            media = Media.query.filter_by(id=media_id).with_for_update().first()
-        if not media:
-            raise NotFoundError('Media not found')
-
-        previous_vote = MediaVote.query.filter_by(media_id=media_id, voter_hash=voter_hash_value).first()
-        previous_value = previous_vote.value if previous_vote else 0
-        if previous_value != expected_value:
-            # Materialize before rollback while the lock still protects all
-            # cache counters and the viewer's actual vote.
-            conflict_media = media.to_dict(viewer_vote=previous_value)
-            db.session.rollback()
-            return jsonify({
-                'error': 'vote_conflict',
-                'code': 'vote_conflict',
-                'media': conflict_media,
-            }), 409
-
-        if previous_value != value:
-            if previous_vote and value == 0:
-                db.session.delete(previous_vote)
-            elif previous_vote:
-                previous_vote.value = value
-            else:
-                db.session.add(MediaVote(media_id=media_id, voter_hash=voter_hash_value, value=value))
-
-            upvote_delta = int(value == 1) - int(previous_value == 1)
-            downvote_delta = int(value == -1) - int(previous_value == -1)
-            media.upvote_count = max(0, (media.upvote_count or 0) + upvote_delta)
-            media.downvote_count = max(0, (media.downvote_count or 0) + downvote_delta)
-            media.vote_score = media.upvote_count - media.downvote_count
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        raise
-    return jsonify(media.to_dict(viewer_vote=value)), 200
+    result = apply_vote(
+        item_model=Media, vote_model=MediaVote, foreign_key='media_id', item_id=media_id,
+        voter_hash_value=voter_hash_value, value=value, expected_value=expected_value,
+        not_found_message='Media not found',
+        conflict_snapshot=lambda media, previous_value: media.to_dict(viewer_vote=previous_value),
+    )
+    if result.is_conflict:
+        return jsonify({
+            'error': 'vote_conflict',
+            'code': 'vote_conflict',
+            'media': result.conflict_snapshot,
+        }), 409
+    return jsonify(result.item.to_dict(viewer_vote=value)), 200
 
 
 @songs_bp.route('/songs', methods=['POST'])
