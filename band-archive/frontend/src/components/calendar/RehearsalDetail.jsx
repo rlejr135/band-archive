@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
 import useMediaUpload from '../../hooks/useMediaUpload';
 import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
 import { getMediaIcon } from '../../services/mediaPresentation';
-import { getUploadStatusLabel, isUploadCancellable, isUploadTerminal } from '../../services/uploadPresentation';
+import { getUploadStatusLabel, isUploadCancellable, isUploadTerminal, isUploadInProgress, isUploadRetryable, isAudioProcessingRetryable } from '../../services/uploadPresentation';
+import { getRehearsalUploadPlan } from '../../services/rehearsalUploadQueue';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
 import './RehearsalDetail.css';
@@ -15,7 +16,8 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [pendingFiles, setPendingFiles] = useState([]);
   const [recoveredUploads, setRecoveredUploads] = useState({});
   const [uploading, setUploading] = useState(false);
-  const { upload, cancel, transport, nativePending } = useMediaUpload();
+  const uploadingRef = useRef(false);
+  const { upload, retryAudio, cancel, transport, nativePending } = useMediaUpload();
 
   const dateStr = date.toLocaleDateString('ko-KR', {
     year: 'numeric',
@@ -45,6 +47,12 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   useEffect(() => {
     const matching = nativePending.filter((item) => rehearsals.some((rehearsal) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })));
     setRecoveredUploads((previous) => mergeNativeUploadState(previous, matching));
+    setPendingFiles((previous) => previous.map((pending) => {
+      const nativeItem = matching.find((item) => String(item.id) === String(pending.file?.id));
+      return nativeItem
+        ? { ...pending, status: nativeItem.state, progress: nativeItem.progress || pending.progress, error: nativeItem.error || pending.error }
+        : pending;
+    }));
     rehearsals.forEach((rehearsal) => matching.filter((item) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })).forEach((item) => {
       if(item.state !== 'completed')return;
       consumeNativeUpload(transport,item.id,{ rehearsalId:rehearsal.id },async (terminal) => {
@@ -107,20 +115,52 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     setPendingFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleBatchUpload = async (rehearsalId) => {
+  const handleRetryAudio = async (index) => {
+    if (uploadingRef.current) return;
+    const item = pendingFiles[index];
+    if (!item?.mediaId) return;
+    uploadingRef.current = true;
+    setUploading(true);
+    try {
+      const media = await retryAudio(item.mediaId, (status, current) => {
+        setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
+          ? { ...file, status, error: current?.processing_error || current?.error || file.error }
+          : file));
+      });
+      setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
+        ? {
+          ...file,
+          status: media?.transcoding_status === 'failed' ? 'processing_failed' : 'completed',
+          progress: 100,
+          error: media?.processing_error || media?.error,
+        }
+        : file));
+    } catch (error) {
+      setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
+        ? { ...file, status: 'processing_failed', error: error.message || '음원 추출 재시도에 실패했습니다.' }
+        : file));
+    } finally {
+      uploadingRef.current = false;
+      setUploading(false);
+    }
+  };
+
+  const handleBatchUpload = async (rehearsalId, indexes) => {
+    if (uploadingRef.current) return;
+    const plan = getRehearsalUploadPlan({ items: pendingFiles, nativePending, rehearsalId, indexes });
+    if (plan.length === 0) return;
+    uploadingRef.current = true;
     setUploading(true);
     let hasError = false;
     try {
-      for (let i = 0; i < pendingFiles.length; i++) {
-        const item = pendingFiles[i];
-        if (item.status === 'done' || !item.songId) continue;
+      for (const { item, index: i } of plan) {
 
         setPendingFiles(prev => prev.map((f, idx) =>
           idx === i ? { ...f, status: 'uploading', progress: 0 } : f
         ));
 
         try {
-          await upload({ key: `rehearsal-${rehearsalId}-${i}-${item.file.id || item.file.lastModified}`, file: item.file, songId: item.songId, rehearsalId,
+          const media = await upload({ key: `rehearsal-${rehearsalId}-${i}-${item.file.id || item.file.lastModified}`, file: item.file, songId: item.songId, rehearsalId,
             onProgress: (loaded, total) => {
             setPendingFiles(prev => prev.map((f, idx) =>
               idx === i ? { ...f, status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } : f
@@ -128,13 +168,21 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
             },
             onStatus: (status, media) => setPendingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status, error: media?.error } : f)),
           });
+          const processingFailed = media?.transcoding_status === 'failed';
+          hasError ||= processingFailed;
           setPendingFiles(prev => prev.map((f, idx) =>
-            idx === i ? { ...f, status: 'completed', progress: 100 } : f
+            idx === i ? {
+              ...f,
+              mediaId: media?.id || f.mediaId,
+              status: processingFailed ? 'processing_failed' : (isUploadInProgress(media?.transcoding_status) ? 'processing' : 'completed'),
+              progress: 100,
+              error: processingFailed ? (media?.processing_error || media?.error || '음원 추출에 실패했습니다.') : undefined,
+            } : f
           ));
-        } catch {
+        } catch (error) {
           hasError = true;
           setPendingFiles(prev => prev.map((f, idx) =>
-            idx === i ? { ...f, status: 'error' } : f
+            idx === i ? { ...f, status: 'failed', error: error.message || '업로드에 실패했습니다.' } : f
           ));
         }
       }
@@ -147,6 +195,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         setPendingFiles([]);
       }
     } finally {
+      uploadingRef.current = false;
       setUploading(false);
     }
   };
@@ -278,6 +327,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       {item.error && <span className="rd-queue-error">{item.error}</span>}
                       {isUploadCancellable(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
                       {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
+                      {item.state === 'failed' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
                       {isUploadTerminal(item.state) && <button className="rd-queue-remove" onClick={() => deleteRecoveredUpload(item,r.id)}>삭제</button>}
                     </div>
                   ))}
@@ -319,6 +369,12 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                             {item.status === 'uploading' && <progress value={item.progress} max="100" className="rd-queue-progress" aria-label={`${item.file.name} 업로드 ${item.progress}%`} />}
                             <span className="rd-queue-status-text">{getUploadStatusLabel(item.status, item.progress)}</span>
                             {item.error && <span className="rd-queue-error">{item.error}</span>}
+                            {isUploadRetryable(item.status) && (
+                              <button className="rd-queue-remove" onClick={() => handleBatchUpload(r.id, [i])} disabled={uploading}>재시도</button>
+                            )}
+                            {isAudioProcessingRetryable(item.status) && (
+                              <button className="rd-queue-remove" onClick={() => handleRetryAudio(i)} disabled={uploading}>음원 추출 재시도</button>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -328,9 +384,9 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       <button
                         className="rd-upload-btn"
                         onClick={() => handleBatchUpload(r.id)}
-                        disabled={pendingFiles.length === 0 || pendingFiles.some(f => !f.songId && f.status === 'pending') || uploading}
+                        disabled={pendingFiles.length === 0 || pendingFiles.some(f => !f.songId && (f.status === 'pending' || isUploadRetryable(f.status))) || getRehearsalUploadPlan({ items: pendingFiles, nativePending, rehearsalId: r.id }).length === 0 || uploading}
                       >
-                        {uploading ? '업로드 중...' : `업로드 (${pendingFiles.filter(f => f.songId).length}개)`}
+                        {uploading ? '업로드 중...' : `업로드 (${getRehearsalUploadPlan({ items: pendingFiles, nativePending, rehearsalId: r.id }).length}개)`}
                       </button>
                       <button
                         className="rd-upload-cancel"

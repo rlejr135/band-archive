@@ -5,6 +5,7 @@ const STATUS_LABELS = {
   retry_wait: '재시도 대기',
   completing: '완료 처리 중',
   processing: '음원 추출 중',
+  processing_failed: '음원 추출 실패',
   completed: '완료',
   failed: '실패',
   cancelled: '취소됨',
@@ -23,8 +24,16 @@ export const getUploadStatusLabel = (status, progress = 0, variant = 'queue') =>
   return status === 'uploading' ? `업로드 ${progress}%` : STATUS_LABELS[status];
 };
 
-export const isUploadCancellable = (status) => (
+export const isUploadInProgress = (status) => (
   ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing'].includes(status)
 );
 
+export const isUploadCancellable = isUploadInProgress;
+
 export const isUploadTerminal = (status) => ['failed', 'cancelled'].includes(status);
+
+export const isUploadCompleted = (status) => status === 'completed';
+
+export const isUploadRetryable = (status) => status === 'failed';
+
+export const isAudioProcessingRetryable = (status) => status === 'processing_failed';
