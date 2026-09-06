@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { API_URL } from '../../services/api';
 import './LocationPicker.css';
 
 const NAVER_MAP_CLIENT_ID = import.meta.env.VITE_NAVER_MAP_CLIENT_ID;
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const DEFAULT_CENTER = { lat: 37.5665, lng: 126.978 }; // 서울 시청
 
 function loadNaverMapScript() {
