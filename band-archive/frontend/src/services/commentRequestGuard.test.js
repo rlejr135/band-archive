@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommentRequestGuard, getCommentTargetKey } from './commentRequestGuard.js';
+import { createCommentActionLock, createCommentMutationQueue, createCommentRequestGuard, getCommentTargetKey } from './commentRequestGuard.js';
+
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject; });
+  return { promise, resolve, reject };
+};
 
 test('comment target keys distinguish target switches and the latest read wins', () => {
   assert.notEqual(getCommentTargetKey('personal-logs', 'A'), getCommentTargetKey('personal-logs', 'B'));
@@ -67,4 +74,51 @@ test('stale cleanup cannot deactivate a newer StrictMode lifecycle', () => {
   const currentRead = guard.beginRead(secondLifecycle);
   assert.equal(guard.isActive(secondLifecycle), true);
   assert.equal(guard.isCurrentRead(currentRead), true);
+});
+
+test('slow M1 and fast M2 commit and refresh in enqueue order', async () => {
+  const queue = createCommentMutationQueue();
+  const firstGate = deferred();
+  const events = [];
+  const first = queue.enqueue(async () => { events.push('M1-start'); await firstGate.promise; events.push('M1-refresh'); });
+  const second = queue.enqueue(async () => { events.push('M2-start'); events.push('M2-refresh'); });
+  await Promise.resolve();
+  assert.deepEqual(events, ['M1-start']);
+  firstGate.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ['M1-start', 'M1-refresh', 'M2-start', 'M2-refresh']);
+});
+
+test('a failed M1 surfaces its error while M2 and a later refresh retry still run', async () => {
+  const queue = createCommentMutationQueue();
+  const events = [];
+  const first = queue.enqueue(async () => { events.push('M1'); throw new Error('M1 failed'); });
+  const second = queue.enqueue(async () => { events.push('M2'); throw new Error('refresh failed'); });
+  const retry = queue.enqueue(async () => { events.push('retry'); });
+  await assert.rejects(first, /M1 failed/);
+  await assert.rejects(second, /refresh failed/);
+  await retry;
+  assert.deepEqual(events, ['M1', 'M2', 'retry']);
+});
+
+test('a queued mutation is skipped after its target lifecycle is disposed', async () => {
+  const guard = createCommentRequestGuard(getCommentTargetKey('media', 11));
+  const lifecycle = guard.activate();
+  const queue = createCommentMutationQueue();
+  const firstGate = deferred();
+  const events = [];
+  const first = queue.enqueue(async () => { await firstGate.promise; if (guard.isActive(lifecycle)) events.push('M1'); });
+  const second = queue.enqueue(async () => { if (guard.isActive(lifecycle)) events.push('M2'); });
+  guard.dispose(lifecycle);
+  firstGate.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, []);
+});
+
+test('one comment item rejects a double submit until its pending action settles', () => {
+  const lock = createCommentActionLock();
+  assert.equal(lock.tryAcquire(), true);
+  assert.equal(lock.tryAcquire(), false);
+  lock.release();
+  assert.equal(lock.tryAcquire(), true);
 });

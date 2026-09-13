@@ -29,3 +29,30 @@ export const createCommentRequestGuard = (targetKey) => {
     },
   };
 };
+
+// Comment rows have their own forms, so several mutations can be requested at
+// once. Serializing them per mounted target avoids an M2 refresh observing the
+// server before a slower M1 commit. A rejected task never poisons the tail.
+export const createCommentMutationQueue = () => {
+  let tail = Promise.resolve();
+
+  return {
+    enqueue: (task) => {
+      const result = tail.then(task, task);
+      tail = result.catch(() => undefined);
+      return result;
+    },
+  };
+};
+
+export const createCommentActionLock = () => {
+  let locked = false;
+  return {
+    tryAcquire: () => {
+      if (locked) return false;
+      locked = true;
+      return true;
+    },
+    release: () => { locked = false; },
+  };
+};

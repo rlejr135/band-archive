@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createComment, createReply, deleteComment, fetchComments, updateComment } from '../../services/api';
-import { createCommentRequestGuard, getCommentTargetKey } from '../../services/commentRequestGuard';
+import { createCommentActionLock, createCommentMutationQueue, createCommentRequestGuard, getCommentTargetKey } from '../../services/commentRequestGuard';
 import { canAttachCommentTimestamp, formatCommentTimestamp, normalizeCommentTimestamp, seekCommentTimestamp } from '../../services/commentTimestamp';
 import './CommentSection.css';
 
@@ -43,10 +43,11 @@ const CommentItem = ({ comment, onReply, onUpdate, onDelete, onSeekTimestamp, ti
   const [deletePassword, setDeletePassword] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const actionLockRef = useRef(createCommentActionLock());
   const timeAgo = (dateStr) => { const minutes = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000); if (minutes < 1) return '방금 전'; if (minutes < 60) return `${minutes}분 전`; const hours = Math.floor(minutes / 60); if (hours < 24) return `${hours}시간 전`; const days = Math.floor(hours / 24); return days < 30 ? `${days}일 전` : new Date(dateStr).toLocaleDateString(); };
-  const handleReplySubmit = async (event) => { event.preventDefault(); if (!replyData.author.trim() || !replyData.password.trim() || !replyData.content.trim()) return; const lifecycle = getLifecycle(); setSubmitting(true); try { const applied = await onReply(comment.id, replyData, lifecycle); if (applied && isLifecycleActive(lifecycle)) { setReplyData(emptyDraft()); setShowReplyForm(false); } } catch { if (isLifecycleActive(lifecycle)) alert('답글 작성에 실패했습니다.'); } finally { if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
-  const handleEditSubmit = async (event) => { event.preventDefault(); if (!editPassword.trim() || !editContent.trim()) return; const lifecycle = getLifecycle(); setEditError(''); setSubmitting(true); try { const applied = await onUpdate(comment.id, { password: editPassword, content: editContent, timestampSeconds: editTimestampSeconds }, lifecycle); if (applied && isLifecycleActive(lifecycle)) { setEditing(false); setEditPassword(''); setEditTimestampSeconds(undefined); } } catch { if (isLifecycleActive(lifecycle)) setEditError('비밀번호가 틀렸습니다.'); } finally { if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
-  const handleDeleteSubmit = async (event) => { event.preventDefault(); if (!deletePassword.trim()) return; const lifecycle = getLifecycle(); setDeleteError(''); setSubmitting(true); try { const applied = await onDelete(comment.id, deletePassword, lifecycle); if (applied && isLifecycleActive(lifecycle)) { setShowDeleteConfirm(false); setDeletePassword(''); } } catch { if (isLifecycleActive(lifecycle)) setDeleteError('비밀번호가 틀렸습니다.'); } finally { if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
+  const handleReplySubmit = async (event) => { event.preventDefault(); if (!replyData.author.trim() || !replyData.password.trim() || !replyData.content.trim() || !actionLockRef.current.tryAcquire()) return; const lifecycle = getLifecycle(); setSubmitting(true); try { const applied = await onReply(comment.id, replyData, lifecycle); if (applied && isLifecycleActive(lifecycle)) { setReplyData(emptyDraft()); setShowReplyForm(false); } } catch { if (isLifecycleActive(lifecycle)) alert('답글 작성에 실패했습니다.'); } finally { actionLockRef.current.release(); if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
+  const handleEditSubmit = async (event) => { event.preventDefault(); if (!editPassword.trim() || !editContent.trim() || !actionLockRef.current.tryAcquire()) return; const lifecycle = getLifecycle(); setEditError(''); setSubmitting(true); try { const applied = await onUpdate(comment.id, { password: editPassword, content: editContent, timestampSeconds: editTimestampSeconds }, lifecycle); if (applied && isLifecycleActive(lifecycle)) { setEditing(false); setEditPassword(''); setEditTimestampSeconds(undefined); } } catch { if (isLifecycleActive(lifecycle)) setEditError('비밀번호가 틀렸습니다.'); } finally { actionLockRef.current.release(); if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
+  const handleDeleteSubmit = async (event) => { event.preventDefault(); if (!deletePassword.trim() || !actionLockRef.current.tryAcquire()) return; const lifecycle = getLifecycle(); setDeleteError(''); setSubmitting(true); try { const applied = await onDelete(comment.id, deletePassword, lifecycle); if (applied && isLifecycleActive(lifecycle)) { setShowDeleteConfirm(false); setDeletePassword(''); } } catch { if (isLifecycleActive(lifecycle)) setDeleteError('비밀번호가 틀렸습니다.'); } finally { actionLockRef.current.release(); if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
   const isTopLevel = canAttachCommentTimestamp({ timestampEnabled, depth });
   const editDisplayTimestamp = editTimestampSeconds === undefined ? comment.timestamp_seconds : editTimestampSeconds;
 
@@ -69,6 +70,8 @@ const CommentTargetSection = ({ targetType, targetId, timestampEnabled, playback
   const guardRef = useRef(createCommentRequestGuard(targetKey));
   const guard = guardRef.current;
   const lifecycleRef = useRef(null);
+  const mutationQueueRef = useRef(null);
+  if (!mutationQueueRef.current) mutationQueueRef.current = createCommentMutationQueue();
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -101,24 +104,31 @@ const CommentTargetSection = ({ targetType, targetId, timestampEnabled, playback
     };
   }, [guard, loadComments]);
   const runMutation = useCallback(async (operation, lifecycle = lifecycleRef.current) => {
-    const mutation = guard.beginMutation(lifecycle);
-    try {
-      await operation();
-      if (!guard.isCurrentMutation(mutation)) return false;
-      return loadComments({ lifecycle });
-    } catch (error) {
-      if (!guard.isCurrentMutation(mutation)) return false;
-      throw error;
-    }
+    return mutationQueueRef.current.enqueue(async () => {
+      if (!guard.isActive(lifecycle)) return false;
+      const mutation = guard.beginMutation(lifecycle);
+      try {
+        await operation();
+        if (!guard.isCurrentMutation(mutation)) return false;
+        await loadComments({ lifecycle });
+        // The server mutation succeeded even if its refresh needs the visible
+        // retry affordance below; close only this action's own form.
+        return guard.isActive(lifecycle);
+      } catch (error) {
+        if (!guard.isCurrentMutation(mutation)) return false;
+        throw error;
+      }
+    });
   }, [guard, loadComments]);
   const isLifecycleActive = useCallback((lifecycle) => guard.isActive(lifecycle), [guard]);
   const getLifecycle = useCallback(() => lifecycleRef.current, []);
-  const handleSubmit = async (event) => { event.preventDefault(); if (!formData.author.trim() || !formData.password.trim() || !formData.content.trim()) return; const lifecycle = getLifecycle(); setSubmitting(true); try { const applied = await runMutation(() => createComment(targetType, targetId, { ...formData, timestampSeconds }), lifecycle); if (applied && isLifecycleActive(lifecycle)) { setFormData((draft) => ({ ...draft, content: '' })); setTimestampSeconds(undefined); } } catch { if (isLifecycleActive(lifecycle)) alert('댓글 작성에 실패했습니다.'); } finally { if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
+  const submitLockRef = useRef(createCommentActionLock());
+  const handleSubmit = async (event) => { event.preventDefault(); if (!formData.author.trim() || !formData.password.trim() || !formData.content.trim() || !submitLockRef.current.tryAcquire()) return; const lifecycle = getLifecycle(); setSubmitting(true); try { const applied = await runMutation(() => createComment(targetType, targetId, { ...formData, timestampSeconds }), lifecycle); if (applied && isLifecycleActive(lifecycle)) { setFormData((draft) => ({ ...draft, content: '' })); setTimestampSeconds(undefined); } } catch { if (isLifecycleActive(lifecycle)) alert('댓글 작성에 실패했습니다.'); } finally { submitLockRef.current.release(); if (isLifecycleActive(lifecycle)) setSubmitting(false); } };
   const handleSeekTimestamp = (timestamp) => {
     const didSeek = seekCommentTimestamp(playbackControllerRef?.current, timestamp);
     setSeekStatus(didSeek ? `${formatCommentTimestamp(timestamp)} 위치로 이동했습니다.` : '이 댓글의 재생 위치를 사용할 수 없습니다.');
   };
-  return <div className="comment-section"><h5 className="comment-section-title">댓글 {comments.length > 0 && `(${comments.length})`}</h5>{loading ? <div className="comment-loading">로딩 중...</div> : loadError ? <p className="comment-error" role="alert">{loadError}</p> : comments.length > 0 ? <div className="comment-list">{comments.map((comment) => <CommentItem key={comment.id} comment={comment} onReply={(commentId, data, lifecycle) => runMutation(() => createReply(commentId, data), lifecycle)} onUpdate={(commentId, data, lifecycle) => runMutation(() => updateComment(commentId, data), lifecycle)} onDelete={(commentId, password, lifecycle) => runMutation(() => deleteComment(commentId, password), lifecycle)} onSeekTimestamp={timestampEnabled ? handleSeekTimestamp : null} timestampEnabled={timestampEnabled} playbackControllerRef={playbackControllerRef} getLifecycle={getLifecycle} isLifecycleActive={isLifecycleActive} />)}</div> : <p className="comment-empty">아직 댓글이 없습니다.</p>}
+  return <div className="comment-section"><h5 className="comment-section-title">댓글 {comments.length > 0 && `(${comments.length})`}</h5>{loading ? <div className="comment-loading">로딩 중...</div> : loadError ? <div><p className="comment-error" role="alert">{loadError}</p><button type="button" className="comment-action-btn" onClick={() => loadComments({ showLoading: true })}>댓글 다시 불러오기</button></div> : comments.length > 0 ? <div className="comment-list">{comments.map((comment) => <CommentItem key={comment.id} comment={comment} onReply={(commentId, data, lifecycle) => runMutation(() => createReply(commentId, data), lifecycle)} onUpdate={(commentId, data, lifecycle) => runMutation(() => updateComment(commentId, data), lifecycle)} onDelete={(commentId, password, lifecycle) => runMutation(() => deleteComment(commentId, password), lifecycle)} onSeekTimestamp={timestampEnabled ? handleSeekTimestamp : null} timestampEnabled={timestampEnabled} playbackControllerRef={playbackControllerRef} getLifecycle={getLifecycle} isLifecycleActive={isLifecycleActive} />)}</div> : <p className="comment-empty">아직 댓글이 없습니다.</p>}
     {seekStatus && <p className="comment-timestamp-status" role="status">{seekStatus}</p>}
     <form className="comment-form" onSubmit={handleSubmit}><div className="comment-form-row"><input type="text" value={formData.author} onChange={(event) => setFormData({ ...formData, author: event.target.value })} placeholder="이름" className="comment-author-input" /><input type="password" value={formData.password} onChange={(event) => setFormData({ ...formData, password: event.target.value })} placeholder="비밀번호" className="comment-password-input" /></div><textarea value={formData.content} onChange={(event) => setFormData({ ...formData, content: event.target.value })} placeholder="댓글을 입력하세요..." className="comment-textarea" />{timestampEnabled && <TimestampControl value={timestampSeconds} onChange={setTimestampSeconds} playbackControllerRef={playbackControllerRef} />}<button type="submit" disabled={submitting} className="comment-submit-btn">{submitting ? '등록 중...' : '댓글 등록'}</button></form>
   </div>;
