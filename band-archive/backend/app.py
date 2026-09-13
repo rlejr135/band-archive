@@ -1,4 +1,5 @@
 import os
+import time
 
 from flask import Flask
 from flask_cors import CORS
@@ -25,15 +26,40 @@ from config import DevelopmentConfig
 load_dotenv()
 
 
-def _run_migrations(app):
+_SQLITE_MIGRATION_LOCK_RETRIES = 8
+_SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 750
+
+
+def _add_sqlite_column(conn, table, column, definition):
+    """Add a known, additive column and tolerate a competing startup winning."""
+    import sqlite3
+
+    try:
+        conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+        return True
+    except sqlite3.OperationalError as error:
+        # A second process can have completed the same ALTER after its caller's
+        # PRAGMA check.  The desired postcondition is already satisfied.
+        if 'duplicate column name' in str(error).lower():
+            return False
+        raise
+
+
+def _run_migrations(app, _lock_attempt=0):
     """기존 테이블에 누락된 컬럼을 추가하는 스타트업 마이그레이션."""
     import sqlite3
     db_uri = app.config['SQLALCHEMY_DATABASE_URI']
     if not db_uri.startswith('sqlite'):
         return
     db_path = db_uri.replace('sqlite:///', '')
+    conn = None
     try:
-        conn = sqlite3.connect(db_path)
+        # Schema changes are transactional in SQLite.  Taking the write lock
+        # before inspecting columns prevents two app processes from both
+        # observing a missing column and then racing to ALTER it.
+        conn = sqlite3.connect(db_path, timeout=_SQLITE_MIGRATION_BUSY_TIMEOUT_MS / 1000)
+        conn.execute(f'PRAGMA busy_timeout = {_SQLITE_MIGRATION_BUSY_TIMEOUT_MS}')
+        conn.execute('BEGIN IMMEDIATE')
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         # Comments existed before playback-position links.  Keep this
         # independent of the media migrations because a partially restored
@@ -41,16 +67,16 @@ def _run_migrations(app):
         if 'comment' in tables:
             comment_columns = {row[1] for row in conn.execute('PRAGMA table_info(comment)').fetchall()}
             if 'timestamp_seconds' not in comment_columns:
-                conn.execute('ALTER TABLE comment ADD COLUMN timestamp_seconds FLOAT')
-                app.logger.info('Migration: added timestamp_seconds column to comment table')
+                if _add_sqlite_column(conn, 'comment', 'timestamp_seconds', 'FLOAT'):
+                    app.logger.info('Migration: added timestamp_seconds column to comment table')
         # Vote counters are cache fields.  They are rebuilt from SongVote on
         # every SQLite startup migration so legacy/null values cannot drift.
         if 'song' in tables:
             song_columns = {row[1] for row in conn.execute('PRAGMA table_info(song)').fetchall()}
             for column in ('upvote_count', 'downvote_count', 'vote_score'):
                 if column not in song_columns:
-                    conn.execute(f'ALTER TABLE song ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0')
-                    app.logger.info('Migration: added %s column to song table', column)
+                    if _add_sqlite_column(conn, 'song', column, 'INTEGER NOT NULL DEFAULT 0'):
+                        app.logger.info('Migration: added %s column to song table', column)
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS song_vote (
                     id INTEGER PRIMARY KEY,
@@ -80,19 +106,19 @@ def _run_migrations(app):
         # Check media table
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
         if 'original_filename' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN original_filename VARCHAR(200)')
-            app.logger.info('Migration: added original_filename column to media table')
+            if _add_sqlite_column(conn, 'media', 'original_filename', 'VARCHAR(200)'):
+                app.logger.info('Migration: added original_filename column to media table')
 
         # Each legacy table can be absent independently; do not let that stop
         # media's 720p schema migration on a partially restored database.
         if 'personal_log' in tables:
             columns = [row[1] for row in conn.execute('PRAGMA table_info(personal_log)').fetchall()]
             if 'original_filename' not in columns:
-                conn.execute('ALTER TABLE personal_log ADD COLUMN original_filename VARCHAR(200)')
-                app.logger.info('Migration: added original_filename column to personal_log table')
+                if _add_sqlite_column(conn, 'personal_log', 'original_filename', 'VARCHAR(200)'):
+                    app.logger.info('Migration: added original_filename column to personal_log table')
             if 'file_size' not in columns:
-                conn.execute('ALTER TABLE personal_log ADD COLUMN file_size INTEGER')
-                app.logger.info('Migration: added file_size column to personal_log table')
+                if _add_sqlite_column(conn, 'personal_log', 'file_size', 'INTEGER'):
+                    app.logger.info('Migration: added file_size column to personal_log table')
             personal_log_additions = {
                 'transcoding_status': "VARCHAR(20) DEFAULT 'not_required'", 'audio_filename': 'VARCHAR(200)',
                 'processing_error': 'VARCHAR(500)', 'processing_started_at': 'DATETIME',
@@ -101,50 +127,50 @@ def _run_migrations(app):
             }
             for column, definition in personal_log_additions.items():
                 if column not in columns:
-                    conn.execute(f'ALTER TABLE personal_log ADD COLUMN {column} {definition}')
-                    app.logger.info('Migration: added %s column to personal_log table', column)
+                    if _add_sqlite_column(conn, 'personal_log', column, definition):
+                        app.logger.info('Migration: added %s column to personal_log table', column)
             
         if 'rehearsal' in tables:
             columns = [row[1] for row in conn.execute('PRAGMA table_info(rehearsal)').fetchall()]
             if 'location' not in columns:
-                conn.execute('ALTER TABLE rehearsal ADD COLUMN location VARCHAR(200)')
-                app.logger.info('Migration: added location column to rehearsal table')
+                if _add_sqlite_column(conn, 'rehearsal', 'location', 'VARCHAR(200)'):
+                    app.logger.info('Migration: added location column to rehearsal table')
             if 'latitude' not in columns:
-                conn.execute('ALTER TABLE rehearsal ADD COLUMN latitude FLOAT')
-                app.logger.info('Migration: added latitude column to rehearsal table')
+                if _add_sqlite_column(conn, 'rehearsal', 'latitude', 'FLOAT'):
+                    app.logger.info('Migration: added latitude column to rehearsal table')
             if 'longitude' not in columns:
-                conn.execute('ALTER TABLE rehearsal ADD COLUMN longitude FLOAT')
-                app.logger.info('Migration: added longitude column to rehearsal table')
+                if _add_sqlite_column(conn, 'rehearsal', 'longitude', 'FLOAT'):
+                    app.logger.info('Migration: added longitude column to rehearsal table')
 
         # Check media table for rehearsal_id and is_featured
         columns = [row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()]
         if 'rehearsal_id' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN rehearsal_id INTEGER REFERENCES rehearsal(id)')
-            app.logger.info('Migration: added rehearsal_id column to media table')
+            if _add_sqlite_column(conn, 'media', 'rehearsal_id', 'INTEGER REFERENCES rehearsal(id)'):
+                app.logger.info('Migration: added rehearsal_id column to media table')
         if 'is_featured' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN is_featured BOOLEAN DEFAULT 0')
-            app.logger.info('Migration: added is_featured column to media table')
+            if _add_sqlite_column(conn, 'media', 'is_featured', 'BOOLEAN DEFAULT 0'):
+                app.logger.info('Migration: added is_featured column to media table')
         if 'transcoding_status' not in columns:
-            conn.execute("ALTER TABLE media ADD COLUMN transcoding_status VARCHAR(20) DEFAULT 'not_required'")
-            app.logger.info('Migration: added transcoding_status column to media table')
+            if _add_sqlite_column(conn, 'media', 'transcoding_status', "VARCHAR(20) DEFAULT 'not_required'"):
+                app.logger.info('Migration: added transcoding_status column to media table')
         if 'audio_filename' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN audio_filename VARCHAR(200)')
-            app.logger.info('Migration: added audio_filename column to media table')
+            if _add_sqlite_column(conn, 'media', 'audio_filename', 'VARCHAR(200)'):
+                app.logger.info('Migration: added audio_filename column to media table')
         if 'processing_error' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN processing_error VARCHAR(500)')
-            app.logger.info('Migration: added processing_error column to media table')
+            if _add_sqlite_column(conn, 'media', 'processing_error', 'VARCHAR(500)'):
+                app.logger.info('Migration: added processing_error column to media table')
         if 'processing_started_at' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN processing_started_at DATETIME')
-            app.logger.info('Migration: added processing_started_at column to media table')
+            if _add_sqlite_column(conn, 'media', 'processing_started_at', 'DATETIME'):
+                app.logger.info('Migration: added processing_started_at column to media table')
         if 'processing_completed_at' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN processing_completed_at DATETIME')
-            app.logger.info('Migration: added processing_completed_at column to media table')
+            if _add_sqlite_column(conn, 'media', 'processing_completed_at', 'DATETIME'):
+                app.logger.info('Migration: added processing_completed_at column to media table')
         if 'processing_attempts' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN processing_attempts INTEGER DEFAULT 0')
-            app.logger.info('Migration: added processing_attempts column to media table')
+            if _add_sqlite_column(conn, 'media', 'processing_attempts', 'INTEGER DEFAULT 0'):
+                app.logger.info('Migration: added processing_attempts column to media table')
         if 'processing_heartbeat_at' not in columns:
-            conn.execute('ALTER TABLE media ADD COLUMN processing_heartbeat_at DATETIME')
-            app.logger.info('Migration: added processing_heartbeat_at column to media table')
+            if _add_sqlite_column(conn, 'media', 'processing_heartbeat_at', 'DATETIME'):
+                app.logger.info('Migration: added processing_heartbeat_at column to media table')
         video_720_additions = {
             'video_720_filename': 'VARCHAR(300)',
             'video_720_source_etag': 'VARCHAR(200)',
@@ -155,8 +181,8 @@ def _run_migrations(app):
         columns = {row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()}
         for column, definition in video_720_additions.items():
             if column not in columns:
-                conn.execute(f'ALTER TABLE media ADD COLUMN {column} {definition}')
-                app.logger.info('Migration: added %s column to media table', column)
+                if _add_sqlite_column(conn, 'media', column, definition):
+                    app.logger.info('Migration: added %s column to media table', column)
 
         # SongVote is retained as legacy data because it cannot be mapped to a
         # specific Media without guessing.  New voting state is independent
@@ -164,8 +190,8 @@ def _run_migrations(app):
         media_columns = {row[1] for row in conn.execute('PRAGMA table_info(media)').fetchall()}
         for column in ('upvote_count', 'downvote_count', 'vote_score'):
             if column not in media_columns:
-                conn.execute(f'ALTER TABLE media ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0')
-                app.logger.info('Migration: added %s column to media table', column)
+                if _add_sqlite_column(conn, 'media', column, 'INTEGER NOT NULL DEFAULT 0'):
+                    app.logger.info('Migration: added %s column to media table', column)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS media_vote (
                 id INTEGER PRIMARY KEY,
@@ -232,16 +258,31 @@ def _run_migrations(app):
             columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})').fetchall()}
             for column, definition in additions.items():
                 if column not in columns:
-                    conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
-                    app.logger.info('Migration: added %s column to %s table', column, table)
+                    if _add_sqlite_column(conn, table, column, definition):
+                        app.logger.info('Migration: added %s column to %s table', column, table)
 
         # Drop removed tables
         conn.execute('DROP TABLE IF EXISTS practice_log')
 
         conn.commit()
         conn.close()
-    except Exception as e:
-        app.logger.warning(f'Startup migration failed: {e}')
+    except sqlite3.OperationalError as error:
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+        if 'locked' in str(error).lower() and _lock_attempt < _SQLITE_MIGRATION_LOCK_RETRIES:
+            # Keep startup bounded while allowing an overlapping process to
+            # finish its migration transaction.  Each retry rechecks schema.
+            time.sleep(0.05 * (_lock_attempt + 1))
+            return _run_migrations(app, _lock_attempt + 1)
+        app.logger.exception('Startup migration failed')
+        raise RuntimeError('SQLite startup migration failed') from error
+    except Exception as error:
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+        app.logger.exception('Startup migration failed')
+        raise RuntimeError('SQLite startup migration failed') from error
 
 
 def create_app(config_class=None, start_worker=None):

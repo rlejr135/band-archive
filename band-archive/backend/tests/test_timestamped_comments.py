@@ -1,9 +1,11 @@
 import sqlite3
+import threading
+import time
 
 import pytest
 from flask import Flask
 
-from app import _run_migrations
+from app import _add_sqlite_column, _run_migrations
 from extensions import db
 from models import Comment, Media, Member, PersonalLog
 
@@ -48,6 +50,28 @@ def _payload(**overrides):
     payload = {'author': 'Band member', 'password': 'secret', 'content': 'Check this part'}
     payload.update(overrides)
     return payload
+
+
+def _legacy_comment_and_media_database(path):
+    connection = sqlite3.connect(path)
+    connection.execute('''
+        CREATE TABLE comment (
+            id INTEGER PRIMARY KEY,
+            author VARCHAR(50) NOT NULL,
+            password_hash VARCHAR(200) NOT NULL,
+            content TEXT NOT NULL
+        )
+    ''')
+    connection.execute('''
+        CREATE TABLE media (
+            id INTEGER PRIMARY KEY,
+            song_id INTEGER,
+            filename VARCHAR(200),
+            file_type VARCHAR(20)
+        )
+    ''')
+    connection.commit()
+    connection.close()
 
 
 def test_media_comment_timestamps_are_created_returned_and_legacy_comments_are_null(client, app):
@@ -210,3 +234,72 @@ def test_comment_timestamp_migration_is_additive_and_idempotent(tmp_path):
     connection.close()
     assert 'timestamp_seconds' in columns
     assert row == (None,)
+
+
+def test_startup_migrations_continue_after_comment_and_are_idempotent(tmp_path):
+    db_path = tmp_path / 'legacy-comment-and-media.db'
+    _legacy_comment_and_media_database(db_path)
+    migration_app = Flask(__name__)
+    migration_app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+
+    _run_migrations(migration_app)
+    _run_migrations(migration_app)
+
+    connection = sqlite3.connect(db_path)
+    comment_columns = {row[1] for row in connection.execute('PRAGMA table_info(comment)')}
+    media_columns = {row[1] for row in connection.execute('PRAGMA table_info(media)')}
+    connection.close()
+    assert 'timestamp_seconds' in comment_columns
+    assert {'video_720_filename', 'original_pruned_at'} <= media_columns
+
+
+def test_concurrent_startup_migrations_serialize_and_finish(tmp_path):
+    db_path = tmp_path / 'concurrent-startup.db'
+    _legacy_comment_and_media_database(db_path)
+    barrier = threading.Barrier(3)
+    failures = []
+
+    def migrate_at_startup():
+        migration_app = Flask(__name__)
+        migration_app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+        barrier.wait(timeout=5)
+        try:
+            _run_migrations(migration_app)
+        except Exception as error:  # pragma: no cover - reported below
+            failures.append(error)
+
+    # Hold SQLite's writer lock while both independent startup paths begin.
+    # Releasing it makes them contend for the migration transaction, rather
+    # than relying on timing of the individual PRAGMA/ALTER statements.
+    blocker = sqlite3.connect(db_path)
+    blocker.execute('BEGIN IMMEDIATE')
+    workers = [threading.Thread(target=migrate_at_startup) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait(timeout=5)
+    # Exceed the migration connection's busy timeout so both startup paths
+    # exercise the bounded lock retry before one serially acquires the lock.
+    time.sleep(1)
+    blocker.commit()
+    blocker.close()
+    for worker in workers:
+        worker.join(timeout=10)
+
+    assert not failures
+    assert not any(worker.is_alive() for worker in workers)
+    connection = sqlite3.connect(db_path)
+    comment_columns = {row[1] for row in connection.execute('PRAGMA table_info(comment)')}
+    media_columns = {row[1] for row in connection.execute('PRAGMA table_info(media)')}
+    connection.close()
+    assert 'timestamp_seconds' in comment_columns
+    assert {'video_720_filename', 'original_pruned_at'} <= media_columns
+
+
+def test_duplicate_column_error_is_an_already_migrated_success():
+    class DuplicateColumnConnection:
+        def execute(self, _statement):
+            raise sqlite3.OperationalError('duplicate column name: timestamp_seconds')
+
+    assert not _add_sqlite_column(
+        DuplicateColumnConnection(), 'comment', 'timestamp_seconds', 'FLOAT',
+    )
