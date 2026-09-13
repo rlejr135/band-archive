@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clampPracticeMarkers, clampPracticeTime, formatPracticeTime, getPracticeLoopDecision, normalizePracticeRate, validatePracticeLoop } from './practicePlayback.js';
+import { captureModeTransition, clampPracticeMarkers, clampPracticeTime, consumeModeTransition, createPracticePlaybackState, formatPracticeTime, getPracticeLoopDecision, normalizePracticeRate, validatePracticeLoop } from './practicePlayback.js';
 
 test('practice time formatting and seeks clamp to a known duration', () => {
   assert.equal(formatPracticeTime(65.9), '1:05');
@@ -22,4 +22,14 @@ test('loop decision seeks at B and duration changes clamp markers', () => {
   assert.deepEqual(clampPracticeMarkers({ start: 20, end: 30 }, 22), { start: 20, end: 22 });
   assert.equal(normalizePracticeRate(1.25), 1.25);
   assert.equal(normalizePracticeRate(2), 1);
+});
+
+test('new media receives a clean practice state and a rapid mode toggle preserves the first snapshot', () => {
+  assert.deepEqual(createPracticePlaybackState().markers, { start: null, end: null });
+  const video = { time: 12, playing: true, volume: 0.6, rate: 1.25, markers: { start: 10, end: 16 }, loopEnabled: true };
+  const first = captureModeTransition(null, video, 'media-1');
+  const rapidReturn = captureModeTransition(first, { ...video, time: 0, playing: false, rate: 1 }, 'media-1');
+  assert.strictEqual(rapidReturn, first);
+  assert.equal(consumeModeTransition(rapidReturn, 'media-1').time, 12);
+  assert.equal(consumeModeTransition(rapidReturn, 'media-2'), null);
 });

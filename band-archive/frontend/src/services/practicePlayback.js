@@ -38,3 +38,24 @@ export const getPracticeLoopDecision = ({ time, start, end, duration, enabled })
 export const normalizePracticeRate = (rate) => (
   PRACTICE_PLAYBACK_RATES.includes(Number(rate)) ? Number(rate) : 1
 );
+
+export const createPracticePlaybackState = () => ({
+  currentTime: 0,
+  duration: Number.NaN,
+  playbackRate: 1,
+  markers: { start: null, end: null },
+  loopEnabled: false,
+  isRadioMode: false,
+  isPlaying: false,
+});
+
+// A rapid video → radio → video toggle can expose a not-yet-loaded element
+// with time 0. Keep the first valid source snapshot until final metadata is
+// ready instead of replacing it with that temporary element state.
+export const captureModeTransition = (existing, snapshot, sourceKey) => (
+  existing?.sourceKey === sourceKey ? existing : { ...snapshot, sourceKey }
+);
+
+export const consumeModeTransition = (transition, sourceKey) => (
+  transition?.sourceKey === sourceKey ? transition : null
+);
