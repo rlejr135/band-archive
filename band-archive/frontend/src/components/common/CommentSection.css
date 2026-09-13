@@ -55,6 +55,23 @@
   color: var(--text-secondary);
 }
 
+.comment-timestamp-badge {
+  min-height: 28px;
+  border: 1px solid var(--primary-color);
+  border-radius: 14px;
+  padding: 3px 8px;
+  background: rgba(255, 211, 42, 0.12);
+  color: var(--primary-color);
+  font-size: .76rem;
+  cursor: pointer;
+}
+
+.comment-timestamp-badge:disabled { opacity: .55; cursor: not-allowed; }
+.comment-timestamp-control { display: grid; gap: 6px; color: var(--text-secondary); font-size: .82rem; }
+.comment-timestamp-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.comment-timestamp-actions button { min-height: 36px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-primary); }
+.comment-timestamp-status { margin: 0; color: var(--text-secondary); font-size: .8rem; }
+
 .comment-content {
   margin: 0;
   font-size: 0.9rem;
@@ -229,4 +246,6 @@
   .comment-reply {
     margin-left: 12px;
   }
+
+  .comment-timestamp-badge { min-height: 36px; }
 }

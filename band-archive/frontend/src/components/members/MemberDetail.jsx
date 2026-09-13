@@ -2,8 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getMember, fetchMemberLogs, deletePersonalLog, deleteMember } from '../../services/memberApi';
 import FileUpload from '../common/FileUpload';
-import MediaPlayer from '../common/MediaPlayer';
-import CommentSection from '../common/CommentSection';
+import MediaDiscussion from '../common/MediaDiscussion';
 import useAsyncData from '../../hooks/useAsyncData';
 import { getMediaIcon } from '../../services/mediaPresentation';
 import './MemberDetail.css';
@@ -90,7 +89,7 @@ const MemberDetail = () => {
         {playingLog && (
           <div className="inline-player-wrapper">
             <button className="close-player-btn" onClick={() => setPlayingLog(null)}>&times;</button>
-            <MediaPlayer
+            <MediaDiscussion
               file={{
                 id: playingLog.id,
                 url: playingLog.url,
@@ -104,8 +103,9 @@ const MemberDetail = () => {
               }}
               mediaKind="personal_log"
               onMediaUpdate={handleLogUpdate}
+              targetType="personal-logs"
+              targetId={playingLog.id}
             />
-            <CommentSection targetType="personal-logs" targetId={playingLog.id} />
           </div>
         )}
 

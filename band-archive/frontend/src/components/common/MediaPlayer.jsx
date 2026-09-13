@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
 import { getMediaType } from '../../services/mediaPresentation';
+import { getCommentTimestampSeekPlan } from '../../services/commentTimestamp';
 import { captureModeTransition, clampPracticeMarkers, clampPracticeTime, consumeModeTransition, createPracticePlaybackState, formatPracticeTime, getPracticeLoopDecision, normalizePracticeRate, PRACTICE_PLAYBACK_RATES, validatePracticeLoop } from '../../services/practicePlayback';
 import './MediaPlayer.css';
 
-const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
+const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlaybackController }) => {
   const sourceKey = file?.id || file?.url || `${file?.name || ''}:${file?.audio_url || ''}`;
   const initialPracticeState = createPracticePlaybackState();
   const [isPlaying, setIsPlaying] = useState(initialPracticeState.isPlaying);
@@ -17,6 +18,7 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
   const [practiceStatus, setPracticeStatus] = useState('');
   const mediaRef = useRef(null);
   const transitionRef = useRef(null);
+  const pendingSeekRef = useRef(null);
   const markersRef = useRef(markers);
   const loopRef = useRef(loopEnabled);
   const durationRef = useRef(duration);
@@ -30,6 +32,29 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
   useEffect(() => { loopRef.current = loopEnabled; }, [loopEnabled]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
   useEffect(() => { rateRef.current = playbackRate; }, [playbackRate]);
+  useEffect(() => {
+    if (!onPlaybackController) return undefined;
+    onPlaybackController({
+      getCurrentTime: () => {
+        const time = mediaRef.current?.currentTime;
+        return Number.isFinite(time) && time >= 0 ? time : null;
+      },
+      seekTo: (value) => {
+        const media = mediaRef.current;
+        const mediaDuration = media?.duration;
+        const plan = getCommentTimestampSeekPlan(value, mediaDuration);
+        if (!plan.accepted) return false;
+        if (plan.pending || !media) {
+          pendingSeekRef.current = plan.time;
+          return true;
+        }
+        media.currentTime = plan.time;
+        setCurrentTime(plan.time);
+        return true;
+      },
+    });
+    return () => onPlaybackController(null);
+  }, [onPlaybackController]);
 
   const watchable = watchMedia.id && file?.type === 'video' && ['queued', 'pending', 'processing'].includes(watchMedia.transcoding_status);
   useEffect(() => {
@@ -71,7 +96,16 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
     const media = mediaRef.current;
     if (!media) return;
     syncDuration();
-    if (!restore) return;
+    if (!restore) {
+      const pending = pendingSeekRef.current;
+      if (pending !== null && Number.isFinite(durationRef.current)) {
+        const nextTime = clampPracticeTime(pending, durationRef.current);
+        media.currentTime = nextTime;
+        setCurrentTime(nextTime);
+        pendingSeekRef.current = null;
+      }
+      return;
+    }
     const nextDuration = durationRef.current;
     const nextTime = clampPracticeTime(restore.time, nextDuration);
     const nextRate = normalizePracticeRate(restore.rate);
@@ -85,6 +119,12 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media' }) => {
     loopRef.current = restore.loopEnabled && validation.valid; setLoopEnabled(loopRef.current);
     if (restore.loopEnabled && !validation.valid) setPracticeStatus(validation.reason);
     transitionRef.current = null;
+    if (pendingSeekRef.current !== null && Number.isFinite(nextDuration)) {
+      const pendingTime = clampPracticeTime(pendingSeekRef.current, nextDuration);
+      media.currentTime = pendingTime;
+      setCurrentTime(pendingTime);
+      pendingSeekRef.current = null;
+    }
     if (restore.playing) media.play().then(() => setIsPlaying(true)).catch(() => { setIsPlaying(false); setPracticeStatus('브라우저가 자동 재생을 허용하지 않았습니다. 재생 버튼을 눌러주세요.'); });
   };
 

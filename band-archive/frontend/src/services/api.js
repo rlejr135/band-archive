@@ -1,4 +1,5 @@
 import { getVoterId } from './voterIdentity.js';
+import { withCommentTimestamp } from './commentTimestamp.js';
 
 export const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000';
 
@@ -145,9 +146,9 @@ export const fetchComments = (targetType, targetId) => requestJson(
 );
 
 // Create a comment on a target
-export const createComment = (targetType, targetId, { author, password, content }) => requestJson(
+export const createComment = (targetType, targetId, { author, password, content, timestampSeconds = undefined }) => requestJson(
   `/${targetType}/${targetId}/comments`,
-  jsonRequest('POST', { author, password, content }),
+  jsonRequest('POST', withCommentTimestamp({ author, password, content }, timestampSeconds)),
   'Failed to create comment',
 );
 
@@ -159,9 +160,9 @@ export const createReply = (commentId, { author, password, content }) => request
 );
 
 // Update a comment (password required)
-export const updateComment = (commentId, { password, content }) => requestJson(
+export const updateComment = (commentId, { password, content, timestampSeconds = undefined }) => requestJson(
   `/comments/${commentId}`,
-  jsonRequest('PUT', { password, content }),
+  jsonRequest('PUT', withCommentTimestamp({ password, content }, timestampSeconds)),
   'Failed to update comment',
 );
 

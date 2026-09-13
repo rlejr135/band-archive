@@ -5,8 +5,7 @@ import { fetchRehearsals } from '../../services/rehearsalApi';
 import './SongDetail.css';
 import './SongMedia.css';
 import FileUpload from '../common/FileUpload';
-import MediaPlayer from '../common/MediaPlayer';
-import CommentSection from '../common/CommentSection';
+import MediaDiscussion from '../common/MediaDiscussion';
 import { sortMediaByScore } from '../../services/mediaVoting.js';
 import { getMediaIcon, getMediaType } from '../../services/mediaPresentation.js';
 import { getYoutubeId } from '../../services/youtube.js';
@@ -388,7 +387,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                       <div className="media-body-actions">
                         <button className="media-delete-btn" onClick={() => handleDeleteMedia(media.id)}>🗑️ 삭제</button>
                       </div>
-                      <MediaPlayer file={{
+                      <MediaDiscussion file={{
                         id: media.id,
                         name: getDisplayName(media.filename),
                         url: media.url,
@@ -397,8 +396,7 @@ const SongDetail = ({ song, onEdit, onBack }) => {
                         audio_filename: media.audio_filename,
                         transcoding_status: media.transcoding_status,
                         transcoding_error: media.transcoding_error || media.error,
-                      }} onMediaUpdate={() => refreshSong(song.id)} />
-                      <CommentSection targetType="media" targetId={media.id} />
+                      }} onMediaUpdate={() => refreshSong(song.id)} targetType="media" targetId={media.id} />
                     </div>
                   )}
                 </div>

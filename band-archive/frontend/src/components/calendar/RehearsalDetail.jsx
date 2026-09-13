@@ -5,8 +5,7 @@ import { mergeNativeUploadState, nativeTargetMatches } from '../../services/nati
 import { getMediaIcon } from '../../services/mediaPresentation';
 import { getUploadStatusLabel, isUploadCancellable, isUploadInProgress, isUploadRetryable, isAudioProcessingRetryable } from '../../services/uploadPresentation';
 import { getRehearsalUploadPlan } from '../../services/rehearsalUploadQueue';
-import MediaPlayer from '../common/MediaPlayer';
-import CommentSection from '../common/CommentSection';
+import MediaDiscussion from '../common/MediaDiscussion';
 import './RehearsalDetail.css';
 
 const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
@@ -290,7 +289,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                         </div>
                         {isExpanded && (
                           <div className="rd-media-item-body">
-                            <MediaPlayer file={{
+                            <MediaDiscussion file={{
                               id: m.id,
                               name: m.filename,
                               url: m.url,
@@ -302,8 +301,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                             }} onMediaUpdate={async () => {
                               const updated = await fetchRehearsalMedia(r.id);
                               setMediaMap((prev) => ({ ...prev, [r.id]: updated }));
-                            }} />
-                            <CommentSection targetType="media" targetId={m.id} />
+                            }} targetType="media" targetId={m.id} />
                           </div>
                         )}
                       </div>
