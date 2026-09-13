@@ -15,3 +15,11 @@ test('cancelling while multipart initiate is in flight aborts the new server ses
   assert.deepEqual(retained, { sessionId: 'session-1', capabilityToken: 'token-1' });
   assert.deepEqual(aborted, retained);
 });
+
+test('multipart cleanup failure preserves the original cancellation result', async () => {
+  await assert.rejects(initiateMultipartSession({
+    initiate: async () => ({ sessionId: 'session-2', capabilityToken: 'token-2' }),
+    isCancelled: () => true,
+    abort: async () => { throw new Error('cleanup unavailable'); },
+  }), { name: 'AbortError' });
+});

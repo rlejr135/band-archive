@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createUploadJobRegistry, createUploadTaskId } from './uploadJobRegistry.js';
+import { createUploadJobRegistry, createUploadTaskId, findUploadTaskByNativeId, resolveNativeUploadCancellation } from './uploadJobRegistry.js';
 
 test('a job source is registered before its provider-owned batch start', async () => {
   const registry = createUploadJobRegistry();
@@ -62,4 +62,13 @@ test('native task identity includes its target and source ownership rejects conc
   assert.equal(registry.claimNativeSource('picked-file', second), first);
   registry.releaseNativeSource('picked-file', first);
   assert.equal(registry.claimNativeSource('picked-file', second), second);
+});
+
+test('a raw route native id resolves its qualified task without creating a ghost task', () => {
+  const qualified = 'picked-file:media:song:4:rehearsal:9';
+  const tasks = [{ id: qualified, nativeId: 'picked-file', target: { songId: 4, rehearsalId: 9 } }];
+  assert.equal(findUploadTaskByNativeId(tasks, 'picked-file', { rehearsalId: 9 })?.id, qualified);
+  assert.equal(findUploadTaskByNativeId(tasks, 'other-file', { rehearsalId: 9 }), null);
+  assert.deepEqual(resolveNativeUploadCancellation(tasks, 'picked-file', { rehearsalId: 9 }), { taskId: qualified, nativeId: 'picked-file' });
+  assert.equal(resolveNativeUploadCancellation(tasks, 'other-file', { rehearsalId: 9 }), null);
 });

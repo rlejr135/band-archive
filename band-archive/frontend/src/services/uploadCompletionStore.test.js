@@ -23,3 +23,16 @@ test('completion targets isolate members and distinguish rehearsal destinations'
   assert.equal(uploadTargetsMatch({ memberId: 2 }, { memberId: 2 }), true);
   assert.equal(uploadTargetsMatch({ memberId: 2 }, { songId: 2 }), false);
 });
+
+test('completion retention keeps only the newest event per target and caps target snapshots', () => {
+  const store = createUploadCompletionStore();
+  store.publish({ target: { songId: 1 }, media: { id: 1 } });
+  store.publish({ target: { songId: 1 }, media: { id: 2 } });
+  const latest = [];
+  store.subscribe({ songId: 1 }, (event) => latest.push(event));
+  assert.equal(latest[0].prior.length, 1);
+  assert.equal(latest[0].prior[0].media.id, 2);
+  for (let songId = 2; songId <= 101; songId += 1) store.publish({ target: { songId }, media: { id: songId } });
+  assert.equal(store.versionFor({ songId: 1 }), 0);
+  assert.ok(store.versionFor({ songId: 101 }) > 0);
+});

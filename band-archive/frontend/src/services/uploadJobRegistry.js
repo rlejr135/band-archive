@@ -1,4 +1,5 @@
 const idPart = (value) => value === undefined || value === null || value === '' ? 'none' : String(value);
+const sameId = (left, right) => left !== undefined && left !== null && right !== undefined && right !== null && String(left) === String(right);
 
 export const uploadTargetKey = (target = {}) => (
   target.memberId !== undefined && target.memberId !== null && target.memberId !== ''
@@ -11,6 +12,25 @@ export const uploadTargetKey = (target = {}) => (
 export const createUploadTaskId = ({ key, file, target }) => file?.id
   ? `${file.id}:${uploadTargetKey(target)}`
   : key;
+
+export const uploadTaskMatchesTarget = (taskTarget = {}, target = {}) => {
+  if (target.memberId !== undefined && target.memberId !== null) return sameId(taskTarget.memberId, target.memberId);
+  if (taskTarget.memberId !== undefined && taskTarget.memberId !== null) return false;
+  if (target.songId !== undefined && target.songId !== null && !sameId(taskTarget.songId, target.songId)) return false;
+  if (target.rehearsalId !== undefined && target.rehearsalId !== null && !sameId(taskTarget.rehearsalId, target.rehearsalId)) return false;
+  return target.songId !== undefined || target.rehearsalId !== undefined;
+};
+
+// Route queue rows retain the native plugin's raw id. Resolve it back to the
+// qualified global task id before mutating provider state.
+export const findUploadTaskByNativeId = (tasks, nativeId, target) => (
+  tasks.find((task) => sameId(task.nativeId, nativeId) && uploadTaskMatchesTarget(task.target, target)) || null
+);
+
+export const resolveNativeUploadCancellation = (tasks, nativeId, target) => {
+  const task = findUploadTaskByNativeId(tasks, nativeId, target);
+  return task ? { taskId: task.id, nativeId: task.nativeId } : null;
+};
 
 /** In-memory browser-file ownership for the app-lifetime upload controller. */
 export const createUploadJobRegistry = () => {

@@ -18,7 +18,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [uploading, setUploading] = useState(false);
   const uploadingRef = useRef(false);
   const mountedRef = useRef(true);
-  const { uploadBatch, retryAudio, retryTask, cancel, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
+  const { uploadBatch, retryAudio, retryTask, cancelByNativeId, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
 
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
@@ -320,7 +320,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       {item.state === 'uploading' && <progress value={item.progress || 0} max="100" className="rd-queue-progress" aria-label={`${item.name || '파일'} 업로드 ${item.progress || 0}%`} />}
                       <span className="rd-queue-status-text">{getUploadStatusLabel(item.state, item.progress || 0)}</span>
                       {item.error && <span className="rd-queue-error">{item.error}</span>}
-                      {isUploadCancellable(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
+                      {isUploadCancellable(item.state) && <button className="rd-queue-remove" onClick={() => cancelByNativeId(item.id, { rehearsalId: r.id })}>취소</button>}
                       {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
                       {item.state === 'failed' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
                     </div>

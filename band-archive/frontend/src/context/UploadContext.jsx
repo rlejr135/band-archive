@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useEffect, useMemo, useRef, useState
 import { useUploadController } from '../hooks/useMediaUpload';
 import { consumeNativeUpload, nativeTargetMatches, nativeUploadResult, syncNativeProcessingStatus } from '../services/nativeUploadQueue';
 import { isUploadInProgress } from '../services/uploadPresentation';
-import { createUploadJobRegistry, createUploadTaskId } from '../services/uploadJobRegistry';
+import { createUploadJobRegistry, createUploadTaskId, resolveNativeUploadCancellation } from '../services/uploadJobRegistry';
 import { createUploadCompletionStore } from '../services/uploadCompletionStore';
 import { getAudioRetryResult } from '../services/uploadRetryResult';
 import { retainUploadTaskHistory } from '../services/uploadTaskRetention';
@@ -182,6 +182,12 @@ export const UploadProvider = ({ children }) => {
     controllerCancel(id, task?.nativeId || id);
     updateTask(id, { status: 'cancelled' });
   }, [controllerCancel, tasks, updateTask]);
+  const cancelByNativeId = useCallback((nativeId, target) => {
+    const resolved = resolveNativeUploadCancellation(tasks, nativeId, target);
+    if (!resolved) return false;
+    cancel(resolved.taskId);
+    return true;
+  }, [cancel, tasks]);
   const clearHistory = useCallback(() => setTasks((previous) => {
     previous.filter((item) => !isUploadInProgress(item.status)).forEach((item) => {
       registry.current.releaseSource(item.id);
@@ -230,6 +236,6 @@ export const UploadProvider = ({ children }) => {
 
   const subscribeMediaCompletion = useCallback((target, listener) => completions.current.subscribe(target, listener), []);
   const completionVersion = useCallback((target) => completions.current.versionFor(target), []);
-  const value = useMemo(() => ({ ...controller, upload, uploadBatch, cancel, retryTask, clearHistory, tasks, subscribeMediaCompletion, completionVersion }), [cancel, clearHistory, completionVersion, controller, retryTask, subscribeMediaCompletion, tasks, upload, uploadBatch]);
+  const value = useMemo(() => ({ ...controller, upload, uploadBatch, cancel, cancelByNativeId, retryTask, clearHistory, tasks, subscribeMediaCompletion, completionVersion }), [cancel, cancelByNativeId, clearHistory, completionVersion, controller, retryTask, subscribeMediaCompletion, tasks, upload, uploadBatch]);
   return <UploadContext.Provider value={value}>{children}</UploadContext.Provider>;
 };

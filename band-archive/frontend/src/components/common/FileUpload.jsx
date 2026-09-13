@@ -15,7 +15,7 @@ const FileUpload = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
-  const { upload, cancel, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
+  const { upload, cancel, cancelByNativeId, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
   const inputId = useId();
   const nativeTarget = useMemo(() => memberId ? { memberId } : { songId, rehearsalId }, [memberId,rehearsalId,songId]);
   const onMediaCompleteRef = useRef(onMediaComplete);
@@ -31,7 +31,7 @@ const FileUpload = ({
   useEffect(() => {
     const matching = nativePending.filter((item) => nativeTargetMatches(item,nativeTarget));
     setUploadProgress((previous) => mergeNativeUploadState(previous, matching, (item) => ({
-      name: item.name || '업로드 파일', progress: item.progress || 0, status: item.state, error: item.error,
+      name: item.name || '업로드 파일', progress: item.progress || 0, status: item.state, error: item.error, nativeId: item.id,
     })));
   }, [nativePending, nativeTarget]);
 
@@ -56,7 +56,7 @@ const FileUpload = ({
     for (const file of files) {
       const uniqueId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
       const fileId = file.id || `${file.name}-${file.lastModified}-${uniqueId}`;
-      setUploadProgress(prev => ({ ...prev, [fileId]: { name: file.name, progress: 0, status: 'preparing' } }));
+      setUploadProgress(prev => ({ ...prev, [fileId]: { name: file.name, progress: 0, status: 'preparing', nativeId: file.id || null } }));
 
       try {
         const updateProgress = (loaded, total) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } }));
@@ -154,7 +154,7 @@ const FileUpload = ({
                 {item.status === 'uploading' && <div className="progress-bar"><div className="progress-fill" style={{ width: `${item.progress}%` }} /></div>}
                 {item.error && <span className="progress-error">{item.error}</span>}
               </div>
-              {!onUpload && isUploadCancellable(item.status) && <button type="button" className="upload-cancel" onClick={() => cancel(fileId)}>취소</button>}
+              {!onUpload && isUploadCancellable(item.status) && <button type="button" className="upload-cancel" onClick={() => (item.nativeId ? cancelByNativeId(item.nativeId, nativeTarget) : cancel(fileId))}>취소</button>}
               {!onUpload && item.status === 'retry_wait' && <button type="button" className="upload-cancel" onClick={() => (transport.retry || transport.resume)?.({ id: fileId })}>재시도</button>}
             </div>
           ))}

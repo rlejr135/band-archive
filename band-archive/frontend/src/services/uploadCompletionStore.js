@@ -13,13 +13,17 @@ export const uploadTargetsMatch = (subscriber = {}, event = {}) => {
   return subscriberSong !== null || subscriberRehearsal !== null;
 };
 
-const completionKey = ({ target, media }) => [
-  value(target, 'memberId') || '', value(target, 'songId') || '', value(target, 'rehearsalId') || '', media?.id || '',
+const completionKey = ({ target }) => [
+  value(target, 'memberId') || '', value(target, 'songId') || '', value(target, 'rehearsalId') || '',
 ].join(':');
+
+const MAX_COMPLETION_TARGETS = 100;
 
 // App-lifetime completion store. The retained snapshots let a target that
 // mounts after a durable native item was ACKed still refresh its media list.
 export const createUploadCompletionStore = () => {
+  // One current snapshot per target, capped globally. Older events cannot help
+  // a late route after a newer target completion has already made it dirty.
   const events = new Map();
   const subscribers = new Set();
   let version = 0;
@@ -27,10 +31,12 @@ export const createUploadCompletionStore = () => {
   return {
     publish: ({ target, media, nativeId = null }) => {
       if (!media?.id) return false;
-      const key = completionKey({ target, media });
-      if (events.has(key)) return false;
+      const key = completionKey({ target });
+      if (events.get(key)?.media?.id === media.id) return false;
       const event = { target, media, nativeId, version: ++version };
+      events.delete(key);
       events.set(key, event);
+      while (events.size > MAX_COMPLETION_TARGETS) events.delete(events.keys().next().value);
       subscribers.forEach((subscriber) => {
         if (uploadTargetsMatch(subscriber.target, target)) subscriber.listener(event);
       });

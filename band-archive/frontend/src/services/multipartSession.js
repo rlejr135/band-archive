@@ -12,7 +12,12 @@ export const initiateMultipartSession = async ({ initiate, setSession, isCancell
   const session = { sessionId: initiated.sessionId, capabilityToken: initiated.capabilityToken };
   setSession?.(session);
   if (isCancelled?.()) {
-    await abort?.(session);
+    try {
+      await abort?.(session);
+    } catch {
+      // Cleanup must not replace the user's cancellation result. No request
+      // payload, capability token, or filename is logged here.
+    }
     throwIfCancelled(isCancelled);
   }
   return { initiated, session };
