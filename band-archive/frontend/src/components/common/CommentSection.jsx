@@ -77,18 +77,18 @@ const CommentTargetSection = ({ targetType, targetId, timestampEnabled, playback
   const [submitting, setSubmitting] = useState(false);
   const [seekStatus, setSeekStatus] = useState('');
   const loadComments = useCallback(async ({ showLoading = false, lifecycle = lifecycleRef.current } = {}) => {
-    const request = guard.begin(lifecycle);
-    if (showLoading && guard.isCurrent(request)) setLoading(true);
-    if (guard.isCurrent(request)) setLoadError('');
+    const request = guard.beginRead(lifecycle);
+    if (showLoading && guard.isCurrentRead(request)) setLoading(true);
+    if (guard.isCurrentRead(request)) setLoadError('');
     try {
       const nextComments = await fetchComments(targetType, targetId);
-      if (guard.isCurrent(request)) setComments(nextComments);
-      return guard.isCurrent(request);
+      if (guard.isCurrentRead(request)) setComments(nextComments);
+      return guard.isCurrentRead(request);
     } catch {
-      if (guard.isCurrent(request)) setLoadError('댓글을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.');
+      if (guard.isCurrentRead(request)) setLoadError('댓글을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.');
       return false;
     } finally {
-      if (guard.isCurrent(request)) setLoading(false);
+      if (guard.isCurrentRead(request)) setLoading(false);
     }
   }, [guard, targetId, targetType]);
   useEffect(() => {
@@ -101,13 +101,13 @@ const CommentTargetSection = ({ targetType, targetId, timestampEnabled, playback
     };
   }, [guard, loadComments]);
   const runMutation = useCallback(async (operation, lifecycle = lifecycleRef.current) => {
-    const mutation = guard.begin(lifecycle);
+    const mutation = guard.beginMutation(lifecycle);
     try {
       await operation();
-      if (!guard.isCurrent(mutation)) return false;
+      if (!guard.isCurrentMutation(mutation)) return false;
       return loadComments({ lifecycle });
     } catch (error) {
-      if (!guard.isCurrent(mutation)) return false;
+      if (!guard.isCurrentMutation(mutation)) return false;
       throw error;
     }
   }, [guard, loadComments]);
