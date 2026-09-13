@@ -227,6 +227,29 @@
   background-color: #1a1a1a;
 }
 
+.practice-controls {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(255, 211, 42, 0.05);
+}
+
+.practice-time { font-variant-numeric: tabular-nums; font-size: .9rem; color: var(--text-secondary); margin-bottom: 8px; }
+.practice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.practice-actions button, .practice-rate-label select {
+  min-height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: var(--surface-color);
+  color: var(--text-primary);
+}
+.practice-actions button[aria-pressed="true"] { border-color: var(--primary-color); background: var(--primary-color); color: #000; }
+.practice-actions button:disabled { opacity: .55; cursor: not-allowed; }
+.practice-rate-label { display: flex; align-items: center; gap: 4px; font-size: .85rem; color: var(--text-secondary); }
+.practice-status { min-height: 1.2em; margin: 8px 0 0; color: var(--text-secondary); font-size: .82rem; }
+
 .audio-controls-extra {
   padding: 15px;
   display: flex;
@@ -318,6 +341,9 @@
   .audio-filename {
     font-size: 0.95rem;
   }
+
+  .practice-actions { gap: 5px; }
+  .practice-actions button, .practice-rate-label select { min-height: 40px; }
 
   .settings-menu {
     position: fixed;
