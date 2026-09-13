@@ -35,6 +35,14 @@ def _run_migrations(app):
     try:
         conn = sqlite3.connect(db_path)
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        # Comments existed before playback-position links.  Keep this
+        # independent of the media migrations because a partially restored
+        # database can have comments even when another domain table is absent.
+        if 'comment' in tables:
+            comment_columns = {row[1] for row in conn.execute('PRAGMA table_info(comment)').fetchall()}
+            if 'timestamp_seconds' not in comment_columns:
+                conn.execute('ALTER TABLE comment ADD COLUMN timestamp_seconds FLOAT')
+                app.logger.info('Migration: added timestamp_seconds column to comment table')
         # Vote counters are cache fields.  They are rebuilt from SongVote on
         # every SQLite startup migration so legacy/null values cannot drift.
         if 'song' in tables:

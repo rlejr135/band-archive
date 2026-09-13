@@ -387,6 +387,10 @@ class Comment(db.Model):
     author = db.Column(db.String(50), nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    # A media playback offset in seconds.  This remains nullable so comments
+    # written before timestamp links, and ordinary text comments, retain the
+    # same representation.
+    timestamp_seconds = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     replies = db.relationship('Comment', backref=db.backref('parent', remote_side='Comment.id'),
@@ -406,6 +410,7 @@ class Comment(db.Model):
             'parent_id': self.parent_id,
             'author': self.author,
             'content': self.content,
+            'timestamp_seconds': self.timestamp_seconds,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'replies': [reply.to_dict() for reply in self.replies],
         }

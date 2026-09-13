@@ -1,3 +1,5 @@
+import math
+
 from flask import Blueprint, jsonify, request
 
 from extensions import db
@@ -21,7 +23,43 @@ def _get_top_level_comments(query_filter):
     return [c.to_dict() for c in comments]
 
 
-def _create_comment(data, media_id=None, personal_log_id=None, parent_id=None):
+def _parse_timestamp_seconds(data, *, allow_timestamp, target=None):
+    """Return a validated optional playback offset from a comment payload.
+
+    ``None`` is deliberately valid for compatibility and for clearing an
+    existing link.  Only audio/video top-level targets may receive a numeric
+    offset; replies intentionally cannot introduce a second, unrelated one.
+    """
+    if 'timestamp_seconds' not in data:
+        return None
+
+    value = data['timestamp_seconds']
+    if value is None:
+        return None
+    if not allow_timestamp:
+        raise ValidationError('Replies cannot have a timestamp')
+    if target is None or target.file_type not in ('audio', 'video'):
+        raise ValidationError('Timestamps are only available for audio or video comments')
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValidationError('timestamp_seconds must be a non-negative finite number')
+    try:
+        timestamp = float(value)
+    except (OverflowError, ValueError):
+        raise ValidationError('timestamp_seconds must be a non-negative finite number')
+    if timestamp < 0 or not math.isfinite(timestamp):
+        raise ValidationError('timestamp_seconds must be a non-negative finite number')
+    return timestamp
+
+
+def _comment_target(comment):
+    if comment.media_id is not None:
+        return comment.media
+    if comment.personal_log_id is not None:
+        return comment.personal_log
+    return None
+
+
+def _create_comment(data, media_id=None, personal_log_id=None, parent_id=None, target=None):
     """Shared comment creation logic."""
     if not data:
         raise ValidationError("Request body is required")
@@ -39,12 +77,19 @@ def _create_comment(data, media_id=None, personal_log_id=None, parent_id=None):
     if not content:
         raise ValidationError("Content is required")
 
+    timestamp_seconds = _parse_timestamp_seconds(
+        data,
+        allow_timestamp=parent_id is None,
+        target=target,
+    )
+
     comment = Comment(
         media_id=media_id,
         personal_log_id=personal_log_id,
         parent_id=parent_id,
         author=author,
         content=content,
+        timestamp_seconds=timestamp_seconds,
     )
     comment.set_password(password)
     db.session.add(comment)
@@ -67,7 +112,7 @@ def create_media_comment(media_id):
     media = db.session.get(Media, media_id)
     if not media:
         raise NotFoundError("Media not found")
-    comment = _create_comment(request.json, media_id=media_id)
+    comment = _create_comment(request.json, media_id=media_id, target=media)
     return jsonify(comment.to_dict()), 201
 
 
@@ -86,7 +131,7 @@ def create_personal_log_comment(log_id):
     log = db.session.get(PersonalLog, log_id)
     if not log:
         raise NotFoundError("Personal log not found")
-    comment = _create_comment(request.json, personal_log_id=log_id)
+    comment = _create_comment(request.json, personal_log_id=log_id, target=log)
     return jsonify(comment.to_dict()), 201
 
 
@@ -100,6 +145,7 @@ def create_reply(comment_id):
         media_id=parent.media_id,
         personal_log_id=parent.personal_log_id,
         parent_id=parent.id,
+        target=_comment_target(parent),
     )
     return jsonify(comment.to_dict()), 201
 
@@ -121,7 +167,16 @@ def update_comment(comment_id):
     if not content:
         raise ValidationError("Content is required")
 
+    timestamp_supplied = 'timestamp_seconds' in data
+    timestamp_seconds = _parse_timestamp_seconds(
+        data,
+        allow_timestamp=comment.parent_id is None,
+        target=_comment_target(comment),
+    ) if timestamp_supplied else None
+
     comment.content = content
+    if timestamp_supplied:
+        comment.timestamp_seconds = timestamp_seconds
     db.session.commit()
     return jsonify(comment.to_dict())
 
