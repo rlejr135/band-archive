@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import { SongProvider, useSongs } from './context/SongContext';
+import { UploadProvider } from './context/UploadContext';
+import UploadCenter from './components/common/UploadCenter';
 import SongList from './components/songs/SongList';
 import SongDetail from './components/songs/SongDetail';
 import SongForm from './components/songs/SongForm';
@@ -164,6 +166,7 @@ const MainContent = () => {
           <h1>들뜬 <span className="archive-text">Archive</span></h1>
         </div>
         <div className="header-actions">
+          <UploadCenter />
           <button
             className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`}
             onClick={() => navigate('/')}
@@ -219,7 +222,9 @@ const MainContent = () => {
 function App() {
   return (
     <SongProvider>
-      <MainContent />
+      <UploadProvider>
+        <MainContent />
+      </UploadProvider>
     </SongProvider>
   );
 }

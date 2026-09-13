@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { deleteRehearsal, fetchRehearsalMedia } from '../../services/rehearsalApi';
 import useMediaUpload from '../../hooks/useMediaUpload';
-import { consumeNativeUpload, deleteNativeUpload, mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
+import { mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
 import { getMediaIcon } from '../../services/mediaPresentation';
-import { getUploadStatusLabel, isUploadCancellable, isUploadTerminal, isUploadInProgress, isUploadRetryable, isAudioProcessingRetryable } from '../../services/uploadPresentation';
+import { getUploadStatusLabel, isUploadCancellable, isUploadInProgress, isUploadRetryable, isAudioProcessingRetryable } from '../../services/uploadPresentation';
 import { getRehearsalUploadPlan } from '../../services/rehearsalUploadQueue';
 import MediaPlayer from '../common/MediaPlayer';
 import CommentSection from '../common/CommentSection';
@@ -17,7 +17,10 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [recoveredUploads, setRecoveredUploads] = useState({});
   const [uploading, setUploading] = useState(false);
   const uploadingRef = useRef(false);
-  const { upload, retryAudio, cancel, transport, nativePending } = useMediaUpload();
+  const mountedRef = useRef(true);
+  const { uploadBatch, retryAudio, retryTask, cancel, transport, nativePending } = useMediaUpload();
+
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const dateStr = date.toLocaleDateString('ko-KR', {
     year: 'numeric',
@@ -53,22 +56,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         ? { ...pending, status: nativeItem.state, progress: nativeItem.progress || pending.progress, error: nativeItem.error || pending.error }
         : pending;
     }));
-    rehearsals.forEach((rehearsal) => matching.filter((item) => nativeTargetMatches(item,{ rehearsalId:rehearsal.id })).forEach((item) => {
-      if(item.state !== 'completed')return;
-      consumeNativeUpload(transport,item.id,{ rehearsalId:rehearsal.id },async (terminal) => {
-        setRecoveredUploads((previous) => ({ ...previous, [terminal.id]:terminal }));
-        if(terminal.state === 'completed') {
-          const media=await fetchRehearsalMedia(rehearsal.id);
-          setMediaMap((previous) => ({ ...previous, [rehearsal.id]:media }));
-        }
-      }).catch(() => {});
-    }));
   }, [nativePending,rehearsals,transport]);
-
-  const deleteRecoveredUpload = async (item, rehearsalId) => {
-    if (!await deleteNativeUpload(transport,item.id,{ rehearsalId })) return;
-    setRecoveredUploads((previous) => { const next={...previous}; delete next[item.id]; return next; });
-  };
 
   const handleDelete = async (id) => {
     if (!window.confirm('이 일정을 삭제하시겠습니까?')) return;
@@ -122,11 +110,12 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     uploadingRef.current = true;
     setUploading(true);
     try {
-      const media = await retryAudio(item.mediaId, (status, current) => {
+      const media = item.taskId ? await retryTask(item.taskId) : await retryAudio(item.mediaId, (status, current) => {
         setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
           ? { ...file, status, error: current?.processing_error || current?.error || file.error }
           : file));
       });
+      if (!mountedRef.current) return;
       setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
         ? {
           ...file,
@@ -136,6 +125,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         }
         : file));
     } catch (error) {
+      if (!mountedRef.current) return;
       setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
         ? { ...file, status: 'processing_failed', error: error.message || '음원 추출 재시도에 실패했습니다.' }
         : file));
@@ -151,52 +141,34 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     if (plan.length === 0) return;
     uploadingRef.current = true;
     setUploading(true);
-    let hasError = false;
     try {
-      for (const { item, index: i } of plan) {
-
-        setPendingFiles(prev => prev.map((f, idx) =>
-          idx === i ? { ...f, status: 'uploading', progress: 0 } : f
-        ));
-
-        try {
-          const media = await upload({ key: `rehearsal-${rehearsalId}-${i}-${item.file.id || item.file.lastModified}`, file: item.file, songId: item.songId, rehearsalId,
-            onProgress: (loaded, total) => {
-            setPendingFiles(prev => prev.map((f, idx) =>
-              idx === i ? { ...f, status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } : f
-            ));
-            },
-            onStatus: (status, media) => setPendingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status, error: media?.error } : f)),
-          });
-          const processingFailed = media?.transcoding_status === 'failed';
-          hasError ||= processingFailed;
-          setPendingFiles(prev => prev.map((f, idx) =>
-            idx === i ? {
-              ...f,
-              mediaId: media?.id || f.mediaId,
-              status: processingFailed ? 'processing_failed' : (isUploadInProgress(media?.transcoding_status) ? 'processing' : 'completed'),
-              progress: 100,
-              error: processingFailed ? (media?.processing_error || media?.error || '음원 추출에 실패했습니다.') : undefined,
-            } : f
-          ));
-        } catch (error) {
-          hasError = true;
-          setPendingFiles(prev => prev.map((f, idx) =>
-            idx === i ? { ...f, status: 'failed', error: error.message || '업로드에 실패했습니다.' } : f
-          ));
-        }
-      }
-
+      const results = await uploadBatch({ items: plan.map(({ item, index: i }) => ({
+        index: i,
+        options: {
+          key: `rehearsal-${rehearsalId}-${i}-${item.file.id || item.file.lastModified}`,
+          file: item.file, songId: item.songId, rehearsalId,
+          onProgress: (loaded, total) => setPendingFiles((previous) => previous.map((file, index) => index === i ? { ...file, status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } : file)),
+          onStatus: (status, media) => setPendingFiles((previous) => previous.map((file, index) => index === i ? { ...file, status, error: media?.error } : file)),
+        },
+      })) });
+      if (!mountedRef.current) return;
+      const hasError = results.some((result) => result.error || result.media?.transcoding_status === 'failed');
+      setPendingFiles((previous) => previous.map((file, index) => {
+        const result = results.find((value) => value.index === index);
+        if (!result) return file;
+        if (result.error) return { ...file, status: 'failed', error: result.error.message || '업로드에 실패했습니다.' };
+        const processingFailed = result.media?.transcoding_status === 'failed';
+        return { ...file, taskId: result.options.key, mediaId: result.media?.id || file.mediaId, status: processingFailed ? 'processing_failed' : (isUploadInProgress(result.media?.transcoding_status) ? 'processing' : 'completed'), progress: 100, error: processingFailed ? (result.media?.processing_error || result.media?.error || '음원 추출에 실패했습니다.') : undefined };
+      }));
       const media = await fetchRehearsalMedia(rehearsalId);
-      setMediaMap(prev => ({ ...prev, [rehearsalId]: media }));
-
-      if (!hasError) {
+      if (mountedRef.current) setMediaMap(prev => ({ ...prev, [rehearsalId]: media }));
+      if (!hasError && mountedRef.current) {
         setUploadingFor(null);
         setPendingFiles([]);
       }
     } finally {
       uploadingRef.current = false;
-      setUploading(false);
+      if (mountedRef.current) setUploading(false);
     }
   };
 
@@ -328,7 +300,6 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                       {isUploadCancellable(item.state) && <button className="rd-queue-remove" onClick={() => cancel(item.id)}>취소</button>}
                       {item.state === 'retry_wait' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
                       {item.state === 'failed' && <button className="rd-queue-remove" onClick={() => (transport.retry || transport.resume)?.({ id:item.id })}>재시도</button>}
-                      {isUploadTerminal(item.state) && <button className="rd-queue-remove" onClick={() => deleteRecoveredUpload(item,r.id)}>삭제</button>}
                     </div>
                   ))}
                 </div>

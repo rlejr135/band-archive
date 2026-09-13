@@ -76,7 +76,12 @@ const initiatePayload = (target, file) => target.kind === 'personal_log'
   ? { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, member_id: target.memberId, title: personalTitle(file, target.title) }
   : { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, song_id: target.songId, rehearsal_id: target.rehearsalId };
 
-const uploadSingle = async ({ file, target, onProgress, registerXhr }) => {
+const throwIfCancelled = (isCancelled) => {
+  if (isCancelled?.()) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
+};
+
+const uploadSingle = async ({ file, target, onProgress, registerXhr, isCancelled }) => {
+  throwIfCancelled(isCancelled);
   const contentType = file.type || 'application/octet-stream';
   const presign = await requestJson(`${API_URL}/uploads/presign`, {
     method: 'POST', body: JSON.stringify(target.kind === 'personal_log'
@@ -84,12 +89,14 @@ const uploadSingle = async ({ file, target, onProgress, registerXhr }) => {
       : { filename: file.name, content_type: contentType, upload_type: 'media' }),
   });
   await webTransport.putPart(presign.upload_url, file, contentType, (loaded) => onProgress(loaded, file.size), registerXhr);
+  throwIfCancelled(isCancelled);
   return requestJson(`${API_URL}${target.kind === 'personal_log' ? '/uploads/complete/personal-log' : '/uploads/complete/media'}`, { method: 'POST', body: JSON.stringify(targetPayload(target, file, presign.filename)) });
 };
 
 const acknowledgedParts = (session) => session?.acknowledged_parts || session?.ack_parts || session?.parts || [];
 
-const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession }) => {
+const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession, isCancelled }) => {
+  throwIfCancelled(isCancelled);
   const initiated = await webTransport.initiateMultipart(initiatePayload(target, file));
   if (!initiated.capabilityToken) throw new Error('업로드 권한 토큰을 받지 못했습니다. 다시 시도하세요.');
   const session = { sessionId: initiated.sessionId, capabilityToken: initiated.capabilityToken };
@@ -114,14 +121,17 @@ const uploadMultipart = async ({ file, target, onProgress, onUploadState, regist
     let lastError;
     let uploadUrl;
     for (let attempt = 0; attempt < MAX_PART_RETRIES; attempt += 1) {
+      throwIfCancelled(isCancelled);
       inFlight.set(partNumber, 0); updateAggregate();
       try {
         if (!uploadUrl) uploadUrl = (await webTransport.requestPart(session, partNumber)).upload_url;
+        throwIfCancelled(isCancelled);
         const etag = await webTransport.putPart(uploadUrl, blob, file.type || 'application/octet-stream', (loaded) => {
           inFlight.set(partNumber, loaded); updateAggregate();
         }, registerXhr);
         if (!etag) throw new Error('R2가 ETag를 노출하지 않았습니다. CORS expose headers를 확인하세요.');
         await webTransport.acknowledgePart(session, partNumber, { etag, bytes: blob.size });
+        throwIfCancelled(isCancelled);
         inFlight.delete(partNumber); completed.set(partNumber, blob.size); updateAggregate();
         return;
       } catch (error) {
@@ -132,6 +142,7 @@ const uploadMultipart = async ({ file, target, onProgress, onUploadState, regist
           // A presigned part URL can expire or be rejected; request an idempotent replacement.
           if (error.retryable || error.status === 403) uploadUrl = null;
           await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+          throwIfCancelled(isCancelled);
           onUploadState?.(mapUploadState('uploading'));
         }
       }
@@ -141,11 +152,13 @@ const uploadMultipart = async ({ file, target, onProgress, onUploadState, regist
   let nextPart = 1;
   const worker = async () => {
     while (nextPart <= totalParts) {
+      throwIfCancelled(isCancelled);
       const part = nextPart; nextPart += 1;
       if (!completed.has(part)) await uploadPart(part);
     }
   };
   await Promise.all(Array.from({ length: Math.min(3, totalParts) }, worker));
+  throwIfCancelled(isCancelled);
   onUploadState?.(mapUploadState('completing'));
   return webTransport.complete(session);
 };

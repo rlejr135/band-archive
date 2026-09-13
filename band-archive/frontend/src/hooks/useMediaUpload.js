@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { UploadContext } from '../context/UploadContext';
 import { API_URL } from '../services/api';
 import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
 import { isNativeDurableVideo, mapUploadState } from '../services/uploadTransport';
-import { claimNativeProcessingRecovery, consumeNativeUpload, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
+import { claimNativeProcessingRecovery, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const processingStates = new Set(['queued', 'pending', 'processing']);
 const processingChanged = (previous, next) => ['transcoding_status', 'audio_url', 'audio_filename', 'processing_error', 'transcoding_error', 'error']
   .some((field) => previous?.[field] !== next?.[field]);
 
-export default function useMediaUpload() {
+export function useUploadController() {
   const activeRef = useRef(new Map());
   const recoveryRef = useRef(new Map());
   const [nativePending, setNativePending] = useState([]);
@@ -24,8 +25,8 @@ export default function useMediaUpload() {
     active.onStatus?.(mapUploadState('cancelled'));
     abortMultipartUpload(active.session).catch(() => {});
   }, []);
-  useEffect(() => () => [...activeRef.current.keys()].forEach(cancel), [cancel]);
-  useEffect(() => () => recoveryRef.current.forEach((item) => { item.cancelled=true; }), []);
+  // This controller is mounted once by UploadProvider. User-started transfers must
+  // outlive route components; only explicit cancel actions stop them.
   useEffect(() => {
     const transport = getUploadTransport(); let mounted=true;
     hydrateNativeUploadQueue(transport,{ refresh:true }).then((items) => { if(mounted)setNativePending(items); }).catch(() => {});
@@ -95,7 +96,12 @@ export default function useMediaUpload() {
               const event=snapshot.find((value) => value.id === file.id);
               if(!event)return;
               if (event.id !== file.id || active.cancelled) return;
-              const status = mapUploadState(event.state); onProgress((event.progress || 0) * file.size / 100, file.size); onStatus(status, event);
+              const status = mapUploadState(event.state);
+              const eventMedia = normalizeMedia(nativeUploadResult(event));
+              onProgress((event.progress || 0) * file.size / 100, file.size);
+              // Native queue IDs are file UUIDs. Surface a server media record
+              // only when one exists so global tasks never mistake the UUID for media.id.
+              onStatus(status, eventMedia || { error: event.error });
               if (event.state === 'failed') {
                 finish(new Error(event.error || '네이티브 업로드에 실패했습니다.'));
               }
@@ -107,8 +113,8 @@ export default function useMediaUpload() {
                 if (!media?.id) { finish(new Error('서버가 업로드 결과를 반환하지 않았습니다.')); return; }
                 if (event.state === 'completed') {
                   onStatus('completed', media);
-                  const consumed = await consumeNativeUpload(transport, event.id, nativeTargetPayload(target), async () => onMediaUpdate?.(media));
-                  if (consumed) finish(null, media);
+                  onMediaUpdate?.(media);
+                  finish(null, media);
                   return;
                 }
                 onMediaUpdate?.(media);
@@ -136,26 +142,30 @@ export default function useMediaUpload() {
           begin();
         });
       }
-      const media = normalizeMedia(await uploadMediaFile({ file, target, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, registerXhr: (xhr) => { active.xhrs.add(xhr); } }));
+      const media = normalizeMedia(await uploadMediaFile({ file, target, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, isCancelled: () => active.cancelled, registerXhr: (xhr) => { if (active.cancelled) xhr.abort(); else active.xhrs.add(xhr); } }));
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       onProgress(file.size, file.size); onStatus('queued', media); onMediaUpdate?.(media);
-      return await poll(media, active, onStatus, onMediaUpdate, target.kind);
+      const result = await poll(media, active, onStatus, onMediaUpdate, target.kind);
+      if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
+      return result;
     } catch (error) {
       if (!active.cancelled) onStatus('failed', { error: error.message });
       throw error;
     } finally { activeRef.current.delete(key); }
   }, [poll]);
 
-  const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media') => {
+  const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media', taskKey = null) => {
     const media = normalizeMedia(await retryMediaAudio(mediaId, kind));
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
-    const key = `retry-${mediaId}`; activeRef.current.set(key, active);
-    try { onStatus('queued', media); return await poll(media, active, onStatus, onMediaUpdate, kind); }
+    // The global task id is used when supplied, so its cancel action also
+    // stops a server-side audio retry instead of leaving an orphaned poller.
+    const key = taskKey || `retry-${kind}-${mediaId}`; activeRef.current.set(key, active);
+    try { onStatus('queued', media); const result = await poll(media, active, onStatus, onMediaUpdate, kind); if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError'); return result; }
     finally { activeRef.current.delete(key); }
   }, [poll]);
 
   const watch = useCallback((media, onMediaUpdate, kind = 'media') => {
-    const key = `watch-${media.id}`;
+    const key = `watch-${kind}-${media.id}-${globalThis.crypto?.randomUUID?.() || Date.now()}-${Math.random()}`;
     const active = { cancelled: false, xhrs: new Set(), session: null };
     activeRef.current.set(key, active);
     poll(normalizeMedia(media), active, () => {}, onMediaUpdate, kind).finally(() => {
@@ -167,4 +177,42 @@ export default function useMediaUpload() {
   const listPending = useCallback(() => getUploadTransport().listPending(), []);
   const transport = getUploadTransport();
   return { upload, cancel, retryAudio, watch, listPending, transport, nativePending };
+}
+
+export default function useMediaUpload() {
+  const controller = useContext(UploadContext);
+  if (!controller) throw new Error('useMediaUpload must be used inside UploadProvider');
+  const { upload: startUpload, retryAudio: startAudioRetry, watch: startWatch, uploadBatch: startBatch } = controller;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  const guard = useCallback((callback) => (...args) => {
+    if (mounted.current) callback?.(...args);
+  }, []);
+
+  const upload = useCallback((options) => startUpload({
+    ...options,
+    onProgress: guard(options.onProgress),
+    onStatus: guard(options.onStatus),
+    onMediaUpdate: guard(options.onMediaUpdate),
+  }), [guard, startUpload]);
+  const retryAudio = useCallback((mediaId, onStatus, onMediaUpdate, kind) => (
+    startAudioRetry(mediaId, guard(onStatus), guard(onMediaUpdate), kind)
+  ), [guard, startAudioRetry]);
+  const watch = useCallback((media, onMediaUpdate, kind) => (
+    startWatch(media, guard(onMediaUpdate), kind)
+  ), [guard, startWatch]);
+  const uploadBatch = useCallback(({ items }) => startBatch({
+    items: items.map((item) => ({
+      ...item,
+      options: {
+        ...item.options,
+        onProgress: guard(item.options.onProgress),
+        onStatus: guard(item.options.onStatus),
+        onMediaUpdate: guard(item.options.onMediaUpdate),
+      },
+    })),
+  }), [guard, startBatch]);
+
+  return { ...controller, upload, uploadBatch, retryAudio, watch };
 }
