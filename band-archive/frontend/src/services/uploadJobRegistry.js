@@ -1,9 +1,24 @@
+const idPart = (value) => value === undefined || value === null || value === '' ? 'none' : String(value);
+
+export const uploadTargetKey = (target = {}) => (
+  target.memberId !== undefined && target.memberId !== null && target.memberId !== ''
+    ? `personal_log:member:${idPart(target.memberId)}`
+    : `media:song:${idPart(target.songId)}:rehearsal:${idPart(target.rehearsalId)}`
+);
+
+// Native queue ids identify the picked file, not its destination. Keep the
+// destination in the UI task key so one target cannot overwrite another.
+export const createUploadTaskId = ({ key, file, target }) => file?.id
+  ? `${file.id}:${uploadTargetKey(target)}`
+  : key;
+
 /** In-memory browser-file ownership for the app-lifetime upload controller. */
 export const createUploadJobRegistry = () => {
   const starts = new Map();
   const sources = new Map();
   const attempts = new Map();
   const cancelled = new Set();
+  const nativeOwners = new Map();
   return {
     registerSource: (id, options) => sources.set(id, options),
     sourceFor: (id) => sources.get(id),
@@ -27,5 +42,14 @@ export const createUploadJobRegistry = () => {
     },
     hasStarted: (id) => starts.has(id),
     runningFor: (id) => starts.get(id),
+    claimNativeSource: (nativeId, taskId) => {
+      const owner = nativeOwners.get(nativeId);
+      if (owner && owner !== taskId) return owner;
+      nativeOwners.set(nativeId, taskId);
+      return taskId;
+    },
+    releaseNativeSource: (nativeId, taskId) => {
+      if (nativeOwners.get(nativeId) === taskId) nativeOwners.delete(nativeId);
+    },
   };
 };

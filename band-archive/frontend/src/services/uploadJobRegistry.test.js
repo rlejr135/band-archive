@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createUploadJobRegistry } from './uploadJobRegistry.js';
+import { createUploadJobRegistry, createUploadTaskId } from './uploadJobRegistry.js';
 
 test('a job source is registered before its provider-owned batch start', async () => {
   const registry = createUploadJobRegistry();
@@ -50,4 +50,16 @@ test('a later attempt has a distinct callback generation', async () => {
   assert.notEqual(retryAttempt, originalAttempt);
   assert.equal(registry.isCurrent('job-1', originalAttempt), false);
   assert.equal(registry.isCurrent('job-1', retryAttempt), true);
+});
+
+test('native task identity includes its target and source ownership rejects concurrent target changes', () => {
+  const registry = createUploadJobRegistry();
+  const first = createUploadTaskId({ file: { id: 'picked-file' }, target: { songId: 4, rehearsalId: 9 } });
+  const second = createUploadTaskId({ file: { id: 'picked-file' }, target: { songId: 4, rehearsalId: 10 } });
+  assert.notEqual(first, second);
+  assert.equal(registry.claimNativeSource('picked-file', first), first);
+  assert.equal(registry.claimNativeSource('picked-file', first), first);
+  assert.equal(registry.claimNativeSource('picked-file', second), first);
+  registry.releaseNativeSource('picked-file', first);
+  assert.equal(registry.claimNativeSource('picked-file', second), second);
 });

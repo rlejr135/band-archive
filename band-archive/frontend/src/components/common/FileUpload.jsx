@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useId, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useId, useEffect, useMemo, useRef } from 'react';
 import useMediaUpload from '../../hooks/useMediaUpload';
 import { getUploadStatusLabel, isUploadCancellable } from '../../services/uploadPresentation';
 import { mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
@@ -15,9 +15,18 @@ const FileUpload = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
-  const { upload, cancel, transport, nativePending } = useMediaUpload();
+  const { upload, cancel, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
   const inputId = useId();
   const nativeTarget = useMemo(() => memberId ? { memberId } : { songId, rehearsalId }, [memberId,rehearsalId,songId]);
+  const onMediaCompleteRef = useRef(onMediaComplete);
+
+  useEffect(() => { onMediaCompleteRef.current = onMediaComplete; }, [onMediaComplete]);
+  useEffect(() => subscribeMediaCompletion(nativeTarget, (event) => {
+    if (event.media) onMediaCompleteRef.current?.(event.media);
+    // A retained completion means this surface mounted after native ACK. Its
+    // owner can refresh once without needing the raw queue item to survive.
+    if (event.prior?.length) onMediaCompleteRef.current?.(event.prior.at(-1).media);
+  }), [nativeTarget, subscribeMediaCompletion]);
 
   useEffect(() => {
     const matching = nativePending.filter((item) => nativeTargetMatches(item,nativeTarget));
@@ -57,15 +66,18 @@ const FileUpload = ({
             key: fileId, file, songId, rehearsalId, memberId,
             onProgress: updateProgress,
             onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
-            onMediaUpdate: onMediaComplete,
           });
-        setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'completed', progress: 100 } }));
-        onMediaComplete?.(media);
+        setUploadProgress(prev => ({ ...prev, [fileId]: {
+          ...prev[fileId],
+          status: media?.transcoding_status === 'failed' ? 'processing_failed' : 'completed',
+          progress: 100,
+          error: media?.processing_error || media?.error,
+        } }));
       } catch (error) {
         if (error.name !== 'AbortError') setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'failed', error: error.message } }));
       }
     }
-  }, [memberId, onMediaComplete, onUpload, rehearsalId, songId, upload]);
+  }, [memberId, onUpload, rehearsalId, songId, upload]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();

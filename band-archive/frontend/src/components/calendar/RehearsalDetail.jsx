@@ -18,9 +18,22 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
   const [uploading, setUploading] = useState(false);
   const uploadingRef = useRef(false);
   const mountedRef = useRef(true);
-  const { uploadBatch, retryAudio, retryTask, cancel, transport, nativePending } = useMediaUpload();
+  const { uploadBatch, retryAudio, retryTask, cancel, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
 
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  useEffect(() => {
+    const refreshes = rehearsals.map((rehearsal) => subscribeMediaCompletion({ rehearsalId: rehearsal.id }, async (event) => {
+      if (!event.media && !event.prior?.length) return;
+      try {
+        const media = await fetchRehearsalMedia(rehearsal.id);
+        if (mountedRef.current) setMediaMap((previous) => ({ ...previous, [rehearsal.id]: media }));
+      } catch {
+        // A later normal calendar refresh can recover from a transient list error.
+      }
+    }));
+    return () => refreshes.forEach((unsubscribe) => unsubscribe());
+  }, [rehearsals, subscribeMediaCompletion]);
 
   const dateStr = date.toLocaleDateString('ko-KR', {
     year: 'numeric',
@@ -110,18 +123,30 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
     uploadingRef.current = true;
     setUploading(true);
     try {
-      const media = item.taskId ? await retryTask(item.taskId) : await retryAudio(item.mediaId, (status, current) => {
-        setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
-          ? { ...file, status, error: current?.processing_error || current?.error || file.error }
-          : file));
-      });
+      const result = item.taskId
+        ? await retryTask(item.taskId)
+        : { outcome: 'completed', media: await retryAudio(item.mediaId, (status, current) => {
+          setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
+            ? { ...file, status, error: current?.processing_error || current?.error || file.error }
+            : file));
+        }) };
       if (!mountedRef.current) return;
+      if (result.outcome === 'cancelled') {
+        setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index ? { ...file, status: 'cancelled' } : file));
+        return;
+      }
+      if (result.outcome !== 'completed' || !result.media) {
+        setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
+          ? { ...file, status: 'processing_failed', error: result.error || file.error || '음원 추출 재시도에 실패했습니다.' }
+          : file));
+        return;
+      }
       setPendingFiles((previous) => previous.map((file, fileIndex) => fileIndex === index
         ? {
           ...file,
-          status: media?.transcoding_status === 'failed' ? 'processing_failed' : 'completed',
+          status: result.media.transcoding_status === 'failed' ? 'processing_failed' : 'completed',
           progress: 100,
-          error: media?.processing_error || media?.error,
+          error: result.media.processing_error || result.media.error,
         }
         : file));
     } catch (error) {
@@ -158,10 +183,8 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
         if (!result) return file;
         if (result.error) return { ...file, status: 'failed', error: result.error.message || '업로드에 실패했습니다.' };
         const processingFailed = result.media?.transcoding_status === 'failed';
-        return { ...file, taskId: result.options.key, mediaId: result.media?.id || file.mediaId, status: processingFailed ? 'processing_failed' : (isUploadInProgress(result.media?.transcoding_status) ? 'processing' : 'completed'), progress: 100, error: processingFailed ? (result.media?.processing_error || result.media?.error || '음원 추출에 실패했습니다.') : undefined };
+        return { ...file, taskId: result.taskId, mediaId: result.media?.id || file.mediaId, status: processingFailed ? 'processing_failed' : (isUploadInProgress(result.media?.transcoding_status) ? 'processing' : 'completed'), progress: 100, error: processingFailed ? (result.media?.processing_error || result.media?.error || '음원 추출에 실패했습니다.') : undefined };
       }));
-      const media = await fetchRehearsalMedia(rehearsalId);
-      if (mountedRef.current) setMediaMap(prev => ({ ...prev, [rehearsalId]: media }));
       if (!hasError && mountedRef.current) {
         setUploadingFor(null);
         setPendingFiles([]);

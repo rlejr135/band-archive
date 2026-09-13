@@ -1,5 +1,6 @@
 import { API_URL } from './api';
 import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport';
+import { initiateMultipartSession } from './multipartSession';
 
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
@@ -97,10 +98,9 @@ const acknowledgedParts = (session) => session?.acknowledged_parts || session?.a
 
 const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession, isCancelled }) => {
   throwIfCancelled(isCancelled);
-  const initiated = await webTransport.initiateMultipart(initiatePayload(target, file));
-  if (!initiated.capabilityToken) throw new Error('업로드 권한 토큰을 받지 못했습니다. 다시 시도하세요.');
-  const session = { sessionId: initiated.sessionId, capabilityToken: initiated.capabilityToken };
-  setSession?.(session);
+  const { initiated, session } = await initiateMultipartSession({
+    initiate: () => webTransport.initiateMultipart(initiatePayload(target, file)), setSession, isCancelled, abort: (current) => webTransport.abort(current),
+  });
   const serverSession = await webTransport.getSession(session);
   const totalParts = Math.ceil(file.size / initiated.part_size);
   if (totalParts > initiated.max_parts) throw new Error('파일이 multipart 업로드 제한을 초과합니다.');

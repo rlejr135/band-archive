@@ -14,9 +14,9 @@ export function useUploadController() {
   const activeRef = useRef(new Map());
   const recoveryRef = useRef(new Map());
   const [nativePending, setNativePending] = useState([]);
-  const cancel = useCallback((key) => {
+  const cancel = useCallback((key, nativeId = key) => {
     const active = activeRef.current.get(key);
-    if (!active) { const transport=getUploadTransport(); if(transport.kind==='native') transport.cancel({id:key}).catch(()=>{}); return; }
+    if (!active) { const transport=getUploadTransport(); if(transport.kind==='native') transport.cancel({ id: nativeId }).catch(()=>{}); return; }
     active.cancelled = true;
     active.xhrs.forEach((xhr) => xhr.abort());
     active.removeNativeListener?.();
@@ -39,6 +39,7 @@ export function useUploadController() {
     while (!active.cancelled && media?.id && processingStates.has(media.transcoding_status)) {
       onStatus(media.transcoding_status === 'processing' ? 'processing' : 'queued', media);
       await wait(Math.min(8000, 1000 * (2 ** failures)));
+      if (active.cancelled) return media;
       try {
         const next = normalizeMedia(await fetchMediaProcessing(media.id, kind));
         const updated = normalizeMedia({ ...media, ...next });
@@ -155,13 +156,20 @@ export function useUploadController() {
   }, [poll]);
 
   const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media', taskKey = null) => {
-    const media = normalizeMedia(await retryMediaAudio(mediaId, kind));
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
     // The global task id is used when supplied, so its cancel action also
     // stops a server-side audio retry instead of leaving an orphaned poller.
     const key = taskKey || `retry-${kind}-${mediaId}`; activeRef.current.set(key, active);
-    try { onStatus('queued', media); const result = await poll(media, active, onStatus, onMediaUpdate, kind); if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError'); return result; }
-    finally { activeRef.current.delete(key); }
+    try {
+      const media = normalizeMedia(await retryMediaAudio(mediaId, kind));
+      if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
+      onStatus('queued', media);
+      const result = await poll(media, active, onStatus, onMediaUpdate, kind);
+      if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
+      return result;
+    } finally {
+      if (activeRef.current.get(key) === active) activeRef.current.delete(key);
+    }
   }, [poll]);
 
   const watch = useCallback((media, onMediaUpdate, kind = 'media') => {
