@@ -11,6 +11,7 @@ from flask_migrate import upgrade
 from migration_bootstrap import (
     MIGRATIONS_DIRECTORY,
     MigrationBootstrapError,
+    assert_upgrade_preflight,
     create_migration_app,
     stamp_existing_current_schema,
 )
@@ -30,7 +31,11 @@ def cli(context, database_url):
 def upgrade_command(app):
     """Upgrade a fresh or already Alembic-stamped database to head."""
     with app.app_context():
-        upgrade(directory=str(MIGRATIONS_DIRECTORY))
+        try:
+            assert_upgrade_preflight()
+            upgrade(directory=str(MIGRATIONS_DIRECTORY))
+        except MigrationBootstrapError as error:
+            raise click.ClickException(str(error)) from error
     click.echo('Upgraded database to Alembic head.')
 
 

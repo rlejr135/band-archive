@@ -8,6 +8,7 @@ from migration_bootstrap import (
     BASELINE_REVISION,
     MIGRATIONS_DIRECTORY,
     create_migration_app,
+    schema_contract_differences,
     schema_differences,
 )
 from migration_runner import cli
@@ -87,9 +88,11 @@ def test_stamp_refuses_partial_or_mismatched_existing_schema(tmp_path):
             with db.engine.begin() as connection:
                 connection.execute(text('CREATE TABLE song (id INTEGER PRIMARY KEY)'))
 
-        result = _runner_command(database_path, 'stamp-existing')
+        before = database_path.read_bytes()
+        result = _runner_command(database_path, 'upgrade')
         assert result.exit_code != 0
-        assert 'does not match the checked-in baseline' in result.output
+        assert 'application tables but no Alembic revision' in result.output
+        assert database_path.read_bytes() == before
 
         with app.app_context():
             assert ALEMBIC_VERSION_TABLE not in inspect(db.engine).get_table_names()
@@ -103,6 +106,98 @@ def test_stamp_refuses_empty_database_instead_of_marking_it_current(tmp_path):
     try:
         result = _runner_command(database_path, 'stamp-existing')
         assert result.exit_code != 0
-        assert 'Run `flask db upgrade` instead' in result.output
+        assert 'migration_runner.py --database-url ... upgrade' in result.output
+    finally:
+        _dispose(app)
+
+
+def test_upgrade_refuses_empty_or_invalid_alembic_version_table(tmp_path):
+    database_path = tmp_path / 'invalid-version.db'
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            with db.engine.begin() as connection:
+                connection.execute(text('CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)'))
+        result = _runner_command(database_path, 'upgrade')
+        assert result.exit_code != 0
+        assert 'alembic_version table but no application schema' in result.output
+        with app.app_context():
+            assert inspect(db.engine).get_table_names() == [ALEMBIC_VERSION_TABLE]
+    finally:
+        _dispose(app)
+
+
+class _TamperedInspector:
+    """Expose real SQLite metadata except for selected constraint defects."""
+
+    def __init__(self, inspector):
+        self._inspector = inspector
+
+    def __getattr__(self, name):
+        return getattr(self._inspector, name)
+
+    def get_columns(self, table_name):
+        columns = [dict(column) for column in self._inspector.get_columns(table_name)]
+        if table_name == 'song':
+            next(column for column in columns if column['name'] == 'upvote_count')['default'] = '1'
+        return columns
+
+    def get_foreign_keys(self, table_name):
+        if table_name == 'song_vote':
+            return []
+        return self._inspector.get_foreign_keys(table_name)
+
+    def get_unique_constraints(self, table_name):
+        if table_name == 'song_vote':
+            return []
+        return self._inspector.get_unique_constraints(table_name)
+
+    def get_check_constraints(self, table_name):
+        if table_name == 'song_vote':
+            return []
+        return self._inspector.get_check_constraints(table_name)
+
+    def get_indexes(self, table_name):
+        if table_name == 'song_vote':
+            return []
+        return self._inspector.get_indexes(table_name)
+
+
+def test_structural_verifier_rejects_constraint_index_and_default_defects(tmp_path):
+    app = _migration_app(tmp_path / 'structural-defects.db')
+    try:
+        with app.app_context():
+            db.create_all()
+            with db.engine.connect() as connection:
+                differences = schema_contract_differences(
+                    connection, inspector_override=_TamperedInspector(inspect(connection))
+                )
+        joined = '\n'.join(differences)
+        assert 'song.upvote_count column' in joined
+        assert 'song_vote.foreign_keys' in joined
+        assert 'song_vote.unique_constraints' in joined
+        assert 'song_vote.check_constraints' in joined
+        assert 'song_vote.indexes' in joined
+    finally:
+        _dispose(app)
+
+
+def test_structural_verifier_rejects_changed_vote_check_expression(tmp_path):
+    app = _migration_app(tmp_path / 'changed-check.db')
+    try:
+        class _ChangedCheckInspector(_TamperedInspector):
+            def get_check_constraints(self, table_name):
+                constraints = [dict(item) for item in self._inspector.get_check_constraints(table_name)]
+                if table_name == 'song_vote':
+                    constraints[0]['sqltext'] = 'value IN (-1, 0, 1)'
+                return constraints
+
+        with app.app_context():
+            db.create_all()
+            with db.engine.connect() as connection:
+                differences = schema_contract_differences(
+                    connection, inspector_override=_ChangedCheckInspector(inspect(connection))
+                )
+        assert any('song_vote.check_constraints' in difference for difference in differences)
     finally:
         _dispose(app)

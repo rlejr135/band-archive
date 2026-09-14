@@ -14,3 +14,7 @@ The command refuses empty, partial, changed, or differently-stamped schemas.
 It does not run at application startup. The current `db.create_all()` and
 manual SQLite startup migrations remain in place until the planned Postgres
 cutover.
+
+Do not use `flask db upgrade` during this compatibility period: its normal app
+factory still runs legacy schema setup. `migration_runner.py` is the only
+supported migration operator path.
