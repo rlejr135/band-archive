@@ -1,0 +1,16 @@
+Single-database Flask-Migrate repository.
+
+`20260914_01` is a baseline for the schema that existed before Alembic was
+introduced. It may upgrade a genuinely empty database. Use the isolated
+runner, rather than `create_app()`, while the legacy startup path remains:
+
+    python migration_runner.py --database-url sqlite:///new.db upgrade
+
+An existing SQLite database must be backed up and explicitly checked with:
+
+    python migration_runner.py --database-url sqlite:///current.db stamp-existing
+
+The command refuses empty, partial, changed, or differently-stamped schemas.
+It does not run at application startup. The current `db.create_all()` and
+manual SQLite startup migrations remain in place until the planned Postgres
+cutover.

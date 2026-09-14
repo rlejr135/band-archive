@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from extensions import db
 from errors import register_error_handlers
 from storage import storage
+from migration_bootstrap import MIGRATIONS_DIRECTORY
 from routes.songs import songs_bp
 from routes.dashboard import dashboard_bp
 from routes.suggestions import suggestions_bp
@@ -305,7 +306,10 @@ def create_app(config_class=None, start_worker=None):
         CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
 
     db.init_app(app)
-    Migrate(app, db)
+    # Keep Flask-Migrate pointed at the checked-in baseline.  The existing
+    # create_all/startup migration path below remains the production path
+    # until the later Postgres cutover; this only establishes the toolchain.
+    Migrate(app, db, directory=str(MIGRATIONS_DIRECTORY))
     register_error_handlers(app)
     app.register_blueprint(songs_bp)
     app.register_blueprint(migrations_bp)
