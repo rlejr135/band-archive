@@ -22,7 +22,7 @@ from routes.comments import comments_bp
 from routes.gallery import gallery_bp
 from routes.uploads import uploads_bp
 from routes.migrations import migrations_bp
-from config import DevelopmentConfig
+from config import DevelopmentConfig, validate_supabase_auth_config
 
 load_dotenv()
 
@@ -295,6 +295,7 @@ def create_app(config_class=None, start_worker=None):
         config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
+    validate_supabase_auth_config(app.config)
     if app.debug:
         CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
     else:
