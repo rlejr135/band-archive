@@ -107,7 +107,9 @@ def _decode(token, key):
         audience=current_app.config['SUPABASE_JWT_AUDIENCE'],
         issuer=current_app.config['SUPABASE_JWT_ISSUER'],
         leeway=current_app.config['SUPABASE_JWT_LEEWAY_SECONDS'],
-        options={'require': ['exp', 'nbf', 'iss', 'aud', 'sub', 'email']},
+        # PyJWT validates nbf when present. Supabase access tokens need not
+        # include it, so requiring it would reject otherwise valid sessions.
+        options={'require': ['exp', 'iss', 'aud', 'sub', 'email']},
     )
 
 

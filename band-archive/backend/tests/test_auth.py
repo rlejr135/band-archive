@@ -72,6 +72,8 @@ def _token(private_key, kid='key-1', **overrides):
         'exp': now + timedelta(minutes=5),
     }
     claims.update(overrides)
+    if claims.pop('_without_nbf', False):
+        claims.pop('nbf')
     return jwt.encode(claims, private_key, algorithm='RS256', headers={'kid': kid})
 
 
@@ -125,6 +127,13 @@ def test_jwks_unknown_kid_refreshes_for_rotation(auth_app, signer):
     assert _get_me(auth_app, _token(signer, kid='key-1')).status_code == 200
     assert _get_me(auth_app, _token(next_signer, kid='key-2')).status_code == 200
     assert len(calls) == 2
+
+
+def test_optional_nbf_is_accepted_but_future_nbf_is_rejected(auth_app, signer):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    assert _get_me(auth_app, _token(signer, _without_nbf=True)).status_code == 200
+    future = datetime.now(timezone.utc) + timedelta(minutes=1)
+    assert _get_me(auth_app, _token(signer, nbf=future)).status_code == 401
 
 
 def test_me_synchronizes_normalized_user_and_bootstraps_admin_once(auth_app, signer):
