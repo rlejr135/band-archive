@@ -5,6 +5,44 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
 
+class AppUser(db.Model):
+    """Local authorization profile for a Supabase-authenticated person.
+
+    Passwords and refresh tokens are intentionally never stored here.
+    """
+    __tablename__ = 'app_user'
+
+    id = db.Column(db.Integer, primary_key=True)
+    supabase_user_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    email = db.Column(db.String(320), nullable=False, unique=True, index=True)
+    display_name = db.Column(db.String(100), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='active', server_default='active')
+    email_verified = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    is_platform_admin = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    def to_dict(self):
+        return {
+            'id': self.supabase_user_id,
+            'email': self.email,
+            'display_name': self.display_name,
+            'status': self.status,
+            'email_verified': self.email_verified,
+            'is_platform_admin': self.is_platform_admin,
+        }
+
+
+class AuthBootstrapState(db.Model):
+    """One-row claim guard for the initial platform administrator."""
+    __tablename__ = 'auth_bootstrap_state'
+
+    key = db.Column(db.String(64), primary_key=True)
+    claimed_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=False, unique=True)
+    claimed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Song(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)

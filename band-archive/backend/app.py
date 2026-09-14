@@ -22,6 +22,7 @@ from routes.comments import comments_bp
 from routes.gallery import gallery_bp
 from routes.uploads import uploads_bp
 from routes.migrations import migrations_bp
+from routes.auth import auth_bp
 from config import DevelopmentConfig, validate_supabase_auth_config
 
 load_dotenv()
@@ -314,6 +315,7 @@ def create_app(config_class=None, start_worker=None):
     register_error_handlers(app)
     app.register_blueprint(songs_bp)
     app.register_blueprint(migrations_bp)
+    app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
     app.register_blueprint(members_bp)

@@ -16,6 +16,8 @@ class NotFoundError(Exception):
 
 
 def register_error_handlers(app):
+    from auth_service import AuthError
+
     @app.errorhandler(ValidationError)
     def handle_validation_error(e):
         return jsonify({"error": e.message}), e.status_code
@@ -23,3 +25,7 @@ def register_error_handlers(app):
     @app.errorhandler(NotFoundError)
     def handle_not_found_error(e):
         return jsonify({"error": e.message}), e.status_code
+
+    @app.errorhandler(AuthError)
+    def handle_auth_error(e):
+        return jsonify({'error': e.code, 'message': e.message}), e.status_code

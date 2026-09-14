@@ -9,6 +9,7 @@ from migration_bootstrap import (
     ALEMBIC_VERSION_TABLE,
     BASELINE_REVISION,
     MIGRATIONS_DIRECTORY,
+    baseline_metadata,
     create_migration_app,
     schema_contract_differences,
     schema_differences,
@@ -55,7 +56,7 @@ def test_fresh_database_upgrade_creates_current_baseline(tmp_path):
             assert ALEMBIC_VERSION_TABLE in tables
             with db.engine.connect() as connection:
                 assert schema_differences(connection) == []
-        assert _version(app) == BASELINE_REVISION
+        assert _version(app) == '20260914_02'
     finally:
         _dispose(app)
 
@@ -65,20 +66,21 @@ def test_existing_current_schema_can_stamp_then_upgrade_idempotently(tmp_path):
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            db.create_all()
+            baseline_metadata().create_all(db.engine)
 
         first = _runner_command(database_path, 'stamp-existing')
         assert first.exit_code == 0, first.output
         assert 'Stamped existing current schema' in first.output
         assert _version(app) == BASELINE_REVISION
 
-        upgraded = _runner_command(database_path, 'upgrade')
-        assert upgraded.exit_code == 0, upgraded.output
-
         second = _runner_command(database_path, 'stamp-existing')
         assert second.exit_code == 0, second.output
         assert 'already stamped' in second.output
         assert _version(app) == BASELINE_REVISION
+
+        upgraded = _runner_command(database_path, 'upgrade')
+        assert upgraded.exit_code == 0, upgraded.output
+        assert _version(app) == '20260914_02'
     finally:
         _dispose(app)
 

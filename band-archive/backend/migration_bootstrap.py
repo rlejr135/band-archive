@@ -16,7 +16,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from flask import current_app
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, inspect, text
 
 from extensions import db
 
@@ -24,13 +24,19 @@ from extensions import db
 MIGRATIONS_DIRECTORY = Path(__file__).with_name('migrations')
 BASELINE_REVISION = '20260914_01'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
+BASELINE_TABLE_NAMES = (
+    'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
+    'multipart_upload_part', 'multipart_upload_session', 'personal_log',
+    'personal_log_multipart_upload_part', 'personal_log_multipart_upload_session',
+    'rehearsal', 'rehearsal_songs', 'song', 'song_suggestion', 'song_vote',
+)
 
 
 class MigrationBootstrapError(RuntimeError):
     """Raised when an existing database is unsafe to stamp."""
 
 
-def schema_differences(connection):
+def schema_differences(connection, metadata=None):
     """Return Alembic differences between an existing DB and model metadata."""
     context = MigrationContext.configure(
         connection,
@@ -39,7 +45,15 @@ def schema_differences(connection):
             'compare_server_default': True,
         },
     )
-    return compare_metadata(context, db.metadata)
+    return compare_metadata(context, metadata or db.metadata)
+
+
+def baseline_metadata():
+    """The pre-Alembic schema snapshot used only for an explicit legacy stamp."""
+    metadata = MetaData()
+    for table_name in BASELINE_TABLE_NAMES:
+        db.metadata.tables[table_name].to_metadata(metadata)
+    return metadata
 
 
 def _normalize_type(column_type, dialect):
@@ -193,7 +207,7 @@ def _reflected_indexes(inspector, table_name):
     )
 
 
-def schema_contract_differences(connection, inspector_override=None):
+def schema_contract_differences(connection, inspector_override=None, metadata=None):
     """Fail-closed structural comparison beyond Alembic's best-effort diff.
 
     Alembic autogenerate intentionally omits or treats several SQLite
@@ -202,7 +216,8 @@ def schema_contract_differences(connection, inspector_override=None):
     """
     inspector = inspector_override or inspect(connection)
     actual_tables = set(_application_tables(connection))
-    expected_tables = set(db.metadata.tables)
+    metadata = metadata or db.metadata
+    expected_tables = set(metadata.tables)
     differences = []
 
     if actual_tables != expected_tables:
@@ -211,7 +226,7 @@ def schema_contract_differences(connection, inspector_override=None):
         )
 
     for table_name in sorted(expected_tables & actual_tables):
-        table = db.metadata.tables[table_name]
+        table = metadata.tables[table_name]
         columns = inspector.get_columns(table_name)
         if columns is None:
             raise MigrationBootstrapError(
@@ -277,15 +292,16 @@ def _current_version(connection):
     return tuple(rows)
 
 
-def _assert_current_schema(connection):
+def _assert_current_schema(connection, metadata=None):
     tables = _application_tables(connection)
     if not tables:
         raise MigrationBootstrapError(
             'Database is empty. Run `python migration_runner.py --database-url ... upgrade` instead.'
         )
 
-    differences = schema_contract_differences(connection) + [
-        f'alembic={difference!r}' for difference in schema_differences(connection)
+    metadata = metadata or db.metadata
+    differences = schema_contract_differences(connection, metadata=metadata) + [
+        f'alembic={difference!r}' for difference in schema_differences(connection, metadata=metadata)
     ]
     if differences:
         raise MigrationBootstrapError(
@@ -322,10 +338,6 @@ def assert_upgrade_preflight():
             raise MigrationBootstrapError(
                 f'Database has an unknown or invalid Alembic revision {version!r}; refusing upgrade.'
             )
-        # While this repository has one baseline revision, a correctly stamped
-        # database must also still match it structurally before it can advance.
-        if version[0] == BASELINE_REVISION:
-            _assert_current_schema(connection)
         return 'stamped'
 
 
@@ -337,7 +349,10 @@ def stamp_existing_current_schema():
     """
     engine = db.engine
     with engine.connect() as connection:
-        _assert_current_schema(connection)
+        # A legacy DB must match the old baseline, not the current head.  This
+        # prevents a new model table created by legacy `create_all()` from
+        # being incorrectly stamped as if its Alembic migration had run.
+        _assert_current_schema(connection, metadata=baseline_metadata())
         version = _current_version(connection)
         if version is not None and version != (BASELINE_REVISION,):
             raise MigrationBootstrapError(
