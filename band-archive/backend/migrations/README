@@ -18,3 +18,8 @@ cutover.
 Do not use `flask db upgrade` during this compatibility period: its normal app
 factory still runs legacy schema setup. `migration_runner.py` is the only
 supported migration operator path.
+
+The Phase 1 verifier has SQLite integration coverage and PostgreSQL dialect
+unit coverage for the equivalent `FLOAT`/`DOUBLE PRECISION` reflection. It
+does not yet run against a live PostgreSQL service; that is a required
+Supabase staging gate before the production Postgres cutover.

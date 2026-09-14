@@ -1,5 +1,7 @@
 from flask_migrate import upgrade
 from sqlalchemy import inspect, text
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from click.testing import CliRunner
 
 from extensions import db
@@ -10,6 +12,7 @@ from migration_bootstrap import (
     create_migration_app,
     schema_contract_differences,
     schema_differences,
+    types_are_equivalent,
 )
 from migration_runner import cli
 
@@ -201,3 +204,11 @@ def test_structural_verifier_rejects_changed_vote_check_expression(tmp_path):
         assert any('song_vote.check_constraints' in difference for difference in differences)
     finally:
         _dispose(app)
+
+
+def test_postgres_float_and_double_precision_are_semantically_equivalent():
+    dialect = postgresql.dialect()
+    assert types_are_equivalent(sa.Float(), postgresql.DOUBLE_PRECISION(), dialect)
+    assert not types_are_equivalent(sa.Float(), postgresql.REAL(), dialect)
+    assert not types_are_equivalent(sa.Float(), sa.Integer(), dialect)
+    assert not types_are_equivalent(sa.Integer(), sa.String(20), dialect)

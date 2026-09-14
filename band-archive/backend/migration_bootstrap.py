@@ -46,6 +46,35 @@ def _normalize_type(column_type, dialect):
     return re.sub(r'\s+', '', column_type.compile(dialect=dialect)).upper()
 
 
+def _postgres_float_family(column_type, dialect):
+    """Return PostgreSQL's effective float width, or None when not a float.
+
+    PostgreSQL reflects an unqualified SQLAlchemy ``Float`` as
+    ``DOUBLE PRECISION`` even though the model renders it as ``FLOAT``.  Those
+    are the same PostgreSQL type.  ``REAL`` and precision-qualified floats are
+    deliberately left distinct so this exception cannot hide a real drift.
+    """
+    rendered = _normalize_type(column_type, dialect)
+    if rendered in {'FLOAT', 'DOUBLEPRECISION'} and getattr(column_type, 'precision', None) is None:
+        return 'float64'
+    if rendered == 'REAL':
+        return 'float32'
+    return None
+
+
+def types_are_equivalent(expected, actual, dialect):
+    """Compare reflected types while retaining dialect-specific safety rules."""
+    expected_rendered = _normalize_type(expected, dialect)
+    actual_rendered = _normalize_type(actual, dialect)
+    if expected_rendered == actual_rendered:
+        return True
+    if dialect.name == 'postgresql':
+        expected_family = _postgres_float_family(expected, dialect)
+        actual_family = _postgres_float_family(actual, dialect)
+        return expected_family is not None and expected_family == actual_family
+    return False
+
+
 def _normalize_sql(value):
     """Compare SQLite-reflected defaults/CHECK SQL without cosmetic syntax."""
     if value is None:
@@ -203,9 +232,8 @@ def schema_contract_differences(connection, inspector_override=None):
             actual_default = _normalize_default(actual.get('default'))
             expected_default = _normalize_default(_metadata_default(expected))
             actual_nullable = bool(actual.get('nullable'))
-            if (actual_type, actual_nullable, actual_default) != (
-                expected_type, expected.nullable, expected_default,
-            ):
+            if (not types_are_equivalent(expected.type, actual['type'], connection.dialect)
+                    or (actual_nullable, actual_default) != (expected.nullable, expected_default)):
                 differences.append(
                     f'{table_name}.{name} column expected='
                     f'({expected_type}, {expected.nullable}, {expected_default!r}) actual='
