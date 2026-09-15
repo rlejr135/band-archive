@@ -31,9 +31,12 @@ from querying tables that do not exist on a baseline database.
    once to confirm it is idempotent.
 4. Start or restart the app only after the runner reports head.
 
-The Phase 3 revision includes partial unique indexes for active owners and
-pending requests plus database triggers that reject any update or deletion of
-`audit_event`. PostgreSQL staging remains required before production cutover.
+The Phase 3 hardening revision (`20260916_04`) adds partial unique indexes for
+active owners and pending requests plus database triggers that reject any
+update or deletion of `audit_event`. A database recorded at immutable revision
+`20260915_03` is valid for upgrade but keeps `/api/v2` unavailable until this
+revision is applied. PostgreSQL staging remains required before production
+cutover.
 
 The Phase 1 verifier has SQLite integration coverage and PostgreSQL dialect
 unit coverage for the equivalent `FLOAT`/`DOUBLE PRECISION` reflection. It

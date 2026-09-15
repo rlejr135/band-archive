@@ -124,6 +124,47 @@ def test_revision_two_exact_snapshot_allows_only_compatible_phase_three_upgrade(
         _dispose(app)
 
 
+def test_recorded_revision_three_requires_hardening_upgrade_before_v2_is_ready(tmp_path):
+    """The immutable v03 schema is valid, but cannot serve v2 until v04."""
+    database_path = tmp_path / 'revision-three.db'
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            upgrade(revision='20260915_03', directory=str(MIGRATIONS_DIRECTORY))
+            assert _version(app) == '20260915_03'
+    finally:
+        _dispose(app)
+
+    runtime_before = create_app(_runtime_config(database_path), start_worker=False)
+    try:
+        assert runtime_before.config['BAND_API_SCHEMA_READY'] is False
+        assert runtime_before.test_client().get('/api/v2/public/bands').status_code == 503
+    finally:
+        _dispose(runtime_before)
+
+    first = _runner_command(database_path, 'upgrade')
+    second = _runner_command(database_path, 'upgrade')
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    hardened = _migration_app(database_path)
+    try:
+        with hardened.app_context():
+            assert _version(hardened) == migration_head_revision()
+            indexes = {item['name'] for item in inspect(db.engine).get_indexes('band_membership')}
+            request_indexes = {item['name'] for item in inspect(db.engine).get_indexes('band_creation_request')}
+            assert 'uq_band_membership_active_owner' in indexes
+            assert 'uq_band_creation_request_pending_user_slug' in request_indexes
+    finally:
+        _dispose(hardened)
+
+    runtime_after = create_app(_runtime_config(database_path), start_worker=False)
+    try:
+        assert runtime_after.config['BAND_API_SCHEMA_READY'] is True
+        assert runtime_after.test_client().get('/api/v2/public/bands').status_code == 200
+    finally:
+        _dispose(runtime_after)
+
+
 def test_stamp_refuses_partial_or_mismatched_existing_schema(tmp_path):
     database_path = tmp_path / 'mismatch.db'
     app = _migration_app(database_path)
@@ -243,6 +284,34 @@ def test_structural_verifier_rejects_changed_vote_check_expression(tmp_path):
                     connection, inspector_override=_ChangedCheckInspector(inspect(connection))
                 )
         assert any('song_vote.check_constraints' in difference for difference in differences)
+    finally:
+        _dispose(app)
+
+
+@pytest.mark.parametrize(
+    ('index_name', 'table_name', 'columns', 'weak_predicate'),
+    [
+        ('uq_band_membership_active_owner', 'band_membership', 'band_id', "role = 'owner'"),
+        ('uq_band_creation_request_pending_user_slug', 'band_creation_request',
+         'requested_by_user_id, slug', "status IN ('pending', 'active')"),
+    ],
+)
+def test_preflight_rejects_weakened_partial_index_predicate(
+    tmp_path, index_name, table_name, columns, weak_predicate,
+):
+    database_path = tmp_path / f'weak-{index_name}.db'
+    assert _runner_command(database_path, 'upgrade').exit_code == 0
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            with db.engine.begin() as connection:
+                connection.execute(text(f'DROP INDEX {index_name}'))
+                connection.execute(text(
+                    f'CREATE UNIQUE INDEX {index_name} ON {table_name} ({columns}) WHERE {weak_predicate}'
+                ))
+        result = _runner_command(database_path, 'upgrade')
+        assert result.exit_code != 0
+        assert f'{table_name}.{index_name} partial predicate' in result.output
     finally:
         _dispose(app)
 

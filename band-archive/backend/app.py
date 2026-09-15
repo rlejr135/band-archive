@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 from extensions import db
 from errors import register_error_handlers
 from storage import storage
-from migration_bootstrap import MIGRATIONS_DIRECTORY, migration_head_revision, baseline_metadata
+from migration_bootstrap import (
+    MIGRATIONS_DIRECTORY, baseline_metadata, migration_head_revision, schema_contract_differences,
+)
 from routes.songs import songs_bp
 from routes.dashboard import dashboard_bp
 from routes.suggestions import suggestions_bp
@@ -45,7 +47,9 @@ def _band_schema_ready():
         if not _BAND_SCHEMA_TABLES.issubset(tables) or 'alembic_version' not in tables:
             return False
         versions = connection.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
-    return versions == [migration_head_revision()]
+        if versions != [migration_head_revision()]:
+            return False
+        return not schema_contract_differences(connection)
 
 
 def _add_sqlite_column(conn, table, column, definition):

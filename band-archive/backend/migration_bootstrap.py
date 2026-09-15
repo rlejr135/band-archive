@@ -24,6 +24,7 @@ from extensions import db
 MIGRATIONS_DIRECTORY = Path(__file__).with_name('migrations')
 BASELINE_REVISION = '20260914_01'
 AUTH_REVISION = '20260914_02'
+PHASE3_REVISION = '20260915_03'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -62,6 +63,24 @@ def auth_metadata():
     metadata = baseline_metadata()
     for table_name in ('app_user', 'auth_bootstrap_state'):
         db.metadata.tables[table_name].to_metadata(metadata)
+    return metadata
+
+
+def phase3_metadata():
+    """Exact immutable revision-03 snapshot, before hardening revision 04."""
+    metadata = auth_metadata()
+    for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
+        db.metadata.tables[table_name].to_metadata(metadata)
+    # These partial indexes belong to revision 04.  Do not retroactively
+    # require them when validating a legitimately recorded revision 03 DB.
+    for table_name, index_name in (
+        ('band_membership', 'uq_band_membership_active_owner'),
+        ('band_creation_request', 'uq_band_creation_request_pending_user_slug'),
+    ):
+        table = metadata.tables[table_name]
+        index = next((item for item in table.indexes if item.name == index_name), None)
+        if index is not None:
+            table.indexes.remove(index)
     return metadata
 
 
@@ -283,12 +302,43 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
                 differences.append(
                     f'{table_name}.{label} expected={expected!r} actual={actual!r}'
                 )
+    differences.extend(_partial_index_differences(connection, metadata))
     # SQLAlchemy's generic inspector does not reliably expose trigger bodies.
     # Once a DB has recorded the Phase 3 head, require the database-level
     # append-only guard explicitly rather than trusting the ORM event hook.
-    if 'audit_event' in actual_tables and ALEMBIC_VERSION_TABLE in inspect(connection).get_table_names():
+    if ('audit_event' in actual_tables and _current_version(connection) == (migration_head_revision(),)):
         differences.extend(_audit_trigger_differences(connection))
     return differences
+
+
+def _partial_index_differences(connection, metadata):
+    """Verify predicates that generic SQLAlchemy index reflection omits."""
+    expected = []
+    for table in metadata.tables.values():
+        for index in table.indexes:
+            where = index.dialect_options['sqlite'].get('where')
+            if where is None:
+                where = index.dialect_options['postgresql'].get('where')
+            if where is not None:
+                expected.append((table.name, index.name, _normalize_sql(where)))
+    if not expected:
+        return []
+    if connection.dialect.name == 'sqlite':
+        rows = connection.execute(text("SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index'"))
+        actual = {(row[1], row[0]): _normalize_sql(row[2]) for row in rows}
+        return [f'{table}.{name} partial predicate is missing or invalid'
+                for table, name, predicate in expected
+                if f'where{predicate}' not in actual.get((table, name), '')]
+    if connection.dialect.name == 'postgresql':
+        rows = connection.execute(text("""
+            SELECT tablename, indexname, indexdef FROM pg_indexes
+            WHERE schemaname = ANY(current_schemas(false))
+        """))
+        actual = {(row[0], row[1]): _normalize_sql(row[2]) for row in rows}
+        return [f'{table}.{name} partial predicate is missing or invalid'
+                for table, name, predicate in expected
+                if f'where{predicate}' not in actual.get((table, name), '')]
+    return ['partial index predicates cannot be verified for this database dialect']
 
 
 def _audit_trigger_differences(connection):
@@ -374,6 +424,8 @@ def metadata_for_recorded_revision(revision):
         return baseline_metadata()
     if revision == AUTH_REVISION:
         return auth_metadata()
+    if revision == PHASE3_REVISION:
+        return phase3_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

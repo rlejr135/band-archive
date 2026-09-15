@@ -132,6 +132,11 @@ def test_transfer_then_leave_preserves_owner_invariant(band_app):
                         json={'action': 'approve'}).status_code == 200
     assert client.post(f'/api/v2/bands/{band_id}/ownership-transfer', headers=_headers('owner-id'),
                        json={'membership_id': membership_id}).status_code == 200
+    # The previous owner is revalidated as an admin on every mutation; it
+    # cannot continue a stale owner operation after the transfer commits.
+    assert client.delete(f'/api/v2/bands/{band_id}', headers=_headers('owner-id')).status_code == 403
+    assert client.patch(f'/api/v2/memberships/{membership_id}', headers=_headers('owner-id'),
+                        json={'role': 'admin'}).status_code == 403
     assert client.post(f'/api/v2/bands/{band_id}/leave', headers=_headers('owner-id')).status_code == 200
     with band_app.app_context():
         active_owners = BandMembership.query.filter_by(band_id=band_id, role='owner', status='active').all()

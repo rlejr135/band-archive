@@ -66,8 +66,23 @@ def active_membership(user, band_id, include_deleted=False):
     return band, membership
 
 
-def require_band_role(user, band_id, roles=MANAGER_ROLES):
-    band, membership = active_membership(user, band_id)
+def require_band_role(user, band_id, roles=MANAGER_ROLES, lock=False):
+    """Authorize a band action, optionally locking the actor's authority.
+
+    Mutations pass ``lock=True`` so PostgreSQL rechecks the role under the
+    same row lock as the write. SQLite's writer transaction/constraints are
+    the corresponding portable protection.
+    """
+    band_query = Band.query.filter_by(id=band_id)
+    if lock:
+        band_query = band_query.with_for_update()
+    band = band_query.one_or_none()
+    if band is None or band.deleted_at is not None:
+        raise NotFoundError('Band not found')
+    membership_query = BandMembership.query.filter_by(band_id=band.id, user_id=user.id, status=ACTIVE)
+    if lock:
+        membership_query = membership_query.with_for_update()
+    membership = membership_query.one_or_none()
     if membership is None:
         # Do not disclose a band to a non-member through protected endpoints.
         raise NotFoundError('Band not found')
@@ -241,7 +256,7 @@ def approve_membership(actor, membership_id, approved):
     item = BandMembership.query.filter_by(id=membership_id).with_for_update().one_or_none()
     if item is None:
         raise NotFoundError('Membership not found')
-    band, _ = require_band_role(actor, item.band_id)
+    band, _ = require_band_role(actor, item.band_id, lock=True)
     if item.status != 'pending':
         return item, False
     try:
@@ -264,7 +279,7 @@ def _token_hash(raw):
 
 
 def create_invite(actor, band_id):
-    band, _ = require_band_role(actor, band_id)
+    band, _ = require_band_role(actor, band_id, lock=True)
     # token_urlsafe(32) is a 256-bit random capability. Only its fixed-size hash persists.
     raw = secrets.token_urlsafe(32)
     invite = BandInviteCode(band_id=band.id, token_hash=_token_hash(raw), created_by_user_id=actor.id)
@@ -281,8 +296,8 @@ def invite_dict(invite):
 
 
 def revoke_invite(actor, band_id, invite_id):
-    band, _ = require_band_role(actor, band_id)
-    invite = BandInviteCode.query.filter_by(id=invite_id, band_id=band.id).one_or_none()
+    band, _ = require_band_role(actor, band_id, lock=True)
+    invite = BandInviteCode.query.filter_by(id=invite_id, band_id=band.id).with_for_update().one_or_none()
     if invite is None:
         raise NotFoundError('Invite code not found')
     if invite.revoked_at is None:
@@ -328,10 +343,10 @@ def join_invite(user, raw):
 def set_role(actor, membership_id, role):
     if role not in {'admin', 'member'}:
         raise ValidationError('role must be admin or member.')
-    item = BandMembership.query.filter_by(id=membership_id).one_or_none()
+    item = BandMembership.query.filter_by(id=membership_id).with_for_update().one_or_none()
     if item is None:
         raise NotFoundError('Membership not found')
-    band, actor_membership = require_band_role(actor, item.band_id, OWNER_ROLES)
+    band, actor_membership = require_band_role(actor, item.band_id, OWNER_ROLES, lock=True)
     if item.status != ACTIVE:
         raise ValidationError('Only active memberships can receive roles.', 409)
     if item.role == 'owner':
@@ -393,7 +408,7 @@ def leave_band(actor, band_id):
 
 
 def close_band(actor, band_id):
-    band, _ = require_band_role(actor, band_id, OWNER_ROLES)
+    band, _ = require_band_role(actor, band_id, OWNER_ROLES, lock=True)
     if band.deleted_at is None:
         band.deleted_at = now()
         band.purge_after = band.deleted_at + timedelta(days=30)
