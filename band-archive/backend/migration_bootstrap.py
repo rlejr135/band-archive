@@ -23,6 +23,7 @@ from extensions import db
 
 MIGRATIONS_DIRECTORY = Path(__file__).with_name('migrations')
 BASELINE_REVISION = '20260914_01'
+AUTH_REVISION = '20260914_02'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -52,6 +53,14 @@ def baseline_metadata():
     """The pre-Alembic schema snapshot used only for an explicit legacy stamp."""
     metadata = MetaData()
     for table_name in BASELINE_TABLE_NAMES:
+        db.metadata.tables[table_name].to_metadata(metadata)
+    return metadata
+
+
+def auth_metadata():
+    """Exact revision-02 schema snapshot for safe upgrades to Phase 3."""
+    metadata = baseline_metadata()
+    for table_name in ('app_user', 'auth_bootstrap_state'):
         db.metadata.tables[table_name].to_metadata(metadata)
     return metadata
 
@@ -328,6 +337,8 @@ def metadata_for_recorded_revision(revision):
     """Return the exact metadata expected for a known recorded revision."""
     if revision == BASELINE_REVISION:
         return baseline_metadata()
+    if revision == AUTH_REVISION:
+        return auth_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

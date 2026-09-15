@@ -43,6 +43,118 @@ class AuthBootstrapState(db.Model):
     claimed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+# Phase 3 tables are intentionally not part of ``baseline_metadata()``.  They
+# are created only by Alembic revision 20260915_03, never by the v1
+# compatibility ``create_all`` startup path.
+class Band(db.Model):
+    __tablename__ = 'band'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    slug = db.Column(db.String(80), nullable=False, unique=True)
+    description = db.Column(db.Text, nullable=True)
+    default_visibility = db.Column(db.String(20), nullable=False,
+                                   default='PUBLIC', server_default='PUBLIC')
+    member_roster_public = db.Column(db.Boolean, nullable=False, default=True, server_default='1')
+    storage_quota_bytes = db.Column(db.BigInteger, nullable=False,
+                                    default=20 * 1024 * 1024 * 1024,
+                                    server_default=str(20 * 1024 * 1024 * 1024))
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    purge_after = db.Column(db.DateTime, nullable=True)
+
+    memberships = db.relationship('BandMembership', backref='band', lazy=True,
+                                  cascade='all, delete-orphan')
+
+    __table_args__ = (
+        db.CheckConstraint("default_visibility IN ('PUBLIC', 'MEMBERS')", name='ck_band_visibility'),
+        db.CheckConstraint('storage_quota_bytes > 0', name='ck_band_storage_quota'),
+    )
+
+
+class BandMembership(db.Model):
+    __tablename__ = 'band_membership'
+
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='CASCADE'), nullable=False, index=True)
+    role = db.Column(db.String(20), nullable=False, default='member', server_default='member')
+    status = db.Column(db.String(20), nullable=False, default='pending', server_default='pending')
+    requested_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    approved_at = db.Column(db.DateTime, nullable=True)
+    left_at = db.Column(db.DateTime, nullable=True)
+    acted_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+
+    user = db.relationship('AppUser', foreign_keys=[user_id])
+    acted_by = db.relationship('AppUser', foreign_keys=[acted_by_user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('band_id', 'user_id', name='uq_band_membership_user'),
+        db.CheckConstraint("role IN ('owner', 'admin', 'member')", name='ck_band_membership_role'),
+        db.CheckConstraint("status IN ('pending', 'active', 'rejected', 'left')", name='ck_band_membership_status'),
+    )
+
+
+class BandCreationRequest(db.Model):
+    __tablename__ = 'band_creation_request'
+
+    id = db.Column(db.Integer, primary_key=True)
+    requested_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='CASCADE'), nullable=False,
+                                      index=True)
+    name = db.Column(db.String(120), nullable=False)
+    slug = db.Column(db.String(80), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='pending', server_default='pending')
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+    review_note = db.Column(db.Text, nullable=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, unique=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+
+    requested_by = db.relationship('AppUser', foreign_keys=[requested_by_user_id])
+    reviewed_by = db.relationship('AppUser', foreign_keys=[reviewed_by_user_id])
+    band = db.relationship('Band')
+
+    __table_args__ = (
+        db.CheckConstraint("status IN ('pending', 'active', 'rejected')", name='ck_band_creation_request_status'),
+    )
+
+
+class BandInviteCode(db.Model):
+    __tablename__ = 'band_invite_code'
+
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    revoked_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+
+    band = db.relationship('Band')
+    created_by = db.relationship('AppUser', foreign_keys=[created_by_user_id])
+    revoked_by = db.relationship('AppUser', foreign_keys=[revoked_by_user_id])
+
+
+class AuditEvent(db.Model):
+    __tablename__ = 'audit_event'
+
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='SET NULL'), nullable=True, index=True)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True, index=True)
+    event_type = db.Column(db.String(100), nullable=False)
+    target_type = db.Column(db.String(100), nullable=True)
+    target_id = db.Column(db.String(100), nullable=True)
+    details_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    band = db.relationship('Band')
+    actor = db.relationship('AppUser')
+
+
 class Song(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
