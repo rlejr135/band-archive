@@ -57,6 +57,11 @@ def upgrade():
     )
     op.create_index('ix_band_membership_band_id', 'band_membership', ['band_id'])
     op.create_index('ix_band_membership_user_id', 'band_membership', ['user_id'])
+    op.create_index(
+        'uq_band_membership_active_owner', 'band_membership', ['band_id'], unique=True,
+        sqlite_where=sa.text("role = 'owner' AND status = 'active'"),
+        postgresql_where=sa.text("role = 'owner' AND status = 'active'"),
+    )
     op.create_table(
         'band_creation_request',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -78,6 +83,12 @@ def upgrade():
         sa.UniqueConstraint('band_id'),
     )
     op.create_index('ix_band_creation_request_requested_by_user_id', 'band_creation_request', ['requested_by_user_id'])
+    op.create_index(
+        'uq_band_creation_request_pending_user_slug', 'band_creation_request',
+        ['requested_by_user_id', 'slug'], unique=True,
+        sqlite_where=sa.text("status = 'pending'"),
+        postgresql_where=sa.text("status = 'pending'"),
+    )
     op.create_table(
         'band_invite_code',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -110,17 +121,53 @@ def upgrade():
     )
     op.create_index('ix_audit_event_actor_user_id', 'audit_event', ['actor_user_id'])
     op.create_index('ix_audit_event_band_id', 'audit_event', ['band_id'])
+    _create_audit_immutability_triggers()
+
+
+def _create_audit_immutability_triggers():
+    bind = op.get_bind()
+    if bind.dialect.name == 'sqlite':
+        op.execute("""
+            CREATE TRIGGER audit_event_no_update
+            BEFORE UPDATE ON audit_event
+            BEGIN SELECT RAISE(ABORT, 'audit_event is append-only'); END
+        """)
+        op.execute("""
+            CREATE TRIGGER audit_event_no_delete
+            BEFORE DELETE ON audit_event
+            BEGIN SELECT RAISE(ABORT, 'audit_event is append-only'); END
+        """)
+    elif bind.dialect.name == 'postgresql':
+        op.execute("""
+            CREATE FUNCTION audit_event_append_only() RETURNS trigger AS $$
+            BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;
+            $$ LANGUAGE plpgsql
+        """)
+        op.execute("CREATE TRIGGER audit_event_no_update BEFORE UPDATE ON audit_event "
+                   "FOR EACH ROW EXECUTE FUNCTION audit_event_append_only()")
+        op.execute("CREATE TRIGGER audit_event_no_delete BEFORE DELETE ON audit_event "
+                   "FOR EACH ROW EXECUTE FUNCTION audit_event_append_only()")
 
 
 def downgrade():
+    bind = op.get_bind()
+    if bind.dialect.name == 'sqlite':
+        op.execute('DROP TRIGGER IF EXISTS audit_event_no_delete')
+        op.execute('DROP TRIGGER IF EXISTS audit_event_no_update')
+    elif bind.dialect.name == 'postgresql':
+        op.execute('DROP TRIGGER IF EXISTS audit_event_no_delete ON audit_event')
+        op.execute('DROP TRIGGER IF EXISTS audit_event_no_update ON audit_event')
+        op.execute('DROP FUNCTION IF EXISTS audit_event_append_only()')
     op.drop_index('ix_audit_event_band_id', table_name='audit_event')
     op.drop_index('ix_audit_event_actor_user_id', table_name='audit_event')
     op.drop_table('audit_event')
     op.drop_index('ix_band_invite_code_band_id', table_name='band_invite_code')
     op.drop_table('band_invite_code')
     op.drop_index('ix_band_creation_request_requested_by_user_id', table_name='band_creation_request')
+    op.drop_index('uq_band_creation_request_pending_user_slug', table_name='band_creation_request')
     op.drop_table('band_creation_request')
     op.drop_index('ix_band_membership_user_id', table_name='band_membership')
     op.drop_index('ix_band_membership_band_id', table_name='band_membership')
+    op.drop_index('uq_band_membership_active_owner', table_name='band_membership')
     op.drop_table('band_membership')
     op.drop_table('band')

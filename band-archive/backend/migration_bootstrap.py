@@ -283,7 +283,42 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
                 differences.append(
                     f'{table_name}.{label} expected={expected!r} actual={actual!r}'
                 )
+    # SQLAlchemy's generic inspector does not reliably expose trigger bodies.
+    # Once a DB has recorded the Phase 3 head, require the database-level
+    # append-only guard explicitly rather than trusting the ORM event hook.
+    if 'audit_event' in actual_tables and ALEMBIC_VERSION_TABLE in inspect(connection).get_table_names():
+        differences.extend(_audit_trigger_differences(connection))
     return differences
+
+
+def _audit_trigger_differences(connection):
+    """Return explicit append-only trigger contract defects, fail closed."""
+    dialect = connection.dialect.name
+    if dialect == 'sqlite':
+        rows = connection.execute(text(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
+            "AND name IN ('audit_event_no_update', 'audit_event_no_delete')"
+        )).all()
+        actual = {name: (sql or '').upper() for name, sql in rows}
+        expected = {
+            'audit_event_no_update': 'BEFORE UPDATE ON AUDIT_EVENT',
+            'audit_event_no_delete': 'BEFORE DELETE ON AUDIT_EVENT',
+        }
+        return [f'audit_event trigger {name} is missing or invalid' for name, clause in expected.items()
+                if clause not in actual.get(name, '') or 'RAISE(ABORT' not in actual.get(name, '')]
+    if dialect == 'postgresql':
+        rows = connection.execute(text("""
+            SELECT trigger_name, action_statement
+            FROM information_schema.triggers
+            WHERE event_object_table = 'audit_event'
+              AND trigger_name IN ('audit_event_no_update', 'audit_event_no_delete')
+        """)).all()
+        actual = {name: (statement or '').lower() for name, statement in rows}
+        return [f'audit_event trigger {name} is missing or invalid'
+                for name in ('audit_event_no_update', 'audit_event_no_delete')
+                if 'audit_event_append_only' not in actual.get(name, '')]
+    # An unknown dialect cannot prove the invariant.
+    return ['audit_event triggers cannot be verified for this database dialect']
 
 
 def _application_tables(connection):

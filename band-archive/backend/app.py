@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from extensions import db
 from errors import register_error_handlers
 from storage import storage
-from migration_bootstrap import MIGRATIONS_DIRECTORY, baseline_metadata
+from migration_bootstrap import MIGRATIONS_DIRECTORY, migration_head_revision, baseline_metadata
 from routes.songs import songs_bp
 from routes.dashboard import dashboard_bp
 from routes.suggestions import suggestions_bp
@@ -31,6 +31,21 @@ load_dotenv()
 
 _SQLITE_MIGRATION_LOCK_RETRIES = 8
 _SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 750
+_BAND_SCHEMA_TABLES = {
+    'band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event',
+}
+
+
+def _band_schema_ready():
+    """Return true only for a fully Alembic-upgraded Phase 3 schema."""
+    from sqlalchemy import inspect, text
+
+    with db.engine.connect() as connection:
+        tables = set(inspect(connection).get_table_names())
+        if not _BAND_SCHEMA_TABLES.issubset(tables) or 'alembic_version' not in tables:
+            return False
+        versions = connection.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
+    return versions == [migration_head_revision()]
 
 
 def _add_sqlite_column(conn, table, column, definition):
@@ -337,6 +352,9 @@ def create_app(config_class=None, start_worker=None):
         # migration_runner before a process enables the protected API.
         baseline_metadata().create_all(db.engine)
         _run_migrations(app)
+        # v2 routes remain registered for a deterministic response, but are
+        # disabled until the isolated migration runner has produced head.
+        app.config['BAND_API_SCHEMA_READY'] = _band_schema_ready()
         from routes.uploads import recover_multipart_upload_sessions
         recover_multipart_upload_sessions(app)
         if app.config.get('SUPABASE_AUTH_ENABLED'):

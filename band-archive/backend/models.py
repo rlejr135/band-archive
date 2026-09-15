@@ -94,6 +94,14 @@ class BandMembership(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint('band_id', 'user_id', name='uq_band_membership_user'),
+        # A partial unique index is portable between SQLite and PostgreSQL and
+        # gives the owner invariant a database backstop: a band can never have
+        # two active owners, including when two application processes race.
+        db.Index(
+            'uq_band_membership_active_owner', 'band_id', unique=True,
+            sqlite_where=db.text("role = 'owner' AND status = 'active'"),
+            postgresql_where=db.text("role = 'owner' AND status = 'active'"),
+        ),
         db.CheckConstraint("role IN ('owner', 'admin', 'member')", name='ck_band_membership_role'),
         db.CheckConstraint("status IN ('pending', 'active', 'rejected', 'left')", name='ck_band_membership_status'),
     )
@@ -120,6 +128,13 @@ class BandCreationRequest(db.Model):
     band = db.relationship('Band')
 
     __table_args__ = (
+        # Only one still-actionable request for a user/slug can exist.  Old
+        # decisions remain as history and do not prevent a later request.
+        db.Index(
+            'uq_band_creation_request_pending_user_slug', 'requested_by_user_id', 'slug', unique=True,
+            sqlite_where=db.text("status = 'pending'"),
+            postgresql_where=db.text("status = 'pending'"),
+        ),
         db.CheckConstraint("status IN ('pending', 'active', 'rejected')", name='ck_band_creation_request_status'),
     )
 

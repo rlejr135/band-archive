@@ -275,6 +275,11 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
             assert 'band' not in tables
             assert 'band_membership' not in tables
             assert _version(runtime) == BASELINE_REVISION
+        # v1 remains healthy; the Phase 3 blueprint fails closed without
+        # touching absent tables instead of returning an operational 500.
+        unavailable = runtime.test_client().get('/api/v2/public/bands')
+        assert unavailable.status_code == 503
+        assert unavailable.get_json()['error'] == 'band_schema_unavailable'
     finally:
         _dispose(runtime)
     assert database_path.read_bytes() == before_runtime_boot
@@ -288,6 +293,13 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
         with runtime_after_upgrade.app_context():
             assert {'app_user', 'auth_bootstrap_state'}.issubset(inspect(db.engine).get_table_names())
             assert _version(runtime_after_upgrade) == migration_head_revision()
+            assert runtime_after_upgrade.config['BAND_API_SCHEMA_READY'] is True
+            with db.engine.begin() as connection:
+                connection.execute(text("INSERT INTO audit_event (event_type, created_at) VALUES ('test', CURRENT_TIMESTAMP)"))
+                with pytest.raises(Exception):
+                    connection.execute(text("UPDATE audit_event SET event_type = 'changed'"))
+                with pytest.raises(Exception):
+                    connection.execute(text("DELETE FROM audit_event"))
     finally:
         _dispose(runtime_after_upgrade)
 

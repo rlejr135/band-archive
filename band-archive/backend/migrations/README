@@ -19,6 +19,22 @@ Do not use `flask db upgrade` during this compatibility period: its normal app
 factory still runs legacy schema setup. `migration_runner.py` is the only
 supported migration operator path.
 
+## Phase 3 band API readiness
+
+`/api/v2` band routes are deliberately unavailable (HTTP 503) until this
+runner has completed the current head revision. This keeps the v1 public app
+from querying tables that do not exist on a baseline database.
+
+1. Back up the database.
+2. For an existing pre-Alembic database, run `stamp-existing` as above.
+3. Run `python migration_runner.py --database-url ... upgrade` and repeat it
+   once to confirm it is idempotent.
+4. Start or restart the app only after the runner reports head.
+
+The Phase 3 revision includes partial unique indexes for active owners and
+pending requests plus database triggers that reject any update or deletion of
+`audit_event`. PostgreSQL staging remains required before production cutover.
+
 The Phase 1 verifier has SQLite integration coverage and PostgreSQL dialect
 unit coverage for the equivalent `FLOAT`/`DOUBLE PRECISION` reflection. It
 does not yet run against a live PostgreSQL service; that is a required
