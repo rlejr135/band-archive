@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from extensions import db
 from errors import register_error_handlers
 from storage import storage
-from migration_bootstrap import MIGRATIONS_DIRECTORY
+from migration_bootstrap import MIGRATIONS_DIRECTORY, baseline_metadata
 from routes.songs import songs_bp
 from routes.dashboard import dashboard_bp
 from routes.suggestions import suggestions_bp
@@ -330,10 +330,16 @@ def create_app(config_class=None, start_worker=None):
     storage.init_app(app)
 
     with app.app_context():
-        db.create_all()
+        # The v1 compatibility path may create only the historical schema.
+        # Alembic-managed auth and later multiband tables must be created by
+        # migration_runner before a process enables the protected API.
+        baseline_metadata().create_all(db.engine)
         _run_migrations(app)
         from routes.uploads import recover_multipart_upload_sessions
         recover_multipart_upload_sessions(app)
+        if app.config.get('SUPABASE_AUTH_ENABLED'):
+            from auth_service import assert_auth_schema_ready
+            assert_auth_schema_ready()
 
     if start_worker is None:
         start_worker = not app.testing

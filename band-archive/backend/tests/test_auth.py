@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -25,6 +26,11 @@ class AuthConfig(TestingConfig):
     BOOTSTRAP_PLATFORM_ADMIN_EMAIL = 'Admin@Example.com'
 
 
+class AuthTestBootstrapConfig(AuthConfig):
+    """Tests create the managed schema explicitly after app startup."""
+    SUPABASE_AUTH_ENABLED = False
+
+
 def _jwk(private_key, kid):
     data = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
     data.update({'kid': kid, 'alg': 'RS256', 'use': 'sig'})
@@ -44,10 +50,11 @@ class _Response:
 
 @pytest.fixture
 def auth_app():
-    app = create_app(AuthConfig, start_worker=False)
+    app = create_app(AuthTestBootstrapConfig, start_worker=False)
     with app.app_context():
         db.drop_all()
         db.create_all()
+    app.config['SUPABASE_AUTH_ENABLED'] = True
     yield app
     with app.app_context():
         db.session.remove()
@@ -116,9 +123,19 @@ def test_me_rejects_invalid_or_unverified_claims(auth_app, signer, claim, value)
 
 def test_me_rejects_forged_and_unknown_kid_tokens(auth_app, signer):
     forged = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
-    assert _get_me(auth_app, _token(forged)).status_code == 401
-    assert _get_me(auth_app, _token(signer, kid='unknown')).status_code == 401
+    calls = _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    assert _get_me(auth_app, _token(signer)).status_code == 200
+    for _ in range(4):
+        assert _get_me(auth_app, _token(forged)).status_code == 401
+    # One bounded same-kid rotation lookup is allowed; invalid signatures do
+    # not turn into one network fetch per bearer-token request.
+    assert len(calls) == 2
+
+    calls = _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    assert _get_me(auth_app, _token(signer)).status_code == 200
+    for _ in range(4):
+        assert _get_me(auth_app, _token(signer, kid='unknown')).status_code == 401
+    assert len(calls) == 2
 
 
 def test_jwks_unknown_kid_refreshes_for_rotation(auth_app, signer):
@@ -126,6 +143,27 @@ def test_jwks_unknown_kid_refreshes_for_rotation(auth_app, signer):
     calls = _install_jwks(auth_app, [[_jwk(signer, 'key-1')], [_jwk(next_signer, 'key-2')]])
     assert _get_me(auth_app, _token(signer, kid='key-1')).status_code == 200
     assert _get_me(auth_app, _token(next_signer, kid='key-2')).status_code == 200
+    assert len(calls) == 2
+
+
+def test_jwks_unknown_kid_refresh_is_single_flight_under_concurrency(signer):
+    calls = []
+
+    def fetch(url, timeout):
+        calls.append((url, timeout))
+        return _Response([_jwk(signer, 'key-1')])
+
+    cache = JWKSCache('https://project.supabase.co/auth/v1/.well-known/jwks.json', 300, 1, fetch=fetch)
+    cache.key_for('key-1')  # prime a known, fresh cache generation
+
+    def unknown_key():
+        with pytest.raises(Exception):
+            cache.key_for('unknown')
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: unknown_key(), range(8)))
+
+    # Initial fill plus exactly one serialized rotation probe.
     assert len(calls) == 2
 
 

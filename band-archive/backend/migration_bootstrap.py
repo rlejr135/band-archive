@@ -317,6 +317,24 @@ def _known_revisions():
     return {revision for revision in script.revision_map._revision_map if revision is not None}
 
 
+def migration_head_revision():
+    """Return the checked-in Alembic head for runtime readiness checks."""
+    migrate = current_app.extensions['migrate'].migrate
+    config = migrate.get_config(str(MIGRATIONS_DIRECTORY))
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
+def metadata_for_recorded_revision(revision):
+    """Return the exact metadata expected for a known recorded revision."""
+    if revision == BASELINE_REVISION:
+        return baseline_metadata()
+    if revision == migration_head_revision():
+        return db.metadata
+    raise MigrationBootstrapError(
+        f'No exact schema snapshot is available for Alembic revision {revision!r}; refusing upgrade.'
+    )
+
+
 def assert_upgrade_preflight():
     """Permit upgrade only for an empty DB or a valid stamped migration DB."""
     with db.engine.connect() as connection:
@@ -338,6 +356,7 @@ def assert_upgrade_preflight():
             raise MigrationBootstrapError(
                 f'Database has an unknown or invalid Alembic revision {version!r}; refusing upgrade.'
             )
+        _assert_current_schema(connection, metadata=metadata_for_recorded_revision(version[0]))
         return 'stamped'
 
 

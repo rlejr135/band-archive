@@ -34,3 +34,17 @@ existing public v1 routes continue to boot. Once it is true, startup fails if
 the complete non-secret contract is missing. The current SQLite migration path
 remains unchanged; use only `python migration_runner.py --database-url ...`
 for formal migrations, never `flask db upgrade`.
+
+## Required release order
+
+1. Stop the backend or keep `SUPABASE_AUTH_ENABLED=false`.
+2. Back up the database, stamp a verified legacy database if necessary, then
+   run `python migration_runner.py --database-url ... upgrade`.
+3. Verify the Alembic head and `app_user`/`auth_bootstrap_state` tables on a
+   staging copy.
+4. Enable `SUPABASE_AUTH_ENABLED=true` and start the backend.
+
+The normal app factory deliberately creates only the historical v1 metadata.
+It never creates Alembic-managed auth tables. With auth enabled it checks both
+the required tables and Alembic head, then refuses startup until this release
+order has been completed.

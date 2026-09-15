@@ -8,6 +8,7 @@ import jwt
 import requests
 from flask import current_app, g, request
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import inspect, text
 
 from extensions import db
 from models import AppUser, AuthBootstrapState
@@ -30,6 +31,26 @@ def normalize_email(value):
     return email
 
 
+def assert_auth_schema_ready():
+    """Require isolated Alembic upgrade before enabling protected endpoints."""
+    from migration_bootstrap import ALEMBIC_VERSION_TABLE, migration_head_revision
+
+    tables = set(inspect(db.engine).get_table_names())
+    required = {'app_user', 'auth_bootstrap_state', ALEMBIC_VERSION_TABLE}
+    if not required.issubset(tables):
+        raise RuntimeError(
+            'Supabase authentication requires an isolated Alembic upgrade before app startup. '
+            'Run `python migration_runner.py --database-url ... upgrade` while the app is stopped.'
+        )
+    with db.engine.connect() as connection:
+        revision = connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one_or_none()
+    if revision != migration_head_revision():
+        raise RuntimeError(
+            'Supabase authentication requires the database at Alembic head before app startup. '
+            'Run `python migration_runner.py --database-url ... upgrade` while the app is stopped.'
+        )
+
+
 @dataclass(frozen=True)
 class VerifiedIdentity:
     subject: str
@@ -48,8 +69,11 @@ class JWKSCache:
         self._expires_at = 0
         self._keys = {}
         self._lock = threading.Lock()
+        self._generation = 0
+        self._rotation_cooldown_until = 0
+        self._negative_kids = {}
 
-    def _refresh(self):
+    def _refresh_locked(self, rotation=False):
         try:
             response = self.fetch(self.url, timeout=self.timeout_seconds)
             response.raise_for_status()
@@ -63,19 +87,66 @@ class JWKSCache:
         except Exception as error:
             raise AuthError('auth_unavailable', 'Authentication key service is unavailable.', 503) from error
         self._keys = parsed
-        self._expires_at = self.clock() + self.ttl_seconds
+        now = self.clock()
+        self._expires_at = now + self.ttl_seconds
+        self._generation += 1
+        if rotation:
+            self._rotation_cooldown_until = self._expires_at
+        self._negative_kids.clear()
 
-    def key_for(self, kid, force_refresh=False):
+    def _ensure_fresh_locked(self):
+        if self.clock() >= self._expires_at:
+            self._refresh_locked()
+            return True
+        return False
+
+    def _unknown_key(self, kid):
+        self._negative_kids[kid] = self.clock() + self.ttl_seconds
+        raise AuthError('invalid_token', 'Token signing key is unknown.')
+
+    def key_for(self, kid):
+        """Return a key and generation, with one bounded rotation fetch.
+
+        The lock spans network refreshes deliberately: it makes the refresh a
+        single-flight operation. Negative kids and the generation cooldown
+        ensure a flood of forged or unknown-kid tokens cannot fetch JWKS once
+        per request.
+        """
         with self._lock:
-            if force_refresh or self.clock() >= self._expires_at:
-                self._refresh()
+            freshly_loaded = self._ensure_fresh_locked()
             key = self._keys.get(kid)
-            if key is None and not force_refresh:
-                self._refresh()  # Unknown kid can be a normal key rotation.
+            if key is not None:
+                return key, self._generation, not freshly_loaded
+
+            if self._negative_kids.get(kid, 0) > self.clock():
+                self._unknown_key(kid)
+            # The initial/TTL fetch was already a current-key lookup. Avoid a
+            # second request for the same token, but allow one recovery fetch
+            # for a new kid seen while an otherwise fresh cache is in use.
+            if not freshly_loaded and self.clock() >= self._rotation_cooldown_until:
+                self._refresh_locked(rotation=True)
                 key = self._keys.get(kid)
+                if key is not None:
+                    return key, self._generation, False
+            self._unknown_key(kid)
+
+    def key_after_signature_failure(self, kid, observed_generation, allow_recovery):
+        """Recover a genuine same-kid rotation at most once per cache TTL."""
+        with self._lock:
+            self._ensure_fresh_locked()
+            # Another request already refreshed after this token selected its
+            # key. Re-use that result instead of amplifying the remote fetch.
+            if observed_generation != self._generation:
+                key = self._keys.get(kid)
+                if key is None:
+                    self._unknown_key(kid)
+                return key, self._generation
+            if allow_recovery and self.clock() >= self._rotation_cooldown_until:
+                self._refresh_locked(rotation=True)
+            key = self._keys.get(kid)
             if key is None:
-                raise AuthError('invalid_token', 'Token signing key is unknown.')
-            return key
+                self._unknown_key(kid)
+            return key, self._generation
 
 
 def _cache():
@@ -122,11 +193,12 @@ def verify_bearer_token(header=None):
         kid = unverified.get('kid')
         if not isinstance(kid, str) or not kid:
             raise AuthError('invalid_token', 'Token signing key is missing.')
-        key = _cache().key_for(kid)
+        key, generation, allow_recovery = _cache().key_for(kid)
         try:
             claims = _decode(token, key)
         except jwt.InvalidSignatureError:
-            claims = _decode(token, _cache().key_for(kid, force_refresh=True))
+            replacement, _ = _cache().key_after_signature_failure(kid, generation, allow_recovery)
+            claims = _decode(token, replacement)
     except AuthError:
         raise
     except jwt.PyJWTError as error:
