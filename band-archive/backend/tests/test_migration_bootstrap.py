@@ -12,6 +12,7 @@ from migration_bootstrap import (
     MIGRATIONS_DIRECTORY,
     baseline_metadata,
     create_migration_app,
+    migration_head_revision,
     schema_contract_differences,
     schema_differences,
     types_are_equivalent,
@@ -76,7 +77,8 @@ def test_fresh_database_upgrade_creates_current_baseline(tmp_path):
             with db.engine.connect() as connection:
                 assert schema_differences(connection) == []
                 assert schema_contract_differences(connection) == []
-        assert _version(app) == '20260914_02'
+        with app.app_context():
+            assert _version(app) == migration_head_revision()
     finally:
         _dispose(app)
 
@@ -100,7 +102,24 @@ def test_existing_current_schema_can_stamp_then_upgrade_idempotently(tmp_path):
 
         upgraded = _runner_command(database_path, 'upgrade')
         assert upgraded.exit_code == 0, upgraded.output
-        assert _version(app) == '20260914_02'
+        with app.app_context():
+            assert _version(app) == migration_head_revision()
+    finally:
+        _dispose(app)
+
+
+def test_revision_two_exact_snapshot_allows_only_compatible_phase_three_upgrade(tmp_path):
+    """Revision 02 needs its own snapshot, rather than comparing against head."""
+    database_path = tmp_path / 'revision-two.db'
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            upgrade(revision='20260914_02', directory=str(MIGRATIONS_DIRECTORY))
+            assert _version(app) == '20260914_02'
+        result = _runner_command(database_path, 'upgrade')
+        assert result.exit_code == 0, result.output
+        with app.app_context():
+            assert _version(app) == migration_head_revision()
     finally:
         _dispose(app)
 
@@ -253,6 +272,8 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
             tables = set(inspect(db.engine).get_table_names())
             assert 'app_user' not in tables
             assert 'auth_bootstrap_state' not in tables
+            assert 'band' not in tables
+            assert 'band_membership' not in tables
             assert _version(runtime) == BASELINE_REVISION
     finally:
         _dispose(runtime)
@@ -266,7 +287,7 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
     try:
         with runtime_after_upgrade.app_context():
             assert {'app_user', 'auth_bootstrap_state'}.issubset(inspect(db.engine).get_table_names())
-            assert _version(runtime_after_upgrade) == '20260914_02'
+            assert _version(runtime_after_upgrade) == migration_head_revision()
     finally:
         _dispose(runtime_after_upgrade)
 

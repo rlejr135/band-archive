@@ -76,11 +76,15 @@ def require_band_role(user, band_id, roles=MANAGER_ROLES):
     return band, membership
 
 
-def membership_dict(membership):
+def membership_dict(membership, public=False):
+    user = None
+    if membership.user:
+        user = ({'id': membership.user.supabase_user_id, 'display_name': membership.user.display_name}
+                if public else membership.user.to_dict())
     return {
         'id': membership.id,
         'band_id': membership.band_id,
-        'user': membership.user.to_dict() if membership.user else None,
+        'user': user,
         'role': membership.role,
         'status': membership.status,
         'requested_at': membership.requested_at.isoformat() if membership.requested_at else None,
@@ -113,7 +117,7 @@ def band_dict(band, viewer=None, include_roster=False):
     if active_member and membership.role in MANAGER_ROLES:
         response['storage_quota_bytes'] = band.storage_quota_bytes
     if include_roster and (band.member_roster_public or active_member):
-        response['members'] = [membership_dict(item) for item in BandMembership.query.filter_by(
+        response['members'] = [membership_dict(item, public=not active_member) for item in BandMembership.query.filter_by(
             band_id=band.id, status=ACTIVE).order_by(BandMembership.id).all()]
     return response
 
@@ -139,8 +143,9 @@ def create_request(user, payload):
     item = BandCreationRequest(requested_by_user_id=user.id, name=name, slug=requested_slug,
                                description=description)
     db.session.add(item)
-    audit('band_creation_requested', user, target=item, details={'slug': requested_slug})
     try:
+        db.session.flush()
+        audit('band_creation_requested', user, target=item, details={'slug': requested_slug})
         db.session.commit()
     except IntegrityError as error:
         db.session.rollback()
@@ -200,8 +205,9 @@ def join_request(user, band_id):
         return item, False
     item = BandMembership(band_id=band.id, user_id=user.id)
     db.session.add(item)
-    audit('membership_requested', user, band=band, target=item)
     try:
+        db.session.flush()
+        audit('membership_requested', user, band=band, target=item)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -235,6 +241,7 @@ def create_invite(actor, band_id):
     raw = secrets.token_urlsafe(32)
     invite = BandInviteCode(band_id=band.id, token_hash=_token_hash(raw), created_by_user_id=actor.id)
     db.session.add(invite)
+    db.session.flush()
     audit('invite_created', actor, band=band, target=invite)
     db.session.commit()
     return invite, raw
@@ -269,8 +276,9 @@ def join_invite(user, raw):
         item = BandMembership(band_id=invite.band_id, user_id=user.id, status=ACTIVE,
                               approved_at=now(), acted_by_user_id=user.id)
         db.session.add(item)
-        audit('membership_joined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
         try:
+            db.session.flush()
+            audit('membership_joined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
