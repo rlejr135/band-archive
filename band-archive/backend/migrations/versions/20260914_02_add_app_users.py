@@ -31,8 +31,6 @@ def upgrade():
         sa.UniqueConstraint('supabase_user_id'),
         sa.UniqueConstraint('email'),
     )
-    op.create_index('ix_app_user_supabase_user_id', 'app_user', ['supabase_user_id'], unique=True)
-    op.create_index('ix_app_user_email', 'app_user', ['email'], unique=True)
     op.create_table(
         'auth_bootstrap_state',
         sa.Column('key', sa.String(length=64), nullable=False),
@@ -46,6 +44,4 @@ def upgrade():
 
 def downgrade():
     op.drop_table('auth_bootstrap_state')
-    op.drop_index('ix_app_user_email', table_name='app_user')
-    op.drop_index('ix_app_user_supabase_user_id', table_name='app_user')
     op.drop_table('app_user')

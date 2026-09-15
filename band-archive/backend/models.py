@@ -13,8 +13,8 @@ class AppUser(db.Model):
     __tablename__ = 'app_user'
 
     id = db.Column(db.Integer, primary_key=True)
-    supabase_user_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
-    email = db.Column(db.String(320), nullable=False, unique=True, index=True)
+    supabase_user_id = db.Column(db.String(64), nullable=False, unique=True)
+    email = db.Column(db.String(320), nullable=False, unique=True)
     display_name = db.Column(db.String(100), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='active', server_default='active')
     email_verified = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
