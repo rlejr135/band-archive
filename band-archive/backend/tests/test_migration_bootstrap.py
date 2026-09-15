@@ -260,6 +260,8 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
 
     upgraded = _runner_command(database_path, 'upgrade')
     assert upgraded.exit_code == 0, upgraded.output
+    repeated = _runner_command(database_path, 'upgrade')
+    assert repeated.exit_code == 0, repeated.output
     runtime_after_upgrade = create_app(_runtime_config(database_path), start_worker=False)
     try:
         with runtime_after_upgrade.app_context():
