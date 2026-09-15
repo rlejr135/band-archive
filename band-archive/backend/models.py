@@ -1,6 +1,7 @@
 
 from datetime import datetime, timedelta, timezone
 import uuid
+from sqlalchemy import event
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
@@ -153,6 +154,13 @@ class AuditEvent(db.Model):
 
     band = db.relationship('Band')
     actor = db.relationship('AppUser')
+
+
+@event.listens_for(AuditEvent, 'before_update')
+@event.listens_for(AuditEvent, 'before_delete')
+def _audit_events_are_append_only(mapper, connection, target):
+    """Keep audit history immutable even when code uses an ORM session."""
+    raise RuntimeError('Audit events are append-only and cannot be changed or deleted.')
 
 
 class Song(db.Model):

@@ -1,0 +1,347 @@
+"""Authorization and transactional operations for the Phase 3 band boundary."""
+
+import hashlib
+import json
+import re
+import secrets
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy.exc import IntegrityError
+
+from errors import NotFoundError, ValidationError
+from extensions import db
+from models import AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership
+
+
+OWNER_ROLES = {'owner'}
+MANAGER_ROLES = {'owner', 'admin'}
+ACTIVE = 'active'
+_SLUG = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+
+
+def now():
+    return datetime.now(timezone.utc)
+
+
+def slug(value):
+    value = value.strip().casefold() if isinstance(value, str) else ''
+    if not _SLUG.fullmatch(value) or len(value) > 80:
+        raise ValidationError('slug must use lowercase letters, numbers, and single hyphens.')
+    return value
+
+
+def required_text(payload, key, maximum):
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
+        raise ValidationError(f'{key} is required and must be at most {maximum} characters.')
+    return value.strip()
+
+
+def optional_text(payload, key):
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValidationError(f'{key} must be text.')
+    return value.strip() or None
+
+
+def audit(event_type, actor=None, band=None, target=None, details=None):
+    """Append a deliberately token-free audit record in the current transaction."""
+    db.session.add(AuditEvent(
+        band_id=band.id if band else None,
+        actor_user_id=actor.id if actor else None,
+        event_type=event_type,
+        target_type=target.__class__.__name__ if target else None,
+        target_id=str(target.id) if target and target.id is not None else None,
+        details_json=json.dumps(details, sort_keys=True) if details else None,
+    ))
+
+
+def active_membership(user, band_id, include_deleted=False):
+    band = Band.query.filter_by(id=band_id).one_or_none()
+    if band is None or (band.deleted_at is not None and not include_deleted):
+        raise NotFoundError('Band not found')
+    membership = BandMembership.query.filter_by(band_id=band.id, user_id=user.id, status=ACTIVE).one_or_none()
+    return band, membership
+
+
+def require_band_role(user, band_id, roles=MANAGER_ROLES):
+    band, membership = active_membership(user, band_id)
+    if membership is None:
+        # Do not disclose a band to a non-member through protected endpoints.
+        raise NotFoundError('Band not found')
+    if membership.role not in roles:
+        raise ValidationError('Insufficient band role.', 403)
+    return band, membership
+
+
+def membership_dict(membership):
+    return {
+        'id': membership.id,
+        'band_id': membership.band_id,
+        'user': membership.user.to_dict() if membership.user else None,
+        'role': membership.role,
+        'status': membership.status,
+        'requested_at': membership.requested_at.isoformat() if membership.requested_at else None,
+        'approved_at': membership.approved_at.isoformat() if membership.approved_at else None,
+        'left_at': membership.left_at.isoformat() if membership.left_at else None,
+    }
+
+
+def band_dict(band, viewer=None, include_roster=False):
+    membership = None
+    if viewer is not None:
+        membership = BandMembership.query.filter_by(band_id=band.id, user_id=viewer.id).one_or_none()
+    active_member = membership is not None and membership.status == ACTIVE
+    response = {
+        'id': band.id,
+        'name': band.name,
+        'slug': band.slug,
+        'description': band.description,
+        'default_visibility': band.default_visibility,
+        'member_roster_public': band.member_roster_public,
+        'created_at': band.created_at.isoformat() if band.created_at else None,
+        'permissions': {
+            'can_view_roster': bool(band.member_roster_public or active_member),
+            'can_manage_members': bool(active_member and membership.role in MANAGER_ROLES),
+            'can_manage_invites': bool(active_member and membership.role in MANAGER_ROLES),
+            'can_close_band': bool(active_member and membership.role == 'owner'),
+        },
+        'membership': membership_dict(membership) if membership else None,
+    }
+    if active_member and membership.role in MANAGER_ROLES:
+        response['storage_quota_bytes'] = band.storage_quota_bytes
+    if include_roster and (band.member_roster_public or active_member):
+        response['members'] = [membership_dict(item) for item in BandMembership.query.filter_by(
+            band_id=band.id, status=ACTIVE).order_by(BandMembership.id).all()]
+    return response
+
+
+def creation_request_dict(item):
+    return {
+        'id': item.id, 'name': item.name, 'slug': item.slug, 'description': item.description,
+        'status': item.status, 'band_id': item.band_id,
+        'created_at': item.created_at.isoformat() if item.created_at else None,
+        'reviewed_at': item.reviewed_at.isoformat() if item.reviewed_at else None,
+        'review_note': item.review_note,
+    }
+
+
+def create_request(user, payload):
+    name = required_text(payload, 'name', 120)
+    requested_slug = slug(payload.get('slug', ''))
+    description = optional_text(payload, 'description')
+    existing = BandCreationRequest.query.filter_by(
+        requested_by_user_id=user.id, slug=requested_slug, status='pending').one_or_none()
+    if existing:
+        return existing, False
+    item = BandCreationRequest(requested_by_user_id=user.id, name=name, slug=requested_slug,
+                               description=description)
+    db.session.add(item)
+    audit('band_creation_requested', user, target=item, details={'slug': requested_slug})
+    try:
+        db.session.commit()
+    except IntegrityError as error:
+        db.session.rollback()
+        existing = BandCreationRequest.query.filter_by(
+            requested_by_user_id=user.id, slug=requested_slug, status='pending').one_or_none()
+        if existing:
+            return existing, False
+        raise ValidationError('Unable to create band request.', 409) from error
+    return item, True
+
+
+def review_request(admin, request_id, approved, note=None):
+    item = BandCreationRequest.query.filter_by(id=request_id).one_or_none()
+    if item is None:
+        raise NotFoundError('Band creation request not found')
+    if item.status != 'pending':
+        return item, False
+    timestamp = now()
+    item.reviewed_by_user_id = admin.id
+    item.reviewed_at = timestamp
+    item.review_note = note
+    if not approved:
+        item.status = 'rejected'
+        audit('band_creation_rejected', admin, target=item)
+        db.session.commit()
+        return item, True
+    if Band.query.filter_by(slug=item.slug).first() is not None:
+        raise ValidationError('Band slug is already in use.', 409)
+    band = Band(name=item.name, slug=item.slug, description=item.description, created_by_user_id=item.requested_by_user_id)
+    db.session.add(band)
+    db.session.flush()
+    owner = BandMembership(band_id=band.id, user_id=item.requested_by_user_id, role='owner', status=ACTIVE,
+                           approved_at=timestamp, acted_by_user_id=admin.id)
+    db.session.add(owner)
+    item.status = 'active'
+    item.band_id = band.id
+    audit('band_created', admin, band=band, target=item, details={'owner_user_id': owner.user_id})
+    audit('membership_approved', admin, band=band, target=owner, details={'role': 'owner'})
+    try:
+        db.session.commit()
+    except IntegrityError as error:
+        db.session.rollback()
+        # A concurrent reviewer either completed the request or won the slug.
+        item = BandCreationRequest.query.filter_by(id=request_id).one_or_none()
+        if item is not None and item.status != 'pending':
+            return item, False
+        raise ValidationError('Band creation could not be approved.', 409) from error
+    return item, True
+
+
+def join_request(user, band_id):
+    band = Band.query.filter_by(id=band_id, deleted_at=None).one_or_none()
+    if band is None:
+        raise NotFoundError('Band not found')
+    item = BandMembership.query.filter_by(band_id=band.id, user_id=user.id).one_or_none()
+    if item is not None:
+        return item, False
+    item = BandMembership(band_id=band.id, user_id=user.id)
+    db.session.add(item)
+    audit('membership_requested', user, band=band, target=item)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        item = BandMembership.query.filter_by(band_id=band.id, user_id=user.id).one()
+        return item, False
+    return item, True
+
+
+def approve_membership(actor, membership_id, approved):
+    item = BandMembership.query.filter_by(id=membership_id).one_or_none()
+    if item is None:
+        raise NotFoundError('Membership not found')
+    band, _ = require_band_role(actor, item.band_id)
+    if item.status != 'pending':
+        return item, False
+    item.status = ACTIVE if approved else 'rejected'
+    item.approved_at = now() if approved else None
+    item.acted_by_user_id = actor.id
+    audit('membership_approved' if approved else 'membership_rejected', actor, band=band, target=item)
+    db.session.commit()
+    return item, True
+
+
+def _token_hash(raw):
+    return hashlib.sha256(raw.encode('ascii')).hexdigest()
+
+
+def create_invite(actor, band_id):
+    band, _ = require_band_role(actor, band_id)
+    # token_urlsafe(32) is a 256-bit random capability. Only its fixed-size hash persists.
+    raw = secrets.token_urlsafe(32)
+    invite = BandInviteCode(band_id=band.id, token_hash=_token_hash(raw), created_by_user_id=actor.id)
+    db.session.add(invite)
+    audit('invite_created', actor, band=band, target=invite)
+    db.session.commit()
+    return invite, raw
+
+
+def invite_dict(invite):
+    return {'id': invite.id, 'band_id': invite.band_id, 'created_at': invite.created_at.isoformat(),
+            'revoked_at': invite.revoked_at.isoformat() if invite.revoked_at else None}
+
+
+def revoke_invite(actor, band_id, invite_id):
+    band, _ = require_band_role(actor, band_id)
+    invite = BandInviteCode.query.filter_by(id=invite_id, band_id=band.id).one_or_none()
+    if invite is None:
+        raise NotFoundError('Invite code not found')
+    if invite.revoked_at is None:
+        invite.revoked_at = now()
+        invite.revoked_by_user_id = actor.id
+        audit('invite_revoked', actor, band=band, target=invite)
+        db.session.commit()
+    return invite
+
+
+def join_invite(user, raw):
+    if not isinstance(raw, str) or not raw or len(raw) > 200:
+        raise ValidationError('Invite code is invalid.', 404)
+    invite = BandInviteCode.query.filter_by(token_hash=_token_hash(raw)).one_or_none()
+    if invite is None or invite.revoked_at is not None or invite.band.deleted_at is not None:
+        raise ValidationError('Invite code is invalid.', 404)
+    item = BandMembership.query.filter_by(band_id=invite.band_id, user_id=user.id).one_or_none()
+    if item is None:
+        item = BandMembership(band_id=invite.band_id, user_id=user.id, status=ACTIVE,
+                              approved_at=now(), acted_by_user_id=user.id)
+        db.session.add(item)
+        audit('membership_joined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            item = BandMembership.query.filter_by(band_id=invite.band_id, user_id=user.id).one()
+    elif item.status in {'pending', 'rejected', 'left'}:
+        item.status = ACTIVE
+        item.left_at = None
+        item.approved_at = now()
+        item.acted_by_user_id = user.id
+        audit('membership_rejoined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
+        db.session.commit()
+    return item
+
+
+def set_role(actor, membership_id, role):
+    if role not in {'admin', 'member'}:
+        raise ValidationError('role must be admin or member.')
+    item = BandMembership.query.filter_by(id=membership_id).one_or_none()
+    if item is None:
+        raise NotFoundError('Membership not found')
+    band, actor_membership = require_band_role(actor, item.band_id)
+    if item.status != ACTIVE:
+        raise ValidationError('Only active memberships can receive roles.', 409)
+    if item.role == 'owner':
+        raise ValidationError('Transfer ownership before changing an owner role.', 409)
+    item.role = role
+    item.acted_by_user_id = actor.id
+    audit('membership_role_changed', actor, band=band, target=item, details={'role': role})
+    db.session.commit()
+    return item
+
+
+def transfer_ownership(actor, band_id, target_membership_id):
+    band, owner = require_band_role(actor, band_id, OWNER_ROLES)
+    target = BandMembership.query.filter_by(id=target_membership_id, band_id=band.id, status=ACTIVE).one_or_none()
+    if target is None:
+        raise NotFoundError('Membership not found')
+    if target.id == owner.id:
+        return target
+    owner.role = 'admin'
+    target.role = 'owner'
+    owner.acted_by_user_id = actor.id
+    target.acted_by_user_id = actor.id
+    audit('ownership_transferred', actor, band=band, target=target, details={'from_membership_id': owner.id})
+    db.session.commit()
+    return target
+
+
+def leave_band(actor, band_id):
+    band, item = active_membership(actor, band_id)
+    if item is None:
+        raise NotFoundError('Band not found')
+    if item.role == 'owner':
+        other_owner = BandMembership.query.filter(BandMembership.band_id == band.id,
+                                                  BandMembership.status == ACTIVE,
+                                                  BandMembership.role == 'owner',
+                                                  BandMembership.id != item.id).first()
+        if other_owner is None:
+            raise ValidationError('The sole owner must transfer ownership before leaving.', 409)
+    item.status = 'left'
+    item.left_at = now()
+    audit('membership_left', actor, band=band, target=item)
+    db.session.commit()
+    return item
+
+
+def close_band(actor, band_id):
+    band, _ = require_band_role(actor, band_id, OWNER_ROLES)
+    if band.deleted_at is None:
+        band.deleted_at = now()
+        band.purge_after = band.deleted_at + timedelta(days=30)
+        audit('band_closed', actor, band=band, target=band, details={'purge_after': band.purge_after.isoformat()})
+        db.session.commit()
+    return band
