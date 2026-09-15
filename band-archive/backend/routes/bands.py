@@ -1,6 +1,6 @@
 """Phase 3 API: private membership management plus public band discovery."""
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
 from band_service import (
@@ -15,6 +15,21 @@ from models import Band, BandCreationRequest, BandInviteCode, BandMembership
 
 
 bands_bp = Blueprint('bands', __name__, url_prefix='/api/v2')
+
+
+@bands_bp.before_request
+def require_band_schema():
+    """Keep the v1 compatibility app usable before the Phase 3 upgrade.
+
+    Blueprint registration is harmless, but querying an absent Alembic table
+    is not.  Operators receive a deterministic readiness response and can use
+    the documented migration runner before enabling these routes.
+    """
+    if not current_app.config.get('BAND_API_SCHEMA_READY', False):
+        return jsonify({
+            'error': 'band_schema_unavailable',
+            'message': 'Band API requires the isolated Alembic migration before startup.',
+        }), 503
 
 
 def payload():
@@ -139,7 +154,9 @@ def list_memberships(band_id):
     query = BandMembership.query.filter_by(band_id=band.id)
     if membership.role not in MANAGER_ROLES:
         query = query.filter_by(status=ACTIVE)
-    return jsonify({'memberships': [membership_dict(item) for item in query.order_by(BandMembership.id).all()]})
+    audience = 'management' if membership.role in MANAGER_ROLES else 'member'
+    return jsonify({'memberships': [membership_dict(item, audience=audience)
+                                    for item in query.order_by(BandMembership.id).all()]})
 
 
 @bands_bp.post('/bands/<int:band_id>/invite-codes')
@@ -173,9 +190,12 @@ def rotate_invite_code(band_id, invite_id):
     return jsonify({'invite': invite_dict(invite), 'code': code}), 201
 
 
-@bands_bp.post('/invite-codes/<string:code>/join')
+@bands_bp.post('/invite-codes/join')
 @require_auth
-def redeem_invite(code):
+def redeem_invite():
+    # Capabilities must not appear in URLs: reverse proxies, browser history,
+    # and access logs commonly retain paths and query strings.
+    code = payload().get('code')
     item = join_invite(current_app_user(), code)
     return jsonify({'membership': membership_dict(item)})
 
