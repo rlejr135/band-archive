@@ -1,4 +1,6 @@
 import os
+import re
+from urllib.parse import urlsplit
 
 
 def _env_flag(name, default='false'):
@@ -26,6 +28,76 @@ def validate_supabase_auth_config(config):
             'Supabase authentication is enabled but required configuration is missing: '
             + ', '.join(missing)
         )
+
+    bootstrap_email = _normalize_bootstrap_email(config.get('BOOTSTRAP_PLATFORM_ADMIN_EMAIL'))
+    if not bootstrap_email:
+        raise RuntimeError(
+            'Supabase authentication is enabled but required configuration is missing: '
+            'BOOTSTRAP_PLATFORM_ADMIN_EMAIL'
+        )
+    config['BOOTSTRAP_PLATFORM_ADMIN_EMAIL'] = bootstrap_email
+
+    project_ref = config['SUPABASE_PROJECT_REF'].strip().lower()
+    if not re.fullmatch(r'[a-z0-9-]+', project_ref):
+        raise RuntimeError('SUPABASE_PROJECT_REF must be a valid Supabase project reference.')
+    config['SUPABASE_PROJECT_REF'] = project_ref
+
+    supabase_url = _https_origin(config['SUPABASE_URL'], 'SUPABASE_URL')
+    expected_host = f'{project_ref}.supabase.co'
+    if supabase_url.hostname != expected_host:
+        raise RuntimeError(
+            'SUPABASE_URL must use the trusted origin for SUPABASE_PROJECT_REF '
+            f'({expected_host}).'
+        )
+    canonical_origin = f'https://{expected_host}'
+    if supabase_url.geturl() != canonical_origin:
+        raise RuntimeError('SUPABASE_URL must be the HTTPS origin without a path, query, or fragment.')
+    config['SUPABASE_URL'] = canonical_origin
+
+    issuer = _https_url(config['SUPABASE_JWT_ISSUER'], 'SUPABASE_JWT_ISSUER')
+    jwks = _https_url(config['SUPABASE_JWKS_URL'], 'SUPABASE_JWKS_URL')
+    if _origin(issuer) != canonical_origin or issuer.path != '/auth/v1':
+        raise RuntimeError('SUPABASE_JWT_ISSUER must be exactly SUPABASE_URL/auth/v1.')
+    if _origin(jwks) != canonical_origin or jwks.path != '/auth/v1/.well-known/jwks.json':
+        raise RuntimeError(
+            'SUPABASE_JWKS_URL must be exactly '
+            'SUPABASE_URL/auth/v1/.well-known/jwks.json.'
+        )
+    config['SUPABASE_JWT_ISSUER'] = f'{canonical_origin}/auth/v1'
+    config['SUPABASE_JWKS_URL'] = f'{canonical_origin}/auth/v1/.well-known/jwks.json'
+
+
+def _normalize_bootstrap_email(value):
+    if not isinstance(value, str):
+        return ''
+    email = value.strip().casefold()
+    if not email or email.count('@') != 1:
+        return ''
+    local, domain = email.split('@')
+    if not local or not domain or any(char.isspace() for char in email):
+        return ''
+    return email
+
+
+def _https_url(value, name):
+    if not isinstance(value, str):
+        raise RuntimeError(f'{name} must be an HTTPS URL.')
+    parsed = urlsplit(value.strip())
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+            or parsed.port is not None or parsed.query or parsed.fragment):
+        raise RuntimeError(f'{name} must be an HTTPS URL without credentials, port, query, or fragment.')
+    return parsed
+
+
+def _https_origin(value, name):
+    parsed = _https_url(value, name)
+    if parsed.path not in ('', '/'):
+        raise RuntimeError(f'{name} must be an HTTPS origin without a path.')
+    return parsed
+
+
+def _origin(parsed):
+    return f'{parsed.scheme}://{parsed.hostname}'
 
 
 class Config:
