@@ -145,11 +145,28 @@ def _validate_relationships(connection, band_id):
          'WHERE x.band_id != m.band_id'),
         ('rehearsal/song', 'SELECT rs.rehearsal_id FROM rehearsal_songs rs JOIN rehearsal r ON r.id=rs.rehearsal_id '
          'JOIN song s ON s.id=rs.song_id WHERE r.band_id != s.band_id'),
+        ('song_vote/song', 'SELECT v.id FROM song_vote v JOIN song s ON s.id=v.song_id '
+         'WHERE v.band_id != s.band_id'),
+        ('media_vote/media', 'SELECT v.id FROM media_vote v JOIN media m ON m.id=v.media_id '
+         'WHERE v.band_id != m.band_id'),
+        ('upload/media', 'SELECT x.id FROM multipart_upload_session x JOIN media m ON m.id=x.media_id '
+         'WHERE x.media_id IS NOT NULL AND x.band_id != m.band_id'),
+        ('upload/log', 'SELECT x.id FROM personal_log_multipart_upload_session x JOIN personal_log p ON p.id=x.personal_log_id '
+         'WHERE x.personal_log_id IS NOT NULL AND x.band_id != p.band_id'),
     )
     for label, statement in checks:
         ids = connection.execute(text(statement)).scalars().all()
         if ids:
             defects.append({'relationship': label, 'ids': ids[:20]})
+    for table in ('song', 'rehearsal', 'media', 'personal_log', 'gallery_image', 'announcement',
+                  'song_suggestion', 'comment', 'song_vote', 'media_vote', 'multipart_upload_session',
+                  'personal_log_multipart_upload_session'):
+        ids = connection.execute(text(
+            f'SELECT x.id FROM {table} x JOIN band_membership bm ON bm.id=x.created_by_membership_id '
+            'WHERE x.created_by_membership_id IS NOT NULL AND x.band_id != bm.band_id'
+        )).scalars().all()
+        if ids:
+            defects.append({'relationship': f'{table}/creator_membership', 'ids': ids[:20]})
     # A comment root names exactly one parent resource; descendants name only
     # their parent.  Resolve recursively and detect cycles/contradictions.
     comments = {row['id']: dict(row) for row in connection.execute(text(
@@ -172,9 +189,9 @@ def _validate_relationships(connection, band_id):
                 raise TenantBackfillError(f'comment {comment_id} has conflicting/missing parent scope')
             result = scope(row['parent_id'])
         else:
-            if len(direct) != 1 or direct[0] is None:
+            if len(direct) != 1:
                 raise TenantBackfillError(f'comment {comment_id} has no unambiguous root scope')
-            result = direct[0]
+            result = direct[0] if direct[0] is not None else band_id
         if row['band_id'] is not None and row['band_id'] != result:
             raise TenantBackfillError(f'comment {comment_id} crosses tenant scope')
         visiting.remove(comment_id)
@@ -202,6 +219,9 @@ def plan(connection):
             assigned = connection.execute(text(f'SELECT count(*) FROM {table} WHERE band_id IS NOT NULL')).scalar_one()
             if assigned:
                 raise TenantBackfillError(f'{table} has tenant rows but no legacy marker')
+    defects, _ = _validate_relationships(connection, virtual_band)
+    if defects:
+        raise TenantBackfillError('cross-scope relationships: ' + json.dumps(defects))
     updates, unresolved = _object_manifest(connection)
     if unresolved:
         raise TenantBackfillError('unresolved object keys: ' + json.dumps(unresolved, ensure_ascii=False))
