@@ -118,7 +118,7 @@ def membership_dict(membership, audience='member'):
     if membership.user:
         user = {'id': membership.user.supabase_user_id, 'display_name': membership.user.display_name}
         if audience == 'management':
-            user.update({'email': membership.user.email, 'status': membership.user.status})
+            user['email'] = membership.user.email
     result = {
         'id': membership.id,
         'band_id': membership.band_id,

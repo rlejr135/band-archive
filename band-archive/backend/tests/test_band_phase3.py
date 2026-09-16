@@ -257,6 +257,8 @@ def test_roster_serializers_do_not_expose_account_state(band_app):
     assert 'email' not in public_member['user'] and 'status' not in public_member
     assert 'email' not in ordinary_member['user'] and 'status' not in ordinary_member
     assert managed_member['user']['email'] == 'owner@example.com'
+    assert managed_member['status'] == 'active'
+    assert 'status' not in managed_member['user']
     assert 'is_platform_admin' not in managed_member['user']
     assert 'email_verified' not in managed_member['user']
 
