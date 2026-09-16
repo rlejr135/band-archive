@@ -42,3 +42,35 @@ The Phase 1 verifier has SQLite integration coverage and PostgreSQL dialect
 unit coverage for the equivalent `FLOAT`/`DOUBLE PRECISION` reflection. It
 does not yet run against a live PostgreSQL service; that is a required
 Supabase staging gate before the production Postgres cutover.
+
+## Phase 4 tenant expansion and legacy import
+
+Revision `20260916_05` is expand-only: it adds nullable band/creator scope,
+visibility, canonical object-key, and offline-backfill state columns. It does
+not move, copy, delete, or inspect R2 objects. Existing `filename` and upload
+`object_key` values remain the v1 source of truth until a later tenant-aware
+writer is deployed.
+
+Run the stages while the application is stopped, against a tested database
+copy first:
+
+1. `python migration_runner.py --database-url ... upgrade`
+2. `python migration_runner.py --database-url ... tenant-backfill --dry-run`
+3. Review the JSON counts/checksum and any unresolved object-key manifest.
+4. `python migration_runner.py --database-url ... tenant-backfill --apply`
+5. Repeat `--dry-run` to verify the validated, idempotent state.
+
+The backfill creates one ownerless legacy `들뜬` band marked
+`is_legacy_import`; it does not create a synthetic account or owner
+membership. A suffix is added deterministically if its preferred slug is
+occupied. It maps historic content to `PUBLIC`, derives only provable existing
+keys (`media/`, `personal_logs/`, `gallery/`), marks anonymous
+comments/votes/upload sessions as legacy, and refuses URL, cross-prefix,
+ambiguous announcement, or contradictory comment-tree data. Multipart session
+keys are never renamed, so old in-flight uploads are not falsely resumable
+under a tenant prefix.
+
+Until the `phase4_tenant_scope` state row is `validated`, `/api/v2` remains
+feature-gated and v1 continues to use its compatibility fields. Do not apply a
+NOT NULL/per-band-unique contract migration merely because revision 05 is at
+head: it must first verify this marker plus zero null/orphan/cross-scope rows.
