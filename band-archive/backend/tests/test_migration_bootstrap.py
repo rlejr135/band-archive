@@ -13,6 +13,8 @@ from migration_bootstrap import (
     baseline_metadata,
     create_migration_app,
     migration_head_revision,
+    _canonical_postgres_partial_predicate,
+    _partial_index_differences,
     schema_contract_differences,
     schema_differences,
     types_are_equivalent,
@@ -322,6 +324,71 @@ def test_postgres_float_and_double_precision_are_semantically_equivalent():
     assert not types_are_equivalent(sa.Float(), postgresql.REAL(), dialect)
     assert not types_are_equivalent(sa.Float(), sa.Integer(), dialect)
     assert not types_are_equivalent(sa.Integer(), sa.String(20), dialect)
+
+
+@pytest.mark.parametrize(
+    ('expression', 'expected'),
+    [
+        ("(((role)::text = 'owner'::text) AND ((status)::text = 'active'::text))",
+         frozenset({('role', 'owner'), ('status', 'active')})),
+        ("((status)::text = 'pending'::text)", frozenset({('status', 'pending')})),
+        ("((status)::text = 'active'::text) AND ((role)::text = 'owner'::text)",
+         frozenset({('role', 'owner'), ('status', 'active')})),
+        ("(((role))::text = (('owner')::text)) AND (((status)::text) = ('active'::text))",
+         frozenset({('role', 'owner'), ('status', 'active')})),
+        ("((status)::text='pending'::text)", frozenset({('status', 'pending')})),
+        ("(role = 'owner')", None),
+        ("(role = 'owner') OR (status = 'active')", None),
+        ("(role = 'owner') AND (status = 'rejected')", None),
+        ("(role)::varchar = 'owner'::varchar", None),
+        ("(role)::text = 'owner'::text AND (status)::text = 'pending'::text", None),
+        ("(status = CURRENT_SETTING('role'))", None),
+    ],
+)
+def test_postgres_partial_predicate_parser_is_semantic_and_fail_closed(expression, expected):
+    assert _canonical_postgres_partial_predicate(expression) == expected
+
+
+class _PostgresIndexesConnection:
+    """Minimal pg_indexes/pg_get_expr result used by the preflight verifier."""
+
+    dialect = type('Dialect', (), {'name': 'postgresql'})()
+
+    def __init__(self, owner_predicate, request_predicate):
+        self.rows = [
+            ('band_membership', 'uq_band_membership_active_owner', owner_predicate),
+            ('band_creation_request', 'uq_band_creation_request_pending_user_slug', request_predicate),
+        ]
+
+    def execute(self, statement):
+        assert 'pg_indexes' in str(statement)
+        return self.rows
+
+
+@pytest.mark.parametrize(
+    ('owner_predicate', 'request_predicate', 'valid'),
+    [
+        ("(((role)::text = 'owner'::text) AND ((status)::text = 'active'::text))",
+         "((status)::text = 'pending'::text)", True),
+        ("((role)::text = 'owner'::text)", "((status)::text = 'pending'::text)", False),
+        ("((role)::text = 'owner'::text) OR ((status)::text = 'active'::text)",
+         "((status)::text = 'pending'::text)", False),
+        ("((role)::text = 'owner'::text) AND ((status)::text = 'pending'::text)",
+         "((status)::text = 'pending'::text)", False),
+    ],
+)
+def test_postgres_pg_indexes_predicates_are_verified_semantically(
+    tmp_path, owner_predicate, request_predicate, valid,
+):
+    app = _migration_app(tmp_path / 'postgres-shape.db')
+    try:
+        with app.app_context():
+            differences = _partial_index_differences(
+                _PostgresIndexesConnection(owner_predicate, request_predicate), db.metadata,
+            )
+        assert bool(differences) is not valid
+    finally:
+        _dispose(app)
 
 
 def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path):

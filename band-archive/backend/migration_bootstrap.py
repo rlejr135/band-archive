@@ -320,7 +320,11 @@ def _partial_index_differences(connection, metadata):
             if where is None:
                 where = index.dialect_options['postgresql'].get('where')
             if where is not None:
-                expected.append((table.name, index.name, _normalize_sql(where)))
+                # SQLite compares its reflected SQL text strictly. PostgreSQL
+                # gets a semantic parse below; pre-normalizing would erase the
+                # word boundary that distinguishes ``AND`` from identifiers.
+                predicate = str(where) if connection.dialect.name == 'postgresql' else _normalize_sql(where)
+                expected.append((table.name, index.name, predicate))
     if not expected:
         return []
     if connection.dialect.name == 'sqlite':
@@ -331,14 +335,161 @@ def _partial_index_differences(connection, metadata):
                 if f'where{predicate}' not in actual.get((table, name), '')]
     if connection.dialect.name == 'postgresql':
         rows = connection.execute(text("""
-            SELECT tablename, indexname, indexdef FROM pg_indexes
-            WHERE schemaname = ANY(current_schemas(false))
+            SELECT indexes.tablename, indexes.indexname,
+                   pg_get_expr(ind.indpred, ind.indrelid) AS predicate
+            FROM pg_indexes AS indexes
+            JOIN pg_class AS cls ON cls.relname = indexes.indexname
+            JOIN pg_namespace AS ns
+              ON ns.oid = cls.relnamespace AND ns.nspname = indexes.schemaname
+            JOIN pg_index AS ind ON ind.indexrelid = cls.oid
+            WHERE indexes.schemaname = ANY(current_schemas(false))
         """))
-        actual = {(row[0], row[1]): _normalize_sql(row[2]) for row in rows}
+        actual = {(row[0], row[1]): _canonical_postgres_partial_predicate(row[2]) for row in rows}
         return [f'{table}.{name} partial predicate is missing or invalid'
                 for table, name, predicate in expected
-                if f'where{predicate}' not in actual.get((table, name), '')]
+                if _canonical_postgres_partial_predicate(predicate) != actual.get((table, name))]
     return ['partial index predicates cannot be verified for this database dialect']
+
+
+def _canonical_postgres_partial_predicate(value):
+    """Parse the deliberately tiny predicate language used by revision 04.
+
+    PostgreSQL's ``pg_get_expr`` adds parentheses and ``::text`` casts, whose
+    formatting changes by server version.  Do not use a loose substring test:
+    parse only equality atoms over ``role``/``status`` joined by AND.  Any
+    other expression (notably OR, a missing atom, or an unfamiliar cast) is
+    rejected by returning ``None``.
+    """
+    if not isinstance(value, str):
+        return None
+    expression = value.strip().casefold()
+    atoms = _split_postgres_predicate_and(expression)
+    if not atoms:
+        return None
+    parsed = set()
+    for atom in atoms:
+        parsed_atom = _parse_postgres_predicate_atom(atom)
+        if parsed_atom is None:
+            return None
+        parsed.add(parsed_atom)
+    # Duplicate conditions are not semantically the intended exact predicate.
+    if len(parsed) != len(atoms):
+        return None
+    parsed = frozenset(parsed)
+    # The metadata has exactly these two controlled predicates.  Keep the
+    # PostgreSQL-side parser deliberately narrower than SQL: accepting an
+    # arbitrary subset would hide a weakened or swapped index predicate.
+    if parsed not in {
+        frozenset({('role', 'owner'), ('status', 'active')}),
+        frozenset({('status', 'pending')}),
+    }:
+        return None
+    return parsed
+
+
+def _strip_sql_parentheses(value):
+    """Remove only parentheses that enclose the entire SQL fragment."""
+    value = value.strip()
+    while value.startswith('(') and value.endswith(')'):
+        depth = 0
+        quote = False
+        encloses_all = True
+        for index, character in enumerate(value):
+            if character == "'":
+                # The tiny predicate language has no escaped literal quotes.
+                quote = not quote
+            elif not quote and character == '(':
+                depth += 1
+            elif not quote and character == ')':
+                depth -= 1
+                if depth == 0 and index != len(value) - 1:
+                    encloses_all = False
+                    break
+            if depth < 0:
+                return ''
+        if quote or depth != 0 or not encloses_all:
+            break
+        value = value[1:-1].strip()
+    return value
+
+
+def _split_postgres_predicate_and(expression):
+    """Split the controlled predicate grammar on top-level ``AND`` only."""
+    expression = _strip_sql_parentheses(expression)
+    if not expression:
+        return None
+    atoms = []
+    start = 0
+    depth = 0
+    quote = False
+    index = 0
+    while index < len(expression):
+        character = expression[index]
+        if character == "'":
+            quote = not quote
+            index += 1
+            continue
+        if not quote:
+            if character == '(':
+                depth += 1
+            elif character == ')':
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif depth == 0 and expression[index:index + 3] == 'and':
+                before = expression[index - 1] if index else ' '
+                after = expression[index + 3] if index + 3 < len(expression) else ' '
+                if not (before.isalnum() or before == '_') and not (after.isalnum() or after == '_'):
+                    atoms.append(expression[start:index].strip())
+                    start = index + 3
+                    index += 3
+                    continue
+        index += 1
+    if quote or depth != 0:
+        return None
+    atoms.append(expression[start:].strip())
+    return atoms if all(atoms) else None
+
+
+def _postgres_predicate_operand(value, literal=False):
+    """Accept a known value, optionally wrapped in PostgreSQL's ``::text``."""
+    value = _strip_sql_parentheses(value)
+    cast = re.fullmatch(r'(.+?)\s*::\s*text', value)
+    if cast:
+        value = _strip_sql_parentheses(cast.group(1))
+    # A different (or nested) cast is intentionally not normalized away.
+    if '::' in value:
+        return None
+    if literal:
+        match = re.fullmatch(r"'(owner|active|pending)'", value)
+        return match.group(1) if match else None
+    match = re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?(role|status)', value)
+    return match.group(1) if match else None
+
+
+def _parse_postgres_predicate_atom(atom):
+    atom = _strip_sql_parentheses(atom)
+    # Equality is the only comparison accepted.  A top-level split keeps a
+    # quoted literal or nested parentheses from masquerading as an operator.
+    depth = 0
+    quote = False
+    equals = []
+    for index, character in enumerate(atom):
+        if character == "'":
+            quote = not quote
+        elif not quote and character == '(':
+            depth += 1
+        elif not quote and character == ')':
+            depth -= 1
+        elif not quote and depth == 0 and character == '=':
+            equals.append(index)
+    if quote or depth != 0 or len(equals) != 1:
+        return None
+    left = _postgres_predicate_operand(atom[:equals[0]])
+    right = _postgres_predicate_operand(atom[equals[0] + 1:], literal=True)
+    if left is None or right is None:
+        return None
+    return left, right
 
 
 def _audit_trigger_differences(connection):
