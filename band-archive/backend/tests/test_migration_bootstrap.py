@@ -142,6 +142,11 @@ def test_recorded_revision_three_requires_hardening_upgrade_before_v2_is_ready(t
     try:
         assert runtime_before.config['BAND_API_SCHEMA_READY'] is False
         assert runtime_before.test_client().get('/api/v2/public/bands').status_code == 503
+        blocked = runtime_before.test_client().post('/songs', json={'title': 'blocked', 'artist': 'blocked'})
+        assert blocked.status_code == 503
+        assert blocked.get_json()['error'] == 'tenant_schema_unavailable'
+        with runtime_before.app_context():
+            assert db.session.execute(text('SELECT count(*) FROM song')).scalar_one() == 0
     finally:
         _dispose(runtime_before)
 
@@ -167,6 +172,12 @@ def test_recorded_revision_three_requires_hardening_upgrade_before_v2_is_ready(t
     try:
         assert runtime_after.config['BAND_API_SCHEMA_READY'] is True
         assert runtime_after.test_client().get('/api/v2/public/bands').status_code == 200
+        created = runtime_after.test_client().post('/songs', json={'title': 'legacy write', 'artist': 'band'})
+        assert created.status_code == 201
+        with runtime_after.app_context():
+            assert db.session.execute(text('SELECT band_id FROM song')).scalar_one() == db.session.execute(
+                text('SELECT id FROM band WHERE is_legacy_import = 1')
+            ).scalar_one()
     finally:
         _dispose(runtime_after)
 

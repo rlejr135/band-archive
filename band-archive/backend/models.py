@@ -1,7 +1,7 @@
 
 from datetime import datetime, timedelta, timezone
 import uuid
-from sqlalchemy import event
+from sqlalchemy import event, text
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
@@ -662,3 +662,70 @@ class Comment(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'replies': [reply.to_dict() for reply in self.replies],
         }
+
+
+class TenantScopeUnavailable(RuntimeError):
+    """Raised only outside an HTTP request that the readiness gate catches."""
+
+
+def _legacy_band_id(connection):
+    state = connection.execute(text(
+        "SELECT status FROM tenant_backfill_state WHERE key = 'phase4_tenant_scope'"
+    )).scalar_one_or_none()
+    if state != 'validated':
+        # Isolated unit fixtures deliberately use full metadata without an
+        # Alembic history; they are not a production compatibility path.
+        try:
+            from flask import current_app
+            if current_app.testing:
+                return None
+        except RuntimeError:
+            pass
+        raise TenantScopeUnavailable('Phase 4 tenant backfill is not validated.')
+    band_id = connection.execute(text(
+        'SELECT id FROM band WHERE is_legacy_import = 1 AND created_by_user_id IS NULL'
+    )).scalar_one_or_none()
+    if band_id is None:
+        raise TenantScopeUnavailable('Validated legacy tenant band is missing.')
+    return band_id
+
+
+def _parent_band(connection, table, record_id):
+    if record_id is None:
+        return None
+    return connection.execute(text(f'SELECT band_id FROM {table} WHERE id = :id'), {'id': record_id}).scalar_one_or_none()
+
+
+def _assign_legacy_scope(mapper, connection, target):
+    """Central dual-write guard for legacy v1 ORM writers after backfill."""
+    legacy_band_id = _legacy_band_id(connection)
+    if legacy_band_id is None:
+        return
+    parent = None
+    if isinstance(target, (Media, MultipartUploadSession, SongVote)):
+        parent = _parent_band(connection, 'song', target.song_id)
+    elif isinstance(target, (PersonalLog, PersonalLogMultipartUploadSession)):
+        parent = _parent_band(connection, 'member', target.member_id)
+    elif isinstance(target, MediaVote):
+        parent = _parent_band(connection, 'media', target.media_id)
+    elif isinstance(target, Comment):
+        if target.media_id is not None:
+            parent = _parent_band(connection, 'media', target.media_id)
+        elif target.personal_log_id is not None:
+            parent = _parent_band(connection, 'personal_log', target.personal_log_id)
+        else:
+            parent = _parent_band(connection, 'comment', target.parent_id)
+    if parent is not None and parent != legacy_band_id:
+        raise TenantScopeUnavailable('Parent record is outside the legacy tenant.')
+    if target.band_id is None:
+        target.band_id = parent or legacy_band_id
+    if target.band_id != legacy_band_id:
+        raise TenantScopeUnavailable('v1 writer cannot create a non-legacy tenant record.')
+    if hasattr(target, 'visibility') and target.visibility is None:
+        target.visibility = 'PUBLIC'
+
+
+for _scoped_model in (Song, Rehearsal, Media, Member, PersonalLog, GalleryImage,
+                      Announcement, SongSuggestion, Comment, SongVote, MediaVote,
+                      MultipartUploadSession, PersonalLogMultipartUploadSession):
+    event.listen(_scoped_model, 'before_insert', _assign_legacy_scope)

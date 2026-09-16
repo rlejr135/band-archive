@@ -1,7 +1,7 @@
 import os
 import time
 
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_migrate import Migrate
 from dotenv import load_dotenv
@@ -59,6 +59,23 @@ def _band_schema_ready():
             "SELECT status FROM tenant_backfill_state WHERE key = 'phase4_tenant_scope'"
         )).scalar_one_or_none()
         return state == 'validated'
+
+
+def _phase4_orm_schema_ready(app):
+    """Prove ORM-mapped Phase 4 columns exist before handlers query them."""
+    from sqlalchemy import inspect, text
+
+    with db.engine.connect() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        # Test fixtures explicitly create current metadata after the factory;
+        # they are not compatibility databases and carry no Alembic history.
+        if app.testing and 'alembic_version' not in tables:
+            return 'song' in tables and 'band_id' in {item['name'] for item in inspector.get_columns('song')}
+        if 'alembic_version' not in tables or 'tenant_backfill_state' not in tables:
+            return False
+        versions = connection.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
+        return versions == [migration_head_revision()] and not schema_contract_differences(connection)
 
 
 def _add_sqlite_column(conn, table, column, definition):
@@ -336,6 +353,22 @@ def create_app(config_class=None, start_worker=None):
         ]
         CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
 
+    @app.before_request
+    def _require_phase4_orm_schema():
+        if request.path == '/health' or request.path.startswith('/api/v2/'):
+            return None
+        if app.config.get('PHASE4_ORM_SCHEMA_READY', False):
+            if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
+                    and not app.config.get('BAND_API_SCHEMA_READY', False)):
+                return jsonify(error='tenant_backfill_required',
+                               message='Phase 4 tenant backfill is required before writes.'), 503
+            return None
+        # Current-schema unit fixtures are initialized after create_app().
+        if app.testing and _phase4_orm_schema_ready(app):
+            return None
+        return jsonify(error='tenant_schema_unavailable',
+                       message='Phase 4 database migration is required.'), 503
+
     db.init_app(app)
     # Keep Flask-Migrate pointed at the checked-in baseline.  The existing
     # create_all/startup migration path below remains the production path
@@ -368,6 +401,7 @@ def create_app(config_class=None, start_worker=None):
         # v2 routes remain registered for a deterministic response, but are
         # disabled until the isolated migration runner has produced head.
         app.config['BAND_API_SCHEMA_READY'] = _band_schema_ready()
+        app.config['PHASE4_ORM_SCHEMA_READY'] = _phase4_orm_schema_ready(app)
         from routes.uploads import recover_multipart_upload_sessions
         recover_multipart_upload_sessions(app)
         if app.config.get('SUPABASE_AUTH_ENABLED'):
