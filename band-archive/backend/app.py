@@ -39,7 +39,7 @@ _BAND_SCHEMA_TABLES = {
 
 
 def _band_schema_ready():
-    """Return true only for a fully Alembic-upgraded Phase 3 schema."""
+    """Return true only after the isolated tenant backfill is validated."""
     from sqlalchemy import inspect, text
 
     with db.engine.connect() as connection:
@@ -49,7 +49,16 @@ def _band_schema_ready():
         versions = connection.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
         if versions != [migration_head_revision()]:
             return False
-        return not schema_contract_differences(connection)
+        if schema_contract_differences(connection):
+            return False
+        # Expansion is intentionally safe before this marker exists.  Keep
+        # v2 tenant routes gated then; v1 stays compatible with nullable cols.
+        if 'tenant_backfill_state' not in tables:
+            return False
+        state = connection.execute(text(
+            "SELECT status FROM tenant_backfill_state WHERE key = 'phase4_tenant_scope'"
+        )).scalar_one_or_none()
+        return state == 'validated'
 
 
 def _add_sqlite_column(conn, table, column, definition):

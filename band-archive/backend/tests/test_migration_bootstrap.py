@@ -33,7 +33,8 @@ def _migration_app(database_path):
 
 
 def _runner_command(database_path, command):
-    return CliRunner().invoke(cli, ['--database-url', _database_url(database_path), command])
+    arguments = command.split() if isinstance(command, str) else command
+    return CliRunner().invoke(cli, ['--database-url', _database_url(database_path), *arguments])
 
 
 def _version(app):
@@ -148,6 +149,9 @@ def test_recorded_revision_three_requires_hardening_upgrade_before_v2_is_ready(t
     second = _runner_command(database_path, 'upgrade')
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
+    assert _runner_command(database_path, 'tenant-backfill --dry-run').exit_code == 0
+    applied = _runner_command(database_path, 'tenant-backfill --apply')
+    assert applied.exit_code == 0, applied.output
     hardened = _migration_app(database_path)
     try:
         with hardened.app_context():
@@ -424,6 +428,7 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
     assert upgraded.exit_code == 0, upgraded.output
     repeated = _runner_command(database_path, 'upgrade')
     assert repeated.exit_code == 0, repeated.output
+    assert _runner_command(database_path, 'tenant-backfill --apply').exit_code == 0
     runtime_after_upgrade = create_app(_runtime_config(database_path), start_worker=False)
     try:
         with runtime_after_upgrade.app_context():

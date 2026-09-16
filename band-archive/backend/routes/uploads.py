@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request, current_app
+from sqlalchemy import inspect
 
 from extensions import db
 from models import (Media, Song, Rehearsal, Member, PersonalLog, GalleryImage,
@@ -95,6 +96,12 @@ def recover_multipart_upload_sessions(app):
     capabilities, so an old session without a capability remains inaccessible.
     """
     with app.app_context():
+        # The Phase 4 model is additive, but a process may intentionally boot
+        # against a recorded older schema while the isolated runner is pending.
+        # Avoid selecting future ORM columns in that compatibility interval.
+        columns = {column['name'] for column in inspect(db.engine).get_columns('multipart_upload_session')}
+        if 'band_id' not in columns:
+            return
         recover_sessions()
 
 

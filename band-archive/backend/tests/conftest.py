@@ -50,6 +50,10 @@ def app(tmp_path):
     os.makedirs(test_app.config['UPLOAD_FOLDER'], exist_ok=True)
 
     with test_app.app_context():
+        # Phase 4 keeps production startup on the immutable v1 snapshot. Test
+        # fixtures, however, exercise current ORM routes and need a clean
+        # current-schema database rather than trying to ALTER that snapshot.
+        _db.drop_all()
         _db.create_all()
         yield test_app
         _db.session.remove()

@@ -25,6 +25,7 @@ MIGRATIONS_DIRECTORY = Path(__file__).with_name('migrations')
 BASELINE_REVISION = '20260914_01'
 AUTH_REVISION = '20260914_02'
 PHASE3_REVISION = '20260915_03'
+PHASE3_HARDENED_REVISION = '20260916_04'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -32,6 +33,28 @@ BASELINE_TABLE_NAMES = (
     'personal_log_multipart_upload_part', 'personal_log_multipart_upload_session',
     'rehearsal', 'rehearsal_songs', 'song', 'song_suggestion', 'song_vote',
 )
+
+# Columns added by the Phase 4 expand-only revision.  The v1 compatibility
+# path intentionally builds the immutable baseline snapshot, not current ORM
+# metadata, so a normal application start can never create a half-migrated
+# tenant schema before Alembic has recorded its revision.
+PHASE4_COLUMNS = {
+    'band': {'is_legacy_import'},
+    'announcement': {'band_id', 'created_by_membership_id', 'visibility'},
+    'comment': {'band_id', 'created_by_membership_id', 'is_legacy'},
+    'gallery_image': {'band_id', 'created_by_membership_id', 'visibility', 'object_key'},
+    'media': {'band_id', 'created_by_membership_id', 'visibility', 'object_key', 'audio_object_key',
+              'video_720_object_key'},
+    'media_vote': {'band_id', 'created_by_membership_id', 'is_legacy'},
+    'member': {'band_id', 'linked_user_id'},
+    'multipart_upload_session': {'band_id', 'created_by_membership_id', 'is_legacy'},
+    'personal_log': {'band_id', 'created_by_membership_id', 'visibility', 'object_key', 'audio_object_key'},
+    'personal_log_multipart_upload_session': {'band_id', 'created_by_membership_id', 'is_legacy'},
+    'rehearsal': {'band_id', 'created_by_membership_id', 'visibility'},
+    'song': {'band_id', 'created_by_membership_id', 'visibility', 'sheet_music_object_key'},
+    'song_suggestion': {'band_id', 'created_by_membership_id', 'visibility'},
+    'song_vote': {'band_id', 'created_by_membership_id', 'is_legacy'},
+}
 
 
 class MigrationBootstrapError(RuntimeError):
@@ -55,6 +78,30 @@ def baseline_metadata():
     metadata = MetaData()
     for table_name in BASELINE_TABLE_NAMES:
         db.metadata.tables[table_name].to_metadata(metadata)
+    for table_name, columns in PHASE4_COLUMNS.items():
+        if table_name not in metadata.tables:
+            continue
+        table = metadata.tables[table_name]
+        for index in list(table.indexes):
+            if any(column.name in columns for column in index.columns):
+                table.indexes.remove(index)
+        for constraint in list(table.constraints):
+            constrained = {column.name for column in getattr(constraint, 'columns', ())}
+            if constrained & columns or (getattr(constraint, 'name', '') or '').startswith('ck_') and 'visibility' in str(
+                    getattr(constraint, 'sqltext', '')):
+                table.constraints.remove(constraint)
+        for column_name in columns:
+            column = table.c.get(column_name)
+            if column is not None:
+                # A copied column retains its ForeignKey object even after its
+                # table-level constraint was removed above.  Detach it before
+                # removing the column so the v1 snapshot has no dangling
+                # reference to Phase 3/4 tables.
+                for foreign_key in list(column.foreign_keys):
+                    table.constraints.discard(foreign_key.constraint)
+                    table.foreign_keys.discard(foreign_key)
+                    column.foreign_keys.discard(foreign_key)
+                table._columns.remove(column)
     return metadata
 
 
@@ -71,6 +118,7 @@ def phase3_metadata():
     metadata = auth_metadata()
     for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
         db.metadata.tables[table_name].to_metadata(metadata)
+    _restore_pre_phase4_band(metadata)
     # These partial indexes belong to revision 04.  Do not retroactively
     # require them when validating a legitimately recorded revision 03 DB.
     for table_name, index_name in (
@@ -82,6 +130,22 @@ def phase3_metadata():
         if index is not None:
             table.indexes.remove(index)
     return metadata
+
+
+def phase3_hardened_metadata():
+    """Exact immutable revision-04 snapshot, before the Phase 4 expand."""
+    metadata = auth_metadata()
+    for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
+        db.metadata.tables[table_name].to_metadata(metadata)
+    _restore_pre_phase4_band(metadata)
+    return metadata
+
+
+def _restore_pre_phase4_band(metadata):
+    """Remove the ownerless-import exception from immutable v03/v04 views."""
+    band = metadata.tables['band']
+    band.c.created_by_user_id.nullable = False
+    band._columns.remove(band.c.is_legacy_import)
 
 
 def _normalize_type(column_type, dialect):
@@ -161,8 +225,14 @@ def _reflected_foreign_keys(inspector, table_name):
     reflected = []
     for foreign_key in inspector.get_foreign_keys(table_name):
         options = foreign_key.get('options') or {}
+        name = foreign_key.get('name')
+        # Phase 4 batch rebuild needs explicit names on SQLite, while the ORM
+        # models intentionally keep portable anonymous ForeignKey objects.
+        # The FK shape—not a dialect-generated label—is the contract here.
+        if isinstance(name, str) and name.startswith('fk_'):
+            name = None
         reflected.append((
-            foreign_key.get('name'),
+            name,
             tuple(foreign_key.get('constrained_columns') or ()),
             foreign_key.get('referred_table'),
             tuple(foreign_key.get('referred_columns') or ()),
@@ -577,6 +647,8 @@ def metadata_for_recorded_revision(revision):
         return auth_metadata()
     if revision == PHASE3_REVISION:
         return phase3_metadata()
+    if revision == PHASE3_HARDENED_REVISION:
+        return phase3_hardened_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(
