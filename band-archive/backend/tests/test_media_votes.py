@@ -249,6 +249,9 @@ def test_media_vote_file_sqlite_concurrency_keeps_one_row_and_consistent_counts(
         SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
 
     vote_app = create_app(FileTestingConfig)
+    with vote_app.app_context():
+        db.drop_all()
+        db.create_all()
     try:
         seed_client = vote_app.test_client()
         song_id = _song(seed_client, 'Concurrent')
@@ -284,6 +287,9 @@ def test_song_vote_file_sqlite_concurrency_keeps_one_row_and_consistent_counts(t
         SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
 
     vote_app = create_app(FileTestingConfig)
+    with vote_app.app_context():
+        db.drop_all()
+        db.create_all()
     try:
         seed_client = vote_app.test_client()
         song_id = _song(seed_client, 'Concurrent song')
@@ -318,6 +324,9 @@ def test_media_vote_conflict_snapshot_is_materialized_before_lock_release(tmp_pa
         SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
 
     vote_app = create_app(FileTestingConfig)
+    with vote_app.app_context():
+        db.drop_all()
+        db.create_all()
     try:
         seed_client = vote_app.test_client()
         song_id = _song(seed_client, 'Conflict snapshot')
