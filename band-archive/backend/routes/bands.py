@@ -7,7 +7,7 @@ from band_service import (
     ACTIVE, MANAGER_ROLES, approve_membership, band_dict, close_band, create_invite,
     create_request, creation_request_dict, invite_dict, join_invite, join_request,
     leave_band, membership_dict, require_band_role, review_request, revoke_invite,
-    set_role, transfer_ownership,
+    rotate_invite, set_role, transfer_ownership,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -185,8 +185,7 @@ def revoke_invite_code(band_id, invite_id):
 @require_auth
 def rotate_invite_code(band_id, invite_id):
     actor = current_app_user()
-    revoke_invite(actor, band_id, invite_id)
-    invite, code = create_invite(actor, band_id)
+    invite, code = rotate_invite(actor, band_id, invite_id)
     return jsonify({'invite': invite_dict(invite), 'code': code}), 201
 
 

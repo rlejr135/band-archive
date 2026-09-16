@@ -6,12 +6,15 @@ without relying on SQLite's different writer-lock scheduling.
 """
 
 from flask import g, request
+import threading
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 import auth_service
+from band_service import close_band, transfer_ownership
 from app import create_app
 from config import TestingConfig
+from errors import ValidationError
 from extensions import db
 from models import AppUser, AuditEvent, Band, BandInviteCode, BandMembership
 
@@ -141,6 +144,78 @@ def test_transfer_then_leave_preserves_owner_invariant(band_app):
     with band_app.app_context():
         active_owners = BandMembership.query.filter_by(band_id=band_id, role='owner', status='active').all()
         assert [item.user_id for item in active_owners] == [3]
+
+
+def test_sqlite_stale_owner_session_cannot_close_after_independent_transfer(tmp_path):
+    """A cached owner row must be refreshed after another session transfers it.
+
+    This is intentionally an on-disk SQLite database: the stale actor and the
+    transfer use distinct scoped sessions, which is the shape a real server
+    uses for concurrent requests.
+    """
+    config = type('FileSQLiteConfig', (TestingConfig,), {
+        'SQLALCHEMY_DATABASE_URI': f"sqlite:///{(tmp_path / 'race.db').as_posix()}",
+    })
+    app = create_app(config, start_worker=False)
+    try:
+        with app.app_context():
+            db.create_all()
+            old_owner = AppUser(supabase_user_id='old-owner', email='old@example.com')
+            new_owner = AppUser(supabase_user_id='new-owner', email='new@example.com')
+            db.session.add_all((old_owner, new_owner))
+            db.session.flush()
+            band = Band(name='Race', slug='race', created_by_user_id=old_owner.id)
+            db.session.add(band)
+            db.session.flush()
+            old_membership = BandMembership(
+                band_id=band.id, user_id=old_owner.id, role='owner', status='active',
+            )
+            new_membership = BandMembership(
+                band_id=band.id, user_id=new_owner.id, role='member', status='active',
+            )
+            db.session.add_all((old_membership, new_membership))
+            db.session.commit()
+            old_owner_id, band_id, new_membership_id = old_owner.id, band.id, new_membership.id
+            db.session.remove()
+
+        cached = threading.Event()
+        transfer_complete = threading.Event()
+        close_result = {}
+
+        def stale_close_attempt():
+            with app.app_context():
+                actor = db.session.get(AppUser, old_owner_id)
+                # Deliberately retain the obsolete owner role in this session.
+                assert BandMembership.query.filter_by(band_id=band_id, user_id=actor.id).one().role == 'owner'
+                cached.set()
+                assert transfer_complete.wait(5)
+                try:
+                    close_band(actor, band_id)
+                except ValidationError as error:
+                    close_result['status'] = error.status_code
+                    db.session.rollback()
+                else:
+                    close_result['status'] = 'closed'
+                finally:
+                    db.session.remove()
+
+        thread = threading.Thread(target=stale_close_attempt)
+        thread.start()
+        assert cached.wait(5)
+        with app.app_context():
+            transfer_ownership(db.session.get(AppUser, old_owner_id), band_id, new_membership_id)
+            transfer_complete.set()
+            db.session.remove()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert close_result['status'] == 403
+        with app.app_context():
+            assert db.session.get(Band, band_id).deleted_at is None
+            assert BandMembership.query.filter_by(band_id=band_id, role='owner', status='active').count() == 1
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.drop_all()
 
 
 def test_only_owner_changes_admin_roles_and_invites_reset_former_admin(band_app):

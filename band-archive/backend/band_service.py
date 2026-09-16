@@ -23,6 +23,20 @@ def now():
     return datetime.now(timezone.utc)
 
 
+def _begin_privileged_mutation():
+    """Claim SQLite's writer lock before checking authority.
+
+    ``SELECT .. FOR UPDATE`` is intentionally a no-op on SQLite.  Starting an
+    IMMEDIATE transaction before an authorization read makes the read and its
+    subsequent mutation one serialization point, matching PostgreSQL's row
+    locks.  Calling this after Flask has loaded the current user is safe: the
+    SQLite driver has not acquired a writer lock for that read.
+    """
+    connection = db.session.connection()
+    if connection.dialect.name == 'sqlite':
+        connection.exec_driver_sql('BEGIN IMMEDIATE')
+
+
 def slug(value):
     value = value.strip().casefold() if isinstance(value, str) else ''
     if not _SLUG.fullmatch(value) or len(value) > 80:
@@ -59,10 +73,12 @@ def audit(event_type, actor=None, band=None, target=None, details=None):
 
 
 def active_membership(user, band_id, include_deleted=False):
-    band = Band.query.filter_by(id=band_id).one_or_none()
+    band = Band.query.filter_by(id=band_id).populate_existing().one_or_none()
     if band is None or (band.deleted_at is not None and not include_deleted):
         raise NotFoundError('Band not found')
-    membership = BandMembership.query.filter_by(band_id=band.id, user_id=user.id, status=ACTIVE).one_or_none()
+    membership = BandMembership.query.filter_by(
+        band_id=band.id, user_id=user.id, status=ACTIVE,
+    ).populate_existing().one_or_none()
     return band, membership
 
 
@@ -75,13 +91,13 @@ def require_band_role(user, band_id, roles=MANAGER_ROLES, lock=False):
     """
     band_query = Band.query.filter_by(id=band_id)
     if lock:
-        band_query = band_query.with_for_update()
+        band_query = band_query.with_for_update().populate_existing()
     band = band_query.one_or_none()
     if band is None or band.deleted_at is not None:
         raise NotFoundError('Band not found')
     membership_query = BandMembership.query.filter_by(band_id=band.id, user_id=user.id, status=ACTIVE)
     if lock:
-        membership_query = membership_query.with_for_update()
+        membership_query = membership_query.with_for_update().populate_existing()
     membership = membership_query.one_or_none()
     if membership is None:
         # Do not disclose a band to a non-member through protected endpoints.
@@ -190,7 +206,8 @@ def create_request(user, payload):
 def review_request(admin, request_id, approved, note=None):
     # PostgreSQL serializes concurrent reviewers.  SQLite accepts the clause
     # as a no-op and relies on its writer lock plus unique constraints.
-    item = BandCreationRequest.query.filter_by(id=request_id).with_for_update().one_or_none()
+    _begin_privileged_mutation()
+    item = BandCreationRequest.query.filter_by(id=request_id).with_for_update().populate_existing().one_or_none()
     if item is None:
         raise NotFoundError('Band creation request not found')
     if item.status != 'pending':
@@ -253,7 +270,8 @@ def join_request(user, band_id):
 
 
 def approve_membership(actor, membership_id, approved):
-    item = BandMembership.query.filter_by(id=membership_id).with_for_update().one_or_none()
+    _begin_privileged_mutation()
+    item = BandMembership.query.filter_by(id=membership_id).with_for_update().populate_existing().one_or_none()
     if item is None:
         raise NotFoundError('Membership not found')
     band, _ = require_band_role(actor, item.band_id, lock=True)
@@ -278,14 +296,20 @@ def _token_hash(raw):
     return hashlib.sha256(raw.encode('ascii')).hexdigest()
 
 
-def create_invite(actor, band_id):
-    band, _ = require_band_role(actor, band_id, lock=True)
+def _create_invite_locked(actor, band):
     # token_urlsafe(32) is a 256-bit random capability. Only its fixed-size hash persists.
     raw = secrets.token_urlsafe(32)
     invite = BandInviteCode(band_id=band.id, token_hash=_token_hash(raw), created_by_user_id=actor.id)
     db.session.add(invite)
     db.session.flush()
     audit('invite_created', actor, band=band, target=invite)
+    return invite, raw
+
+
+def create_invite(actor, band_id):
+    _begin_privileged_mutation()
+    band, _ = require_band_role(actor, band_id, lock=True)
+    invite, raw = _create_invite_locked(actor, band)
     db.session.commit()
     return invite, raw
 
@@ -296,8 +320,11 @@ def invite_dict(invite):
 
 
 def revoke_invite(actor, band_id, invite_id):
+    _begin_privileged_mutation()
     band, _ = require_band_role(actor, band_id, lock=True)
-    invite = BandInviteCode.query.filter_by(id=invite_id, band_id=band.id).with_for_update().one_or_none()
+    invite = BandInviteCode.query.filter_by(
+        id=invite_id, band_id=band.id,
+    ).with_for_update().populate_existing().one_or_none()
     if invite is None:
         raise NotFoundError('Invite code not found')
     if invite.revoked_at is None:
@@ -306,6 +333,24 @@ def revoke_invite(actor, band_id, invite_id):
         audit('invite_revoked', actor, band=band, target=invite)
         db.session.commit()
     return invite
+
+
+def rotate_invite(actor, band_id, invite_id):
+    """Revoke and replace one capability in the same authorized transaction."""
+    _begin_privileged_mutation()
+    band, _ = require_band_role(actor, band_id, lock=True)
+    invite = BandInviteCode.query.filter_by(
+        id=invite_id, band_id=band.id,
+    ).with_for_update().populate_existing().one_or_none()
+    if invite is None:
+        raise NotFoundError('Invite code not found')
+    if invite.revoked_at is None:
+        invite.revoked_at = now()
+        invite.revoked_by_user_id = actor.id
+        audit('invite_revoked', actor, band=band, target=invite)
+    replacement, raw = _create_invite_locked(actor, band)
+    db.session.commit()
+    return replacement, raw
 
 
 def join_invite(user, raw):
@@ -343,7 +388,8 @@ def join_invite(user, raw):
 def set_role(actor, membership_id, role):
     if role not in {'admin', 'member'}:
         raise ValidationError('role must be admin or member.')
-    item = BandMembership.query.filter_by(id=membership_id).with_for_update().one_or_none()
+    _begin_privileged_mutation()
+    item = BandMembership.query.filter_by(id=membership_id).with_for_update().populate_existing().one_or_none()
     if item is None:
         raise NotFoundError('Membership not found')
     band, actor_membership = require_band_role(actor, item.band_id, OWNER_ROLES, lock=True)
@@ -361,14 +407,17 @@ def set_role(actor, membership_id, role):
 def transfer_ownership(actor, band_id, target_membership_id):
     # Lock the band and both membership rows where supported.  The partial
     # unique index remains the cross-process final authority.
-    band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().one_or_none()
+    _begin_privileged_mutation()
+    band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
     if band is None:
         raise NotFoundError('Band not found')
     owner = BandMembership.query.filter_by(band_id=band.id, user_id=actor.id, status=ACTIVE,
-                                           role='owner').with_for_update().one_or_none()
+                                           role='owner').with_for_update().populate_existing().one_or_none()
     if owner is None:
         raise NotFoundError('Band not found')
-    target = BandMembership.query.filter_by(id=target_membership_id, band_id=band.id, status=ACTIVE).with_for_update().one_or_none()
+    target = BandMembership.query.filter_by(
+        id=target_membership_id, band_id=band.id, status=ACTIVE,
+    ).with_for_update().populate_existing().one_or_none()
     if target is None:
         raise NotFoundError('Membership not found')
     if target.id == owner.id:
@@ -390,6 +439,7 @@ def transfer_ownership(actor, band_id, target_membership_id):
 
 
 def leave_band(actor, band_id):
+    _begin_privileged_mutation()
     band, item = active_membership(actor, band_id)
     if item is None:
         raise NotFoundError('Band not found')
@@ -408,6 +458,7 @@ def leave_band(actor, band_id):
 
 
 def close_band(actor, band_id):
+    _begin_privileged_mutation()
     band, _ = require_band_role(actor, band_id, OWNER_ROLES, lock=True)
     if band.deleted_at is None:
         band.deleted_at = now()
