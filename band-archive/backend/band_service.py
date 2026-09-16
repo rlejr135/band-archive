@@ -319,6 +319,13 @@ def invite_dict(invite):
             'revoked_at': invite.revoked_at.isoformat() if invite.revoked_at else None}
 
 
+def _locked_invite_by_token_hash(token_hash):
+    """Return an invite under the same row lock used by revoke and rotate."""
+    return BandInviteCode.query.filter_by(
+        token_hash=token_hash,
+    ).with_for_update().populate_existing()
+
+
 def revoke_invite(actor, band_id, invite_id):
     _begin_privileged_mutation()
     band, _ = require_band_role(actor, band_id, lock=True)
@@ -356,7 +363,11 @@ def rotate_invite(actor, band_id, invite_id):
 def join_invite(user, raw):
     if not isinstance(raw, str) or not raw or len(raw) > 200:
         raise ValidationError('Invite code is invalid.', 404)
-    invite = BandInviteCode.query.filter_by(token_hash=_token_hash(raw)).one_or_none()
+    # Share the invite row's serialization point with revoke/rotate.  In
+    # SQLite this takes the writer lock before lookup; PostgreSQL emits FOR
+    # UPDATE.  Do not move the revoked check before this lock.
+    _begin_privileged_mutation()
+    invite = _locked_invite_by_token_hash(_token_hash(raw)).one_or_none()
     if invite is None or invite.revoked_at is not None or invite.band.deleted_at is not None:
         raise ValidationError('Invite code is invalid.', 404)
     item = BandMembership.query.filter_by(band_id=invite.band_id, user_id=user.id).one_or_none()

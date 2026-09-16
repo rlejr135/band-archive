@@ -9,9 +9,13 @@ from flask import g, request
 import threading
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects import postgresql
 
 import auth_service
-from band_service import close_band, transfer_ownership
+from band_service import (
+    _locked_invite_by_token_hash, close_band, create_invite, join_invite,
+    revoke_invite, transfer_ownership,
+)
 from app import create_app
 from config import TestingConfig
 from errors import ValidationError
@@ -216,6 +220,76 @@ def test_sqlite_stale_owner_session_cannot_close_after_independent_transfer(tmp_
         with app.app_context():
             db.session.remove()
             db.drop_all()
+
+
+def test_sqlite_stale_invite_reader_cannot_join_after_independent_revoke(tmp_path):
+    """Redemption reloads a locked invite instead of trusting a stale read."""
+    config = type('FileSQLiteConfig', (TestingConfig,), {
+        'SQLALCHEMY_DATABASE_URI': f"sqlite:///{(tmp_path / 'invite-race.db').as_posix()}",
+    })
+    app = create_app(config, start_worker=False)
+    try:
+        with app.app_context():
+            db.create_all()
+            owner = AppUser(supabase_user_id='invite-owner', email='owner@example.com')
+            joiner = AppUser(supabase_user_id='invite-joiner', email='joiner@example.com')
+            db.session.add_all((owner, joiner))
+            db.session.flush()
+            band = Band(name='Invite Race', slug='invite-race', created_by_user_id=owner.id)
+            db.session.add(band)
+            db.session.flush()
+            db.session.add(BandMembership(band_id=band.id, user_id=owner.id, role='owner', status='active'))
+            db.session.commit()
+            invite, raw = create_invite(owner, band.id)
+            owner_id, joiner_id, band_id, invite_id = owner.id, joiner.id, band.id, invite.id
+            db.session.remove()
+
+        cached = threading.Event()
+        revoked = threading.Event()
+        join_result = {}
+
+        def stale_join_attempt():
+            with app.app_context():
+                joiner_user = db.session.get(AppUser, joiner_id)
+                # This identity-map value is deliberately stale after revocation.
+                assert BandInviteCode.query.filter_by(id=invite_id).one().revoked_at is None
+                cached.set()
+                assert revoked.wait(5)
+                try:
+                    join_invite(joiner_user, raw)
+                except ValidationError as error:
+                    join_result['status'] = error.status_code
+                    db.session.rollback()
+                else:
+                    join_result['status'] = 'joined'
+                finally:
+                    db.session.remove()
+
+        thread = threading.Thread(target=stale_join_attempt)
+        thread.start()
+        assert cached.wait(5)
+        with app.app_context():
+            revoke_invite(db.session.get(AppUser, owner_id), band_id, invite_id)
+            revoked.set()
+            db.session.remove()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert join_result['status'] == 404
+        with app.app_context():
+            assert BandMembership.query.filter_by(band_id=band_id, user_id=joiner_id).one_or_none() is None
+            assert AuditEvent.query.filter_by(event_type='membership_joined_by_invite').count() == 0
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.drop_all()
+
+
+def test_invite_redemption_uses_postgres_row_lock_contract(band_app):
+    """The lookup used by redemption compiles to PostgreSQL ``FOR UPDATE``."""
+    with band_app.app_context():
+        statement = _locked_invite_by_token_hash('a' * 64).statement
+        rendered = str(statement.compile(dialect=postgresql.dialect()))
+    assert 'FOR UPDATE' in rendered
 
 
 def test_only_owner_changes_admin_roles_and_invites_reset_former_admin(band_app):
