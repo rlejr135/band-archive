@@ -10,3 +10,6 @@ requests>=2.31.0
 gunicorn>=21.0
 boto3>=1.34.0
 PyJWT[crypto]==2.10.1
+# PostgreSQL driver for the explicitly invoked, offline legacy-rehearsal CLI.
+# It is not imported by normal application startup.
+psycopg[binary]==3.2.10
