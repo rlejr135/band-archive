@@ -81,3 +81,16 @@ Until the `phase4_tenant_scope` state row is `validated`, `/api/v2` remains
 feature-gated and v1 continues to use its compatibility fields. Do not apply a
 NOT NULL/per-band-unique contract migration merely because revision 05 is at
 head: it must first verify this marker plus zero null/orphan/cross-scope rows.
+
+## Phase 5 offline migration rehearsal
+
+The only supported rehearsal entry point is
+`tools/legacy_rehearsal/rehearsal.py`; see `tools/README-legacy-rehearsal.md`.
+It requires an explicit, immutable SQLite snapshot and an empty PostgreSQL
+staging target already at Alembic head. It migrates/backfills a temporary
+source copy and never invokes Fly, Supabase, or R2 writes. The JSON manifest
+contains stable counts, relationship checks, vote totals, and expected object
+keys, with capability values and connection details redacted. A partial old
+SQLite schema is refused—not stamped—until an explicit legacy normalizer has
+been reviewed. This rehearsal is not evidence to finalize Phase 4 nullable
+columns into a contract migration.
