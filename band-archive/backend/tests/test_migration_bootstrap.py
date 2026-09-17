@@ -1,4 +1,9 @@
-from flask_migrate import upgrade
+from io import StringIO
+import importlib
+
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from flask_migrate import downgrade, upgrade
 from sqlalchemy import inspect, text
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -49,6 +54,21 @@ def _dispose(app):
         db.engine.dispose()
 
 
+def _offline_postgres_revision_sql(operation):
+    """Compile a revision directly, without a PostgreSQL driver or server."""
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name='postgresql', opts={'as_sql': True, 'output_buffer': output},
+    )
+    operations = Operations(context)
+    operations._install_proxy()
+    try:
+        operation()
+    finally:
+        operations._remove_proxy()
+    return output.getvalue()
+
+
 def _runtime_config(database_path, auth_enabled=False):
     return type('RuntimeConfig', (TestingConfig,), {
         'SQLALCHEMY_DATABASE_URI': _database_url(database_path),
@@ -82,6 +102,49 @@ def test_fresh_database_upgrade_creates_current_baseline(tmp_path):
                 assert schema_contract_differences(connection) == []
         with app.app_context():
             assert _version(app) == migration_head_revision()
+    finally:
+        _dispose(app)
+
+
+def test_revision_five_postgres_offline_upgrade_and_downgrade_compile_without_reflection(monkeypatch):
+    """Phase 4's PostgreSQL path must work for release SQL generation offline."""
+    revision = importlib.import_module('migrations.versions.20260916_05_expand_tenant_schema')
+    monkeypatch.setattr(revision.context, 'is_offline_mode', lambda: True)
+
+    upgrade_sql = _offline_postgres_revision_sql(revision.upgrade)
+    downgrade_sql = _offline_postgres_revision_sql(revision.downgrade)
+
+    assert 'ALTER TABLE song ADD COLUMN band_id INTEGER' in upgrade_sql
+    assert 'ALTER TABLE media ADD CONSTRAINT fk_media_band FOREIGN KEY(band_id) REFERENCES band (id)' in upgrade_sql
+    assert 'ALTER TABLE song ADD CONSTRAINT ck_song_visibility CHECK' in upgrade_sql
+    assert 'CREATE TABLE tenant_backfill_state' in upgrade_sql
+    assert 'ALTER TABLE song DROP CONSTRAINT ck_song_visibility' in downgrade_sql
+    assert 'ALTER TABLE media DROP CONSTRAINT fk_media_band' in downgrade_sql
+    assert 'DROP TABLE tenant_backfill_state' in downgrade_sql
+    assert '_alembic_tmp' not in upgrade_sql
+    assert '_alembic_tmp' not in downgrade_sql
+
+
+def test_revision_five_sqlite_upgrade_downgrade_and_repeat_keep_exact_metadata(tmp_path):
+    """SQLite keeps its batch path while the pre-backfill inverse stays usable."""
+    database_path = tmp_path / 'revision-five-roundtrip.db'
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            upgrade(revision='20260916_04', directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
+            assert _version(app) == '20260916_05'
+            with db.engine.connect() as connection:
+                assert schema_differences(connection) == []
+                assert schema_contract_differences(connection) == []
+
+            downgrade(revision='20260916_04', directory=str(MIGRATIONS_DIRECTORY))
+            assert _version(app) == '20260916_04'
+            upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.connect() as connection:
+                assert schema_differences(connection) == []
+                assert schema_contract_differences(connection) == []
     finally:
         _dispose(app)
 

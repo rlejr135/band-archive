@@ -500,7 +500,7 @@ class PersonalLogMultipartUploadSession(db.Model):
     """Server-owned multipart session for a member's personal log."""
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
-    created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
+    created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True)
     is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     r2_upload_id = db.Column(db.String(200), nullable=False)
     object_key = db.Column(db.String(300), nullable=False)
@@ -518,6 +518,7 @@ class PersonalLogMultipartUploadSession(db.Model):
     completion_started_at = db.Column(db.DateTime, nullable=True)
     parts = db.relationship('PersonalLogMultipartUploadPart', backref='session', lazy=True,
                             cascade='all, delete-orphan', order_by='PersonalLogMultipartUploadPart.part_number')
+    __table_args__ = (db.Index('ix_pl_multipart_session_creator', 'created_by_membership_id'),)
 
 
 class PersonalLogMultipartUploadPart(db.Model):

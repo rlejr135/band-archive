@@ -51,6 +51,13 @@ not move, copy, delete, or inspect R2 objects. Existing `filename` and upload
 `object_key` values remain the v1 source of truth until a later tenant-aware
 writer is deployed.
 
+Because revision 05 is pre-release, it has a pre-backfill-only downgrade for
+aborted rollouts. It refuses an online downgrade once the tenant backfill state
+exists; restore a backup instead after a backfill has begun. Its PostgreSQL
+path uses native `ALTER TABLE` operations so `alembic --sql` compiles without
+a live database or table reflection; SQLite retains batch rebuilds for its DDL
+limitations.
+
 Run the stages while the application is stopped, against a tested database
 copy first:
 
