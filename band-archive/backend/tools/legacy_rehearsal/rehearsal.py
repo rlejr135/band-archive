@@ -57,6 +57,12 @@ def _head_revisions() -> set[str]:
     return set(ScriptDirectory.from_config(config).get_heads())
 
 
+def _known_revisions() -> set[str]:
+    config = Config(str(MIGRATIONS_DIRECTORY / "alembic.ini"))
+    config.set_main_option("script_location", str(MIGRATIONS_DIRECTORY))
+    return {revision.revision for revision in ScriptDirectory.from_config(config).walk_revisions()}
+
+
 def redact(value: Any) -> Any:
     """Remove connection credentials and opaque capabilities from reports/errors."""
     if isinstance(value, dict):
@@ -139,6 +145,14 @@ def _assert_supported_source_schema(path: Path) -> None:
     fingerprint = _source_schema_fingerprint(path)
     tables = set(fingerprint["tables"])
     if "alembic_version" in tables:
+        uri = f"file:{path.as_posix()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as conn:
+            versions = sorted(row[0] for row in conn.execute("SELECT version_num FROM alembic_version"))
+        if len(versions) != 1 or versions[0] not in _known_revisions():
+            raise RehearsalError(
+                "unsupported Alembic source revision; schema fingerprint " + fingerprint["checksum"][:16]
+                + ". Do not stamp or import it; restore a known snapshot or review an explicit normalizer."
+            )
         return
     from migration_bootstrap import BASELINE_TABLE_NAMES
     required = set(BASELINE_TABLE_NAMES)
@@ -449,12 +463,13 @@ def run_rehearsal(source_sqlite: str, target_url: str, target_label: str, *, dry
     try:
         _assert_target_ready(engine, target_label, allow_sqlite_target)
         with tempfile.TemporaryDirectory(prefix="band-archive-legacy-rehearsal-") as directory:
+            source_fingerprint = _source_schema_fingerprint(preflight_sqlite_snapshot(source_sqlite))
             source_copy, backfill = _copy_and_backfill(source_sqlite, Path(directory))
             source_engine = create_engine(f"sqlite:///{source_copy.as_posix()}", future=True)
             try:
                 with source_engine.connect() as source_connection:
                     before = reconcile(source_connection)
-                    result = {"target": safe_target_identity(target_url), "backfill": backfill,
+                    result = {"target": safe_target_identity(target_url), "source_schema": source_fingerprint, "backfill": backfill,
                               "before": before, "dry_run": dry_run}
                     if dry_run:
                         return result

@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, text
 
 from extensions import db
 from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
-from tools.legacy_rehearsal.rehearsal import RehearsalError, reconcile, run_rehearsal
+from tools.legacy_rehearsal.rehearsal import RehearsalError, reconcile, run_rehearsal, safe_target_identity
 
 
 def _url(path):
@@ -99,6 +99,13 @@ def test_target_label_must_explicitly_identify_a_rehearsal_namespace(tmp_path):
     _upgrade(target)
     with pytest.raises(RehearsalError, match="target label"):
         run_rehearsal(str(source), _url(target), "database", dry_run=True, allow_sqlite_target=True)
+
+
+def test_postgresql_psycopg_url_contract_redacts_credential_material():
+    identity = safe_target_identity("postgresql+psycopg://operator:password@staging.example.test:5432/rehearsal")
+    assert identity["dialect"] == "postgresql"
+    assert "password" not in json.dumps(identity)
+    assert identity["host_fingerprint"]
 
 
 def test_dry_run_is_source_byte_stable_and_reports_no_credentials(tmp_path):
