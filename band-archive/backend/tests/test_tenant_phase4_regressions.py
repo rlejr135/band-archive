@@ -63,6 +63,36 @@ _V1_WRITES = (
 )
 
 
+@pytest.mark.parametrize('revision', ('20260916_04', '20260916_05'))
+def test_phase4_schema_boundary_never_blocks_normal_cors_preflight(tmp_path, monkeypatch, revision):
+    """OPTIONS must remain a browser transport concern, not a tenant write."""
+    path = tmp_path / f'{revision}.db'
+    _upgrade(path, revision)
+    origin = 'https://band-archive.pages.dev'
+    monkeypatch.setenv('CORS_ALLOWED_ORIGINS', origin)
+
+    class BrowserConfig(_runtime_config(path)):
+        DEBUG = False
+
+    runtime = create_app(BrowserConfig, start_worker=False)
+    try:
+        response = runtime.test_client().options('/songs', headers={
+            'Origin': origin,
+            'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'content-type,x-voter-id',
+        })
+        assert response.status_code == 200
+        assert response.headers['Access-Control-Allow-Origin'] == origin
+        allowed_headers = {
+            item.strip().lower()
+            for item in response.headers['Access-Control-Allow-Headers'].split(',')
+        }
+        assert {'content-type', 'x-voter-id'} <= allowed_headers
+        assert 'POST' in response.headers['Access-Control-Allow-Methods']
+    finally:
+        _dispose(runtime)
+
+
 def test_revision_four_blocks_every_orm_backed_v1_read_and_write_without_mutation(tmp_path):
     path = tmp_path / 'revision-four.db'
     _upgrade(path, '20260916_04')

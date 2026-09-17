@@ -355,7 +355,7 @@ def create_app(config_class=None, start_worker=None):
 
     @app.before_request
     def _require_phase4_orm_schema():
-        if request.path == '/health' or request.path.startswith('/api/v2/'):
+        if request.method == 'OPTIONS' or request.path == '/health' or request.path.startswith('/api/v2/'):
             return None
         if app.config.get('PHASE4_ORM_SCHEMA_READY', False):
             if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
