@@ -87,10 +87,14 @@ head: it must first verify this marker plus zero null/orphan/cross-scope rows.
 The only supported rehearsal entry point is
 `tools/legacy_rehearsal/rehearsal.py`; see `tools/README-legacy-rehearsal.md`.
 It requires an explicit, immutable SQLite snapshot and an empty PostgreSQL
-staging target already at Alembic head. It migrates/backfills a temporary
+staging target already at Alembic head. The parsed target host/database and
+connected schema must match explicit expected values; a staging label is not an
+authorization boundary. It migrates/backfills a temporary
 source copy and never invokes Fly, Supabase, or R2 writes. The JSON manifest
-contains stable counts, relationship checks, vote totals, and expected object
-keys, with capability values and connection details redacted. A partial old
+contains stable source SHA evidence, full-row content digests, relationship
+checks, vote totals, and expected object keys, with capability values and
+connection details redacted. Live multipart sessions/parts are quarantined by
+omission with aggregate evidence, so they cannot resume against R2. A partial old
 SQLite schema is refused—not stamped—until an explicit legacy normalizer has
 been reviewed. This rehearsal is not evidence to finalize Phase 4 nullable
 columns into a contract migration.

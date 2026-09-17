@@ -16,23 +16,29 @@ cd backend
 python tools/legacy_rehearsal/rehearsal.py `
   --source-sqlite E:\operator\snapshot\band_archive.sqlite `
   --target-url $env:REHEARSAL_TARGET_URL `
-  --target-label "supabase staging rehearsal" `
+  --expected-target-host db.staging.example.test `
+  --expected-target-database rehearsal `
+  --expected-target-schema public `
   --dry-run
 ```
 
 The target URL can be supplied through `REHEARSAL_TARGET_URL`, but reports
-contain only a dialect and a one-way host/database fingerprint. Capability
+contain only a dialect and a one-way host/database fingerprint. The parsed URL
+host/database and the connected PostgreSQL schema must match the three explicit
+expected values; a descriptive label cannot authorize a target. Capability
 tokens, upload ids, passwords, URLs, and credentials are redacted. A real
 import is the same command without `--dry-run`; it is one target transaction,
-resets PostgreSQL sequences only after rows are inserted, verifies counts and
-primary keys, and rolls the transaction back on any reconciliation failure.
+resets PostgreSQL sequences only after rows are inserted, verifies full-row
+content digests (not just counts/PKs), and rolls back on any mismatch.
 
 ## Required operator gates
 
 1. Stop application writers and take a point-in-time SQLite snapshot. Do not
    use a live `-wal` file as an input. Retain the original, checksum it, and
    pass the copy by an explicit path.
-2. Run the dry-run twice and retain the equal JSON checksums. Review null
+2. Run the dry-run twice and retain the equal JSON checksums. Record the source
+   SHA-256/size/mtime before and after; the temporary immutable snapshot SHA is
+   also included. Review null
    tenant scope/visibility, FK orphans, cached vote-score mismatches, comment
    roots, session/part relationships, and the expected object manifest.
 3. Create a **new empty** Supabase staging PostgreSQL database/namespace and
@@ -41,7 +47,11 @@ primary keys, and rolls the transaction back on any reconciliation failure.
 4. Run one import. Run reconciliation again against source-copy and target,
    compare all counts/PK checksums and relationship checksums, and verify
    PostgreSQL sequences by inserting only in the disposable environment.
-5. Only then, with separate approval, use a read-only object listing/head
+5. Legacy multipart sessions and their parts are **quarantined by omission**:
+   no live R2 upload id, capability hash, ETag, or checksum reaches the target.
+   The report retains only count/PK-hash quarantine evidence. The application
+   therefore cannot resume, complete, or abort an imported provider session.
+6. Only then, with separate approval, use a read-only object listing/head
    adapter to compare expected keys and known sizes. The adapter exposes list
    and head data only; it has no put/copy/delete method. No object migration is
    part of this phase.
@@ -57,7 +67,9 @@ mounted production volume. Do **not** put production URLs, bucket names,
 credentials, or signed URLs in tickets or JSON reports.
 
 The tool supports only the checked-in pre-Alembic baseline or an Alembic-known
-schema. It deliberately refuses older partial variants such as a `practice_log`
+schema. A stamped source must pass its exact revision-specific structural
+contract—including unexpected indexes, triggers, and constraints—before it is
+upgraded. It deliberately refuses older partial variants such as a `practice_log`
 table or a `song.lyrics` column before stamping anything. Those need an
 explicit, reviewed normalizer that maps every legacy field without guesswork.
 
