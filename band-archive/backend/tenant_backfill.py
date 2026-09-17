@@ -107,6 +107,10 @@ def _assert_resume_safe(connection, band_id):
 def _object_manifest(connection):
     unresolved, updates = [], []
     rules = (
+        # Historic sheet uploads used the same ``media/`` R2 namespace as the
+        # upload route.  Keep the old compatibility filename and record only
+        # the provable existing key; do not copy or inspect object storage.
+        ('song', 'id', 'sheet_music', 'sheet_music_object_key', 'media'),
         ('media', 'id', 'filename', 'object_key', 'media'),
         ('media', 'id', 'audio_filename', 'audio_object_key', 'media'),
         ('media', 'id', 'video_720_filename', 'video_720_object_key', 'media'),

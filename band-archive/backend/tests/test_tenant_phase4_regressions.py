@@ -178,6 +178,25 @@ def test_backfill_dry_plan_is_byte_stable_validates_before_success_and_apply_rol
         _dispose(app)
 
 
+def test_backfill_records_provable_legacy_sheet_music_key_without_storage_io(tmp_path):
+    """The historic song upload route stored sheets below ``media/``."""
+    path = tmp_path / 'sheet-music-key.db'
+    _upgrade(path, '20260916_05')
+    app = _migration_app(path)
+    try:
+        with app.app_context(), db.engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO song (title, artist, sheet_music, upvote_count, downvote_count, vote_score) "
+                "VALUES ('song', 'artist', 'sheet.pdf', 0, 0, 0)"
+            ))
+            apply(connection)
+            assert connection.execute(text(
+                "SELECT sheet_music_object_key FROM song WHERE sheet_music = 'sheet.pdf'"
+            )).scalar_one() == 'media/sheet.pdf'
+    finally:
+        _dispose(app)
+
+
 def _backfilled_runtime(path):
     _upgrade(path, '20260916_05')
     migration = _migration_app(path)
