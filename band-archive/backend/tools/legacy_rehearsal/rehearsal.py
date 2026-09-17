@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import sqlite3
 import tempfile
+import base64
+import math
+import uuid
 from collections import defaultdict
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,11 +27,16 @@ import click
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from flask_migrate import upgrade
-from sqlalchemy import MetaData, create_engine, inspect, select, text
-from sqlalchemy.engine import Connection, Engine, URL, make_url
+from sqlalchemy import Boolean, Date, DateTime, MetaData, Time, create_engine, inspect, select, text
+from sqlalchemy.engine import Connection, Engine, make_url
+from sqlalchemy.exc import SQLAlchemyError
 
-from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app, stamp_existing_current_schema
-from tenant_backfill import TenantBackfillError, apply as apply_tenant_backfill
+from migration_bootstrap import (
+    MIGRATIONS_DIRECTORY, assert_upgrade_preflight, create_migration_app,
+    stamp_existing_current_schema,
+)
+import tenant_backfill
+from tenant_backfill import TenantBackfillError, _canonical_key, apply as apply_tenant_backfill
 from extensions import db
 
 
@@ -36,8 +45,11 @@ class RehearsalError(RuntimeError):
 
 
 _SECRET = re.compile(r"(?i)(token|secret|password|credential|authorization|signature|upload_id|r2_upload_id|etag)")
-_SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+=,-]*$")
 _MANAGED_EXCLUDE = {"alembic_version"}
+_QUARANTINED_TABLES = {
+    "multipart_upload_session", "multipart_upload_part",
+    "personal_log_multipart_upload_session", "personal_log_multipart_upload_part",
+}
 _OBJECT_FIELDS = (
     ("song", "id", "band_id", "sheet_music_object_key", "sheet_music", "media", None),
     ("media", "id", "band_id", "object_key", "filename", "media", "file_size"),
@@ -80,6 +92,44 @@ def safe_target_identity(database_url: str) -> dict[str, str]:
     host = url.host or "local"
     fingerprint = hashlib.sha256(f"{url.drivername}|{host}|{url.database or ''}".encode()).hexdigest()[:16]
     return {"dialect": url.get_backend_name(), "host_fingerprint": fingerprint}
+
+
+def _file_fingerprint(path: Path) -> dict[str, Any]:
+    """Stable evidence that does not reveal a local path or any DB content."""
+    stat = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"sha256": digest.hexdigest(), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _validate_target_url(database_url: str, *, expected_target_host: str | None,
+                         expected_target_database: str | None,
+                         expected_target_schema: str | None,
+                         allow_sqlite_target: bool,
+                         sqlite_test_target_path: str | None) -> dict[str, str]:
+    """Prove target identity from parsed URL/options, never a display label."""
+    url = make_url(database_url)
+    dialect = url.get_backend_name()
+    if dialect == "sqlite":
+        if not allow_sqlite_target or not sqlite_test_target_path:
+            raise RehearsalError("SQLite target needs --allow-sqlite-target and an explicit test target path")
+        actual = _sqlite_path(database_url)
+        expected = Path(sqlite_test_target_path).expanduser().resolve()
+        if actual != expected:
+            raise RehearsalError("SQLite target path does not match the explicit test target path")
+        return {"dialect": "sqlite", "schema": "sqlite"}
+    if dialect != "postgresql":
+        raise RehearsalError("target must be PostgreSQL; SQLite is test-only")
+    if not expected_target_host or not expected_target_database or not expected_target_schema:
+        raise RehearsalError("PostgreSQL target requires expected host, database, and schema")
+    actual_host, actual_database = (url.host or "").lower(), url.database or ""
+    if actual_host in {"localhost", "127.0.0.1", "::1"}:
+        raise RehearsalError("localhost is not an allowed PostgreSQL rehearsal target")
+    if actual_host != expected_target_host.lower() or actual_database != expected_target_database:
+        raise RehearsalError("PostgreSQL target host or database does not match the explicit expected identity")
+    return {"dialect": "postgresql", "schema": expected_target_schema}
 
 
 def _sqlite_path(database_url_or_path: str) -> Path:
@@ -168,32 +218,50 @@ def _assert_supported_source_schema(path: Path) -> None:
         )
 
 
-def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str, Any]]:
+def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     source_path = preflight_sqlite_snapshot(source)
     _assert_supported_source_schema(source_path)
-    source_identity = (source_path.stat().st_size, source_path.stat().st_mtime_ns)
-    copy_path = temporary_dir / "legacy-rehearsal-copy.sqlite"
-    shutil.copy2(source_path, copy_path)
-    if source_identity != (source_path.stat().st_size, source_path.stat().st_mtime_ns):
+    source_before = _file_fingerprint(source_path)
+    snapshot_path = temporary_dir / "legacy-rehearsal-snapshot.sqlite"
+    working_path = temporary_dir / "legacy-rehearsal-working.sqlite"
+    shutil.copy2(source_path, snapshot_path)
+    snapshot_fingerprint = _file_fingerprint(snapshot_path)
+    if source_before != _file_fingerprint(source_path) or source_before["sha256"] != snapshot_fingerprint["sha256"]:
         raise RehearsalError("source SQLite snapshot changed while being copied")
-    source_url = f"sqlite:///{copy_path.as_posix()}"
+    # Keep the copied snapshot immutable as operator evidence. Only its second
+    # copy is upgraded/backfilled.
+    shutil.copy2(snapshot_path, working_path)
+    source_url = f"sqlite:///{working_path.as_posix()}"
     app = create_migration_app(source_url)
+    # A rehearsal must be byte/report stable. Phase 4's import-only rows have
+    # no historic timestamp, so use the immutable snapshot mtime rather than
+    # wall clock time when it creates that operator evidence on the work copy.
+    original_backfill_now = tenant_backfill._now
+    tenant_backfill._now = lambda: datetime.fromtimestamp(source_before["mtime_ns"] / 1_000_000_000, timezone.utc)
     try:
         with app.app_context():
             inspector = inspect(db.engine)
             if "alembic_version" not in inspector.get_table_names():
                 stamp_existing_current_schema()
+            else:
+                # This validates the exact metadata, columns, indexes,
+                # constraints and revision-specific triggers before Alembic is
+                # allowed to touch a known stamped source.
+                assert_upgrade_preflight()
             upgrade(directory=str(MIGRATIONS_DIRECTORY))
             with db.engine.begin() as connection:
                 report = apply_tenant_backfill(connection)
-    except (TenantBackfillError, Exception) as error:
-        # Never include a DB URL: drivers often render embedded passwords.
-        raise RehearsalError(f"source copy migration/backfill failed: {redact(str(error))}") from error
+    except Exception as error:
+        # Never include driver SQL, parameters, paths, or a DB URL.
+        raise RehearsalError("source copy migration/backfill failed") from error
     finally:
+        tenant_backfill._now = original_backfill_now
         with app.app_context():
             db.session.remove()
             db.engine.dispose()
-    return copy_path, redact(report)
+    if snapshot_fingerprint != _file_fingerprint(snapshot_path):
+        raise RehearsalError("immutable copied snapshot changed during rehearsal")
+    return working_path, redact(report), {"source_before": source_before, "immutable_snapshot": snapshot_fingerprint}
 
 
 def _table_names(connection: Connection) -> list[str]:
@@ -230,6 +298,104 @@ def _row_checksum(rows: Iterable[dict[str, Any]]) -> str:
         digest.update(json.dumps(redact(row), default=str, sort_keys=True, separators=(",", ":")).encode())
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def _stable_value(value: Any) -> bytes:
+    """Type-tagged canonical serialization used only inside SHA-256 digests."""
+    if value is None:
+        return b"n"
+    if isinstance(value, bool):
+        return b"b1" if value else b"b0"
+    if isinstance(value, bytes):
+        return b"y" + base64.b64encode(value)
+    if isinstance(value, str):
+        return b"s" + value.encode("utf-8")
+    if isinstance(value, int):
+        return b"i" + str(value).encode("ascii")
+    if isinstance(value, Decimal):
+        return b"d" + format(value, "f").encode("ascii")
+    if isinstance(value, float):
+        if math.isnan(value):
+            return b"fNaN"
+        if math.isinf(value):
+            return b"f+Inf" if value > 0 else b"f-Inf"
+        return b"f" + value.hex().encode("ascii")
+    if isinstance(value, datetime):
+        return b"z" + value.isoformat(timespec="microseconds").encode("utf-8")
+    if isinstance(value, date):
+        return b"D" + value.isoformat().encode("ascii")
+    if isinstance(value, time):
+        return b"T" + value.isoformat(timespec="microseconds").encode("ascii")
+    return b"x" + type(value).__name__.encode("ascii", "backslashreplace") + b":" + str(value).encode("utf-8")
+
+
+def _stable_column_value(value: Any, column: Any) -> bytes:
+    """Normalize dialect return types while retaining the stored value."""
+    if value is None:
+        return _stable_value(value)
+    if isinstance(column.type, Boolean):
+        return b"b1" if bool(value) else b"b0"
+    if isinstance(column.type, DateTime):
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return _stable_value(value)
+    if isinstance(column.type, Date) and not isinstance(column.type, DateTime):
+        if isinstance(value, str):
+            try:
+                value = date.fromisoformat(value)
+            except ValueError:
+                pass
+        return _stable_value(value)
+    if isinstance(column.type, Time):
+        if isinstance(value, str):
+            try:
+                value = time.fromisoformat(value)
+            except ValueError:
+                pass
+        return _stable_value(value)
+    return _stable_value(value)
+
+
+def _content_digests(connection: Connection) -> dict[str, dict[str, Any]]:
+    """Hash every imported, non-excluded column without exposing row values."""
+    metadata = _read_metadata(connection)
+    result = {}
+    for table in _ordered_tables(metadata):
+        if table.name in _QUARANTINED_TABLES:
+            continue
+        columns = sorted(table.columns, key=lambda column: column.name)
+        pk_columns = list(table.primary_key.columns) or columns
+        digest, count = hashlib.sha256(), 0
+        column_digests = {column.name: hashlib.sha256() for column in columns}
+        for row in connection.execute(select(*columns).order_by(*pk_columns)).mappings():
+            digest.update(b"table\0" + table.name.encode("utf-8") + b"\0")
+            for column in columns:
+                encoded = _stable_column_value(row[column.name], column)
+                digest.update(column.name.encode("utf-8") + b"\0" + str(len(encoded)).encode("ascii") + b":" + encoded)
+                column_digests[column.name].update(str(len(encoded)).encode("ascii") + b":" + encoded + b"\n")
+            digest.update(b"\n")
+            count += 1
+        result[table.name] = {"count": count, "sha256": digest.hexdigest(),
+                              "column_sha256": {name: item.hexdigest() for name, item in column_digests.items()}}
+    return result
+
+
+def _quarantine_manifest(connection: Connection) -> dict[str, dict[str, Any]]:
+    """Audit omitted live multipart state without exporting capabilities."""
+    metadata = _read_metadata(connection)
+    result = {}
+    for table in sorted(_QUARANTINED_TABLES & set(metadata.tables)):
+        obj = metadata.tables[table]
+        primary_key = list(obj.primary_key.columns) or list(obj.columns)
+        rows = connection.execute(select(*primary_key).order_by(*primary_key)).mappings().all()
+        result[table] = {"count": len(rows), "primary_key_checksum": _row_checksum(rows),
+                         "reason": "legacy_live_multipart_state_omitted"}
+    return result
 
 
 def _fk_orphans(connection: Connection, table: str) -> list[dict[str, Any]]:
@@ -293,6 +459,8 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
     manifest, defects = [], []
     seen: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for table, pk, band, key_column, fallback, prefix, size in _OBJECT_FIELDS:
+        if table in _QUARANTINED_TABLES:
+            continue
         if table not in tables or not _has_columns(connection, table, (pk, band, key_column)):
             continue
         columns = [pk, band, key_column] + ([fallback] if fallback else []) + ([size] if size else [])
@@ -301,17 +469,15 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
             key = row[key_column] or (row[fallback] if fallback else None)
             if not key:
                 continue
-            key = str(key).strip()
-            if not _SAFE_KEY.fullmatch(key) or ".." in key.split("/") or key.startswith("/"):
-                defects.append({"kind": "bad_key", "table": table, "id": row[pk]})
+            unresolved = []
+            canonical = _canonical_key(key, prefix, f"{table}:{row[pk]}:{key_column}", unresolved)
+            if unresolved or canonical is None:
+                defects.append({"kind": "invalid_or_cross_prefix_key", "table": table, "id": row[pk]})
                 continue
-            if prefix and not key.startswith(f"{prefix}/"):
-                defects.append({"kind": "cross_prefix_key", "table": table, "id": row[pk]})
-                continue
-            entry = {"key": key, "owner": {"type": table, "id": row[pk], "band_id": row[band]},
+            entry = {"key": canonical, "owner": {"type": table, "id": row[pk], "band_id": row[band]},
                      "expected_size": row[size] if size else None}
             manifest.append(entry)
-            seen[key].append(entry)
+            seen[canonical].append(entry)
     for key, entries in sorted(seen.items()):
         if len(entries) > 1:
             defects.append({"kind": "duplicate_key", "key": key, "owners": len(entries)})
@@ -364,6 +530,8 @@ def reconcile(connection: Connection, actual_objects: Iterable[dict[str, Any]] |
             )).mappings().all())
     report = {
         "table_counts": counts, "primary_keys": pks, "foreign_key_orphans": sorted(orphans, key=lambda row: row["relationship"]),
+        "content_digests": _content_digests(connection),
+        "multipart_quarantine": _quarantine_manifest(connection),
         "song_votes": _vote_summary(connection, "song_vote", "song_id"),
         "media_votes": _vote_summary(connection, "media_vote", "media_id"),
         "comments": _comment_summary(connection), "visibility_and_scope": visibility,
@@ -393,13 +561,12 @@ def reconcile(connection: Connection, actual_objects: Iterable[dict[str, Any]] |
     return redact(report)
 
 
-def _assert_target_ready(engine: Engine, target_label: str, allow_sqlite_target: bool) -> None:
-    dialect = engine.dialect.name
-    if dialect != "postgresql" and not (dialect == "sqlite" and allow_sqlite_target):
-        raise RehearsalError("target must be PostgreSQL; SQLite is test-only and needs --allow-sqlite-target")
-    if not any(label.lower() in target_label.lower() for label in ("rehearsal", "staging", "test")):
-        raise RehearsalError("target label must explicitly identify a rehearsal/staging/test namespace")
+def _assert_target_ready(engine: Engine, identity: dict[str, str]) -> None:
     with engine.connect() as connection:
+        if identity["dialect"] == "postgresql":
+            actual_schema = connection.execute(text("SELECT current_schema()")).scalar_one()
+            if actual_schema != identity["schema"]:
+                raise RehearsalError("PostgreSQL target schema does not match the explicit expected schema")
         tables = _table_names(connection)
         versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() if "alembic_version" in inspect(connection).get_table_names() else []
         if set(versions) != _head_revisions():
@@ -418,6 +585,9 @@ def _copy_rows(source: Connection, target: Connection) -> dict[str, int]:
     inserted = {}
     for source_table in _ordered_tables(source_metadata):
         name = source_table.name
+        if name in _QUARANTINED_TABLES:
+            inserted[name] = 0
+            continue
         target_table = target_metadata.tables[name]
         source_columns = [column.name for column in source_table.columns]
         target_columns = {column.name for column in target_table.columns}
@@ -452,39 +622,72 @@ def _reset_postgres_sequences(connection: Connection, metadata: MetaData) -> Non
                 connection.execute(text("SELECT setval(:sequence, :value, true)"), {"sequence": sequence, "value": maximum})
 
 
-def run_rehearsal(source_sqlite: str, target_url: str, target_label: str, *, dry_run: bool = False,
-                  allow_sqlite_target: bool = False) -> dict[str, Any]:
+def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: str | None = None,
+                  expected_target_database: str | None = None, expected_target_schema: str | None = None,
+                  dry_run: bool = False, allow_sqlite_target: bool = False,
+                  sqlite_test_target_path: str | None = None) -> dict[str, Any]:
     """Copy/migrate/backfill an SQLite copy and optionally import it once.
 
     The target is always checked *before* the source work, is never upgraded by
     this tool, and all inserts plus sequence updates occur in one transaction.
     """
-    engine = create_engine(target_url, future=True)
+    identity = _validate_target_url(
+        target_url, expected_target_host=expected_target_host,
+        expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
+        allow_sqlite_target=allow_sqlite_target, sqlite_test_target_path=sqlite_test_target_path,
+    )
+    source_path = _sqlite_path(source_sqlite)
+    engine = create_engine(target_url, future=True, hide_parameters=True)
     try:
-        _assert_target_ready(engine, target_label, allow_sqlite_target)
+        _assert_target_ready(engine, identity)
         with tempfile.TemporaryDirectory(prefix="band-archive-legacy-rehearsal-") as directory:
             source_fingerprint = _source_schema_fingerprint(preflight_sqlite_snapshot(source_sqlite))
-            source_copy, backfill = _copy_and_backfill(source_sqlite, Path(directory))
+            source_copy, backfill, source_files = _copy_and_backfill(source_sqlite, Path(directory))
             source_engine = create_engine(f"sqlite:///{source_copy.as_posix()}", future=True)
             try:
                 with source_engine.connect() as source_connection:
                     before = reconcile(source_connection)
-                    result = {"target": safe_target_identity(target_url), "source_schema": source_fingerprint, "backfill": backfill,
-                              "before": before, "dry_run": dry_run}
+                    result = {"target": safe_target_identity(target_url), "source_schema": source_fingerprint,
+                              "source_files": source_files, "backfill": backfill, "before": before,
+                              "multipart_quarantine": before["multipart_quarantine"], "dry_run": dry_run}
                     if dry_run:
+                        result["source_files"]["source_after"] = _file_fingerprint(source_path)
+                        if result["source_files"]["source_before"] != result["source_files"]["source_after"]:
+                            raise RehearsalError("source SQLite snapshot changed during rehearsal")
                         return result
                     with engine.begin() as target_connection:
                         inserted = _copy_rows(source_connection, target_connection)
                         _reset_postgres_sequences(target_connection, _read_metadata(target_connection))
                         after = reconcile(target_connection)
-                        if before["table_counts"] != after["table_counts"] or before["primary_keys"] != after["primary_keys"]:
+                        retained = lambda values: {key: value for key, value in values.items() if key not in _QUARANTINED_TABLES}
+                        if retained(before["table_counts"]) != retained(after["table_counts"]) or retained(before["primary_keys"]) != retained(after["primary_keys"]):
                             raise RehearsalError("post-import table count or primary-key mismatch; transaction rolled back")
+                        if before["content_digests"] != after["content_digests"]:
+                            differing_tables = sorted(
+                                table for table in before["content_digests"]
+                                if before["content_digests"].get(table) != after["content_digests"].get(table)
+                            )
+                            differing_columns = sorted(
+                                f"{table}.{column}" for table in differing_tables
+                                for column in before["content_digests"][table]["column_sha256"]
+                                if before["content_digests"][table]["column_sha256"].get(column)
+                                != after["content_digests"].get(table, {}).get("column_sha256", {}).get(column)
+                            )
+                            raise RehearsalError("post-import content digest mismatch for " + ",".join(differing_columns)
+                                                 + "; transaction rolled back")
                         if after["foreign_key_orphans"] or after["object_defects"]:
                             raise RehearsalError("post-import reconciliation reported relationship/object defects; transaction rolled back")
+                        result["source_files"]["source_after"] = _file_fingerprint(source_path)
+                        if result["source_files"]["source_before"] != result["source_files"]["source_after"]:
+                            raise RehearsalError("source SQLite snapshot changed during rehearsal")
                         result.update({"inserted": inserted, "after": after})
                         return result
             finally:
                 source_engine.dispose()
+    except RehearsalError:
+        raise
+    except Exception as error:
+        raise RehearsalError("rehearsal failed") from error
     finally:
         engine.dispose()
 
@@ -507,16 +710,28 @@ class ReadOnlyS3Adapter:
 @click.option("--source-sqlite", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path),
               help="Stopped/read-only SQLite snapshot. The original is never opened writable.")
 @click.option("--target-url", required=True, envvar="REHEARSAL_TARGET_URL", help="Empty staging PostgreSQL URL.")
-@click.option("--target-label", required=True, help="Must explicitly say rehearsal, staging, or test.")
+@click.option("--expected-target-host", help="Exact approved PostgreSQL host (not a display label).")
+@click.option("--expected-target-database", help="Exact approved PostgreSQL database/project reference.")
+@click.option("--expected-target-schema", help="Exact PostgreSQL schema expected after connection.")
 @click.option("--dry-run", is_flag=True, help="Migrate/backfill only a temporary copy; do not write target.")
 @click.option("--allow-sqlite-target", is_flag=True, help="TEST ONLY: permit SQLite compatibility target.")
-def cli(source_sqlite: Path, target_url: str, target_label: str, dry_run: bool, allow_sqlite_target: bool) -> None:
+@click.option("--sqlite-test-target-path", type=click.Path(dir_okay=False, path_type=Path),
+              help="TEST ONLY: resolved path that must exactly equal the SQLite target URL path.")
+def cli(source_sqlite: Path, target_url: str, expected_target_host: str | None,
+        expected_target_database: str | None, expected_target_schema: str | None,
+        dry_run: bool, allow_sqlite_target: bool, sqlite_test_target_path: Path | None) -> None:
     """Run one offline, non-repeatable legacy-migration rehearsal."""
     try:
-        report = run_rehearsal(str(source_sqlite), target_url, target_label, dry_run=dry_run,
-                               allow_sqlite_target=allow_sqlite_target)
-    except RehearsalError as error:
-        raise click.ClickException(str(redact(str(error)))) from error
+        report = run_rehearsal(
+            str(source_sqlite), target_url, expected_target_host=expected_target_host,
+            expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
+            dry_run=dry_run, allow_sqlite_target=allow_sqlite_target,
+            sqlite_test_target_path=str(sqlite_test_target_path) if sqlite_test_target_path else None,
+        )
+    except Exception as error:
+        correlation_id = uuid.uuid4().hex
+        # Do not expose driver SQL, parameter values, paths, or credentials.
+        raise click.ClickException(f"rehearsal_failed correlation_id={correlation_id}") from error
     click.echo(json.dumps(redact(report), default=str, ensure_ascii=False, sort_keys=True))
 
 
