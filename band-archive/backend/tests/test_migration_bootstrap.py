@@ -453,6 +453,33 @@ def test_postgres_default_normalization_is_limited_to_the_column_contract():
     assert _defaults_are_equivalent('21474836480', '21474836480::bigint', table.c.quota, 'audit_event', dialect)
 
 
+def test_postgres_serial_default_does_not_apply_to_composite_pk_auto_columns():
+    dialect = postgresql.dialect()
+    composite = sa.Table(
+        'rehearsal_songs', sa.MetaData(),
+        sa.Column('rehearsal_id', sa.Integer, primary_key=True),
+        sa.Column('song_id', sa.Integer, primary_key=True),
+    )
+    resolver = lambda *args: True
+    assert _defaults_are_equivalent(None, None, composite.c.rehearsal_id, 'rehearsal_songs', dialect,
+                                   sequence_resolver=resolver)
+    assert not _defaults_are_equivalent(
+        None, "nextval('rehearsal_songs_rehearsal_id_seq'::regclass)", composite.c.rehearsal_id,
+        'rehearsal_songs', dialect, sequence_resolver=resolver,
+    )
+    explicit = sa.Table(
+        'explicit_composite', sa.MetaData(),
+        sa.Column('id', sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column('part', sa.Integer, primary_key=True),
+    )
+    assert _defaults_are_equivalent(
+        None, "nextval('explicit_composite_id_seq'::regclass)", explicit.c.id,
+        'explicit_composite', dialect, sequence_resolver=resolver,
+    )
+    assert not _defaults_are_equivalent(None, None, explicit.c.id, 'explicit_composite', dialect,
+                                        sequence_resolver=resolver)
+
+
 def test_postgres_constraint_names_only_wildcard_anonymous_metadata():
     anonymous = Counter({(None, ('band_id',), 'band', ('id',), 'CASCADE', '', (None, None)): 1})
     generated = Counter({('band_membership_band_id_fkey', ('band_id',), 'band', ('id',), 'CASCADE', '', (None, None)): 1})

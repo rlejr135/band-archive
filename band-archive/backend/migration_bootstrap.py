@@ -248,9 +248,19 @@ def _postgres_boolean_default(value):
 
 
 def _postgres_automatic_integer_primary_key(column):
+    """Return whether metadata actually requests a generated integer default.
+
+    SQLAlchemy exposes ``autoincrement='auto'`` on many primary-key columns,
+    including each member of a composite key.  Only a single-column integer PK
+    selects that implicit behavior.  A composite key needs an explicit True.
+    """
     if not isinstance(column.type, (Integer, BigInteger, SmallInteger)):
         return False
-    return bool(column.primary_key and column.autoincrement and column.server_default is None)
+    if not column.primary_key or column.server_default is not None:
+        return False
+    if column.autoincrement is True:
+        return True
+    return column.autoincrement == 'auto' and len(column.table.primary_key.columns) == 1
 
 
 def _postgres_serial_sequence_is_owned(connection, table_name, column_name, sequence_name):
