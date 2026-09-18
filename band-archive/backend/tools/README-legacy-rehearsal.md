@@ -6,10 +6,12 @@ R2 write operation. It copies the supplied SQLite file into a temporary
 directory, upgrades and tenant-backfills that copy, then imports rows with
 their original primary keys into an already-empty target at Alembic head.
 
-Use a PostgreSQL staging database whose name/namespace is explicitly labelled
-`rehearsal` or `staging`; never point it at production. The tool refuses any
-nonempty target rather than attempting an idempotent merge. SQLite targets
-require `--allow-sqlite-target` and are only a local compatibility test path.
+Use an isolated PostgreSQL staging database; never point it at production.
+The invocation must provide the exact expected host, database/project
+reference, and connected schema—free-form labels do not authorize a target.
+The tool refuses any nonempty target rather than attempting an idempotent
+merge. SQLite targets require `--allow-sqlite-target` plus the exact resolved
+test-file path and are only a local compatibility test path.
 
 ```powershell
 cd backend

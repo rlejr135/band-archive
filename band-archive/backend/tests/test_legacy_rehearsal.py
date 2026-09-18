@@ -148,6 +148,9 @@ def test_dry_run_is_source_byte_stable_and_reports_no_credentials(tmp_path):
                            sqlite_test_target_path=str(target))
     assert source.read_bytes() == before
     assert first == second
+    assert first["source_files"]["source_before"]["sha256"] == first["source_files"]["source_after"]["sha256"]
+    assert first["source_files"]["source_before"]["sha256"] == first["source_files"]["immutable_snapshot"]["sha256"]
+    assert first["source_files"]["source_before"]["sha256"] == first["source_files"]["working_copy_before"]["sha256"]
     assert "opaque" not in json.dumps(first)
 
 
@@ -220,6 +223,37 @@ def test_known_stamped_source_with_unexpected_index_is_refused(tmp_path):
                       sqlite_test_target_path=str(target))
 
 
+@pytest.mark.parametrize("schema_mutation", [
+    "CREATE TABLE unexpected_rehearsal_data (id INTEGER PRIMARY KEY)",
+    "CREATE TRIGGER unexpected_song_update AFTER UPDATE ON song BEGIN SELECT 1; END",
+])
+def test_known_stamped_source_with_extra_table_or_trigger_is_refused(tmp_path, schema_mutation):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    engine = create_engine(_url(source))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(schema_mutation))
+    finally:
+        engine.dispose()
+    _upgrade(target)
+    expected = ("source SQLite trigger contract" if schema_mutation.startswith("CREATE TRIGGER")
+                else "source copy migration/backfill failed")
+    with pytest.raises(RehearsalError, match=expected):
+        run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
+
+
+def test_known_hardened_source_with_the_expected_audit_triggers_is_accepted(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    _upgrade(source)
+    _upgrade(target)
+    report = run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                           sqlite_test_target_path=str(target))
+    assert report["dry_run"] is True
+
+
 def test_phase4_canonical_key_rules_allow_korean_spaces_without_leaking_upload_state(tmp_path):
     source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
     _legacy_fixture(source)
@@ -234,7 +268,25 @@ def test_phase4_canonical_key_rules_allow_korean_spaces_without_leaking_upload_s
                            sqlite_test_target_path=str(target))
     assert "gallery/한글 사진.png" in {item["key"] for item in report["after"]["object_manifest"]}
     assert report["after"]["table_counts"]["multipart_upload_session"] == 0
+    assert report["after"]["table_counts"]["multipart_upload_part"] == 0
+    assert "s1" not in json.dumps(report["after"])
     assert "opaque" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("filename", ["../escape.mp4", "https://storage.example.test/object.mp4", "media/wrong-prefix.png"])
+def test_phase4_canonical_key_rules_refuse_traversal_url_and_cross_prefix_values(tmp_path, filename):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    engine = create_engine(_url(source))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE gallery_image SET filename = :filename WHERE id = 12"), {"filename": filename})
+    finally:
+        engine.dispose()
+    _upgrade(target)
+    with pytest.raises(RehearsalError, match="source copy migration/backfill failed"):
+        run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
 
 
 def test_cli_error_never_exposes_driver_sql_or_credentials(tmp_path, monkeypatch):

@@ -50,6 +50,11 @@ _QUARANTINED_TABLES = {
     "multipart_upload_session", "multipart_upload_part",
     "personal_log_multipart_upload_session", "personal_log_multipart_upload_part",
 }
+_AUDIT_TRIGGER_SQL = {
+    "audit_event_no_update": "create trigger audit_event_no_update before update on audit_event begin select raise(abort, 'audit_event is append-only'); end",
+    "audit_event_no_delete": "create trigger audit_event_no_delete before delete on audit_event begin select raise(abort, 'audit_event is append-only'); end",
+}
+_AUDIT_TRIGGER_REVISIONS = {"20260916_04", "20260916_05"}
 _OBJECT_FIELDS = (
     ("song", "id", "band_id", "sheet_music_object_key", "sheet_music", "media", None),
     ("media", "id", "band_id", "object_key", "filename", "media", "file_size"),
@@ -184,7 +189,26 @@ def _source_schema_fingerprint(path: Path) -> dict[str, Any]:
     return {"tables": tables, "columns": columns, "checksum": hashlib.sha256(encoded.encode()).hexdigest()}
 
 
-def _assert_supported_source_schema(path: Path) -> None:
+def _canonical_sqlite_trigger_sql(value: str | None) -> str:
+    """Normalize only presentation differences in SQLite's stored trigger DDL."""
+    return re.sub(r"\s+", " ", (value or "").strip()).replace('"', '').replace('`', '').casefold()
+
+
+def _assert_exact_sqlite_trigger_contract(path: Path, revision: str | None) -> None:
+    """Reject extra or altered trigger DDL before source migration can run."""
+    expected = _AUDIT_TRIGGER_SQL if revision in _AUDIT_TRIGGER_REVISIONS else {}
+    uri = f"file:{path.as_posix()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
+        actual = {
+            name: _canonical_sqlite_trigger_sql(sql)
+            for name, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
+        }
+    normalized_expected = {name: _canonical_sqlite_trigger_sql(sql) for name, sql in expected.items()}
+    if actual != normalized_expected:
+        raise RehearsalError("source SQLite trigger contract does not match its recorded revision")
+
+
+def _assert_supported_source_schema(path: Path) -> str | None:
     """Reject partial historical variants before Alembic could alter them.
 
     The checked-in baseline is the only pre-Alembic layout this rehearsal can
@@ -203,7 +227,7 @@ def _assert_supported_source_schema(path: Path) -> None:
                 "unsupported Alembic source revision; schema fingerprint " + fingerprint["checksum"][:16]
                 + ". Do not stamp or import it; restore a known snapshot or review an explicit normalizer."
             )
-        return
+        return versions[0]
     from migration_bootstrap import BASELINE_TABLE_NAMES
     required = set(BASELINE_TABLE_NAMES)
     missing = sorted(required - tables)
@@ -216,11 +240,13 @@ def _assert_supported_source_schema(path: Path) -> None:
             + "; extra=" + ",".join(unsupported or ["none"])
             + ". Do not stamp or import it. Build and review an explicit variant normalizer first."
         )
+    return None
 
 
 def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     source_path = preflight_sqlite_snapshot(source)
-    _assert_supported_source_schema(source_path)
+    source_revision = _assert_supported_source_schema(source_path)
+    _assert_exact_sqlite_trigger_contract(source_path, source_revision)
     source_before = _file_fingerprint(source_path)
     snapshot_path = temporary_dir / "legacy-rehearsal-snapshot.sqlite"
     working_path = temporary_dir / "legacy-rehearsal-working.sqlite"
@@ -231,6 +257,9 @@ def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str
     # Keep the copied snapshot immutable as operator evidence. Only its second
     # copy is upgraded/backfilled.
     shutil.copy2(snapshot_path, working_path)
+    working_before = _file_fingerprint(working_path)
+    if snapshot_fingerprint["sha256"] != working_before["sha256"]:
+        raise RehearsalError("working SQLite copy does not match immutable snapshot")
     source_url = f"sqlite:///{working_path.as_posix()}"
     app = create_migration_app(source_url)
     # A rehearsal must be byte/report stable. Phase 4's import-only rows have
@@ -261,7 +290,11 @@ def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str
             db.engine.dispose()
     if snapshot_fingerprint != _file_fingerprint(snapshot_path):
         raise RehearsalError("immutable copied snapshot changed during rehearsal")
-    return working_path, redact(report), {"source_before": source_before, "immutable_snapshot": snapshot_fingerprint}
+    return working_path, redact(report), {
+        "source_before": source_before,
+        "immutable_snapshot": snapshot_fingerprint,
+        "working_copy_before": working_before,
+    }
 
 
 def _table_names(connection: Connection) -> list[str]:
