@@ -27,6 +27,7 @@ from migration_bootstrap import (
     _audit_trigger_differences,
     _expected_check_constraints,
     _postgres_serial_sequence_is_owned,
+    _normalize_postgres_check_for_table,
     _partial_index_differences,
     schema_contract_differences,
     schema_differences,
@@ -465,10 +466,13 @@ def test_postgres_constraint_names_only_wildcard_anonymous_metadata():
 
 
 def test_postgres_check_normalization_handles_only_literal_in_and_any_forms():
-    expected = _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS')")
-    actual = _canonical_postgres_check_constraint(
-        "((visibility)::text = ANY ((ARRAY['MEMBERS'::character varying, 'PUBLIC'::character varying])::text[]))"
+    table = sa.Table('visibility_test', sa.MetaData(), sa.Column('visibility', sa.String(20)))
+    expected = _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS')"), table,
     )
+    actual = _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(
+        "((visibility)::text = ANY ((ARRAY['MEMBERS'::character varying, 'PUBLIC'::character varying])::text[]))"
+    ), table)
     assert expected == actual
     assert _canonical_postgres_check_constraint("visibility IN ('PUBLIC')") != expected
     assert _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS') OR visibility = 'PRIVATE'") is None
@@ -476,10 +480,15 @@ def test_postgres_check_normalization_handles_only_literal_in_and_any_forms():
 
 
 def test_postgres_numeric_check_normalization_is_structured_and_fail_closed():
-    expected = _canonical_postgres_check_constraint('storage_quota_bytes > 0')
-    assert expected == _canonical_postgres_check_constraint('(((storage_quota_bytes)::bigint) > (0)::bigint)')
+    table = sa.Table('quota_compare', sa.MetaData(), sa.Column('storage_quota_bytes', sa.BigInteger))
+    expected = _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint('storage_quota_bytes > 0'), table,
+    )
+    assert expected == _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint('(((storage_quota_bytes)::bigint) > (0)::bigint)'), table,
+    )
     for invalid in ('storage_quota_bytes > 1', 'other_column > 0'):
-        assert _canonical_postgres_check_constraint(invalid) != expected
+        assert _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(invalid), table) != expected
     for invalid in ('storage_quota_bytes >= 0', 'storage_quota_bytes > 0 OR storage_quota_bytes > 1',
                     'storage_quota_bytes > random()'):
         assert _canonical_postgres_check_constraint(invalid) is None
@@ -491,6 +500,21 @@ def test_postgres_numeric_check_normalization_is_structured_and_fail_closed():
                            sa.CheckConstraint('value IS NOT NULL', name='ck_unsupported'))
     with pytest.raises(Exception, match='outside the audited grammar'):
         _expected_check_constraints(unsupported, postgresql.dialect())
+
+
+def test_postgres_check_casts_must_preserve_the_metadata_column_type():
+    bigint = sa.Table('bigint_check', sa.MetaData(), sa.Column('storage_quota_bytes', sa.BigInteger))
+    valid = _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint('((storage_quota_bytes)::numeric > (0)::numeric)'), bigint,
+    )
+    assert valid is not None
+    assert _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint('((storage_quota_bytes)::integer > (0)::integer)'), bigint,
+    ) is None
+    varchar = sa.Table('varchar_check', sa.MetaData(), sa.Column('visibility', sa.String(20)))
+    assert _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint("(visibility)::character(20) = 'PUBLIC'::character(20)"), varchar,
+    ) is None
 
 
 def test_postgres_serial_catalog_proof_requires_public_exact_owned_sequence():
@@ -538,7 +562,7 @@ def test_backing_constraint_indexes_are_filtered_without_hiding_real_indexes():
     })
 
 
-def test_postgres_audit_trigger_verifier_checks_events_and_function_body():
+def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_function_body():
     class Result:
         def __init__(self, rows):
             self.rows = rows
@@ -549,29 +573,42 @@ def test_postgres_audit_trigger_verifier_checks_events_and_function_body():
     class Connection:
         dialect = type('Dialect', (), {'name': 'postgresql'})()
 
-        def __init__(self, trigger_rows, function_rows):
+        def __init__(self, trigger_rows):
             self.trigger_rows = trigger_rows
-            self.function_rows = function_rows
 
         def execute(self, statement):
-            return Result(self.trigger_rows if 'information_schema.triggers' in str(statement) else self.function_rows)
+            assert 'pg_trigger' in str(statement)
+            return Result(self.trigger_rows)
 
     triggers = [
-        ('audit_event_no_update', 'UPDATE', 'BEFORE', 'ROW', 'EXECUTE FUNCTION audit_event_append_only()'),
-        ('audit_event_no_delete', 'DELETE', 'BEFORE', 'ROW', 'EXECUTE FUNCTION audit_event_append_only()'),
+        ('audit_event_no_update', 19, 'O', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
+         "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;"),
+        ('audit_event_no_delete', 11, 'O', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
+         "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;"),
     ]
-    function = [("CREATE FUNCTION audit_event_append_only() RETURNS trigger LANGUAGE plpgsql AS $$ "
-                 "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END; $$",)]
-    assert _audit_trigger_differences(Connection(triggers, function)) == []
-    assert _audit_trigger_differences(Connection(
-        [('audit_event_no_update', 'UPDATE', 'AFTER', 'ROW', 'EXECUTE FUNCTION audit_event_append_only()')], function,
-    ))
-    assert _audit_trigger_differences(Connection(triggers, [("CREATE FUNCTION audit_event_append_only() "
-                                                               "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$",)]))
-    assert _audit_trigger_differences(Connection(triggers, [("CREATE FUNCTION audit_event_append_only() "
-                                                               "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
-                                                               "IF false THEN RAISE EXCEPTION 'audit_event is append-only'; END IF; "
-                                                               "RETURN NEW; END; $$",)]))
+    assert _audit_trigger_differences(Connection(triggers)) == []
+    # The catalog query is bound to public.audit_event, so an identically named
+    # table in another schema never supplies a valid trigger row.
+    assert _audit_trigger_differences(Connection([]))
+    disabled = [list(row) for row in triggers]
+    disabled[0][2] = 'D'
+    assert _audit_trigger_differences(Connection([tuple(row) for row in disabled]))
+    other_schema = [list(row) for row in triggers]
+    other_schema[0][5] = 'other'
+    assert _audit_trigger_differences(Connection([tuple(row) for row in other_schema]))
+    wrong_oid = [list(row) for row in triggers]
+    wrong_oid[0][3] = 123
+    assert _audit_trigger_differences(Connection([tuple(row) for row in wrong_oid]))
+    after = [list(row) for row in triggers]
+    after[0][1] = 17  # ROW | UPDATE, but AFTER rather than BEFORE.
+    assert _audit_trigger_differences(Connection([tuple(row) for row in after]))
+    conditional = [list(row) for row in triggers]
+    conditional[0][10] = "BEGIN IF false THEN RAISE EXCEPTION 'audit_event is append-only'; END IF; RETURN NEW; END;"
+    assert _audit_trigger_differences(Connection([tuple(row) for row in conditional]))
+    assert _audit_trigger_differences(Connection(triggers + [
+        ('audit_event_no_statement', 18, 'O', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
+         "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;"),
+    ]))
 
 
 @pytest.mark.parametrize(

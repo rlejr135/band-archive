@@ -17,6 +17,7 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from flask import current_app
 from sqlalchemy import Boolean, Integer, BigInteger, SmallInteger, MetaData, inspect, text
+from sqlalchemy.dialects import postgresql
 
 from extensions import db
 
@@ -432,6 +433,8 @@ def _expected_check_constraints(table, dialect=None):
         if constraint.__class__.__name__ != 'CheckConstraint':
             continue
         canonical = _canonical_check_constraint(constraint.sqltext, dialect)
+        if getattr(dialect, 'name', None) == 'postgresql':
+            canonical = _normalize_postgres_check_for_table(canonical, table)
         if getattr(dialect, 'name', None) == 'postgresql' and canonical is None:
             raise MigrationBootstrapError(
                 f'PostgreSQL CHECK metadata is outside the audited grammar for {table.name}; refusing to stamp.'
@@ -440,7 +443,7 @@ def _expected_check_constraints(table, dialect=None):
     return Counter(expected)
 
 
-def _reflected_check_constraints(inspector, table_name, dialect=None):
+def _reflected_check_constraints(inspector, table_name, dialect=None, table=None):
     constraints = inspector.get_check_constraints(table_name)
     if constraints is None:
         raise MigrationBootstrapError(
@@ -452,23 +455,27 @@ def _reflected_check_constraints(inspector, table_name, dialect=None):
             raise MigrationBootstrapError(
                 f'Dialect returned an unreadable CHECK constraint for {table_name}; refusing to stamp.'
             )
-        reflected.append((constraint.get('name'), _canonical_check_constraint(constraint['sqltext'], dialect)))
+        canonical = _canonical_check_constraint(constraint['sqltext'], dialect)
+        if getattr(dialect, 'name', None) == 'postgresql' and table is not None:
+            canonical = _normalize_postgres_check_for_table(canonical, table)
+        reflected.append((constraint.get('name'), canonical))
     return Counter(reflected)
 
 
-_POSTGRES_SAFE_CHECK_CAST = re.compile(
-    r'(.+?)\s*::\s*(?:text|character\s+varying|varchar|character|char|'
-    r'integer|int|int4|bigint|int8|smallint|int2)(?:\[\])?\s*$', re.IGNORECASE,
+_POSTGRES_CHECK_CAST = re.compile(
+    r'(.+?)\s*::\s*([a-z ]+(?:\(\d+\))?(?:\[\])?)\s*$', re.IGNORECASE,
 )
 
 
-def _strip_postgres_safe_check_casts(value):
+def _postgres_check_cast_parts(value, allow_inner_casts=False):
     value = _strip_sql_parentheses(value)
-    while True:
-        match = _POSTGRES_SAFE_CHECK_CAST.fullmatch(value)
-        if not match:
-            return value
-        value = _strip_sql_parentheses(match.group(1))
+    match = _POSTGRES_CHECK_CAST.fullmatch(value)
+    if not match:
+        return value, None
+    base = _strip_sql_parentheses(match.group(1))
+    if not allow_inner_casts and '::' in base:
+        return None, None
+    return base, re.sub(r'\s+', '', match.group(2).casefold())
 
 
 def _split_postgres_top_level(value, delimiter):
@@ -501,15 +508,15 @@ def _split_postgres_top_level(value, delimiter):
 
 
 def _postgres_check_operand(value):
-    value = _strip_postgres_safe_check_casts(value)
-    if '::' in value:
+    value, cast = _postgres_check_cast_parts(value)
+    if value is None:
         return None
     if re.fullmatch(r"'(?:''|[^'])*'", value):
-        return ('literal', value[1:-1].replace("''", "'"))
+        return ('literal', value[1:-1].replace("''", "'"), cast)
     if re.fullmatch(r'-?\d+', value):
-        return ('literal', value)
+        return ('literal', value, cast)
     match = re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)', value)
-    return ('column', match.group(1)) if match else None
+    return ('column', match.group(1), cast) if match else None
 
 
 def _postgres_check_in_values(value):
@@ -519,7 +526,7 @@ def _postgres_check_in_values(value):
     parsed = [_postgres_check_operand(item) for item in values]
     if any(item is None or item[0] != 'literal' for item in parsed):
         return None
-    return frozenset(item[1] for item in parsed)
+    return frozenset(parsed)
 
 
 def _canonical_postgres_check_constraint(value):
@@ -546,7 +553,7 @@ def _canonical_postgres_check_constraint(value):
             parsed_values = _postgres_check_in_values(values)
             if not column or column[0] != 'column' or parsed_values is None:
                 return None
-            parsed.append((column[1], 'in', parsed_values))
+            parsed.append((column[1], 'in', parsed_values, column[2], None))
             continue
         greater_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '>')
         if greater_parts is not None and len(greater_parts) == 2:
@@ -555,7 +562,7 @@ def _canonical_postgres_check_constraint(value):
             if (not left or not right or left[0] != 'column' or right[0] != 'literal'
                     or not re.fullmatch(r'-?\d+', right[1])):
                 return None
-            parsed.append((left[1], '>', right[1]))
+            parsed.append((left[1], '>', right[1], left[2], right[2]))
             continue
         equality_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '=')
         if equality_parts is None or len(equality_parts) != 2:
@@ -568,21 +575,74 @@ def _canonical_postgres_check_constraint(value):
         right = equality_parts[1]
         any_match = re.fullmatch(r'any\s*\((.*)\)', _strip_sql_parentheses(right), re.IGNORECASE)
         if any_match:
-            array = _strip_postgres_safe_check_casts(any_match.group(1))
-            array_match = re.fullmatch(r'array\s*\[(.*)\]', _strip_sql_parentheses(array), re.IGNORECASE)
+            array, array_cast = _postgres_check_cast_parts(any_match.group(1), allow_inner_casts=True)
+            array_match = (re.fullmatch(r'array\s*\[(.*)\]', _strip_sql_parentheses(array), re.IGNORECASE)
+                           if array is not None else None)
             values = _postgres_check_in_values(array_match.group(1)) if array_match else None
             if values is None:
                 return None
-            parsed.append((column, 'in', values))
+            parsed.append((column, 'in', values, left[2], array_cast))
         else:
             right_operand = _postgres_check_operand(right)
             if not right_operand or right_operand[0] != 'literal':
                 return None
             literal = right_operand[1]
-            parsed.append((column, '=', literal))
+            parsed.append((column, '=', literal, left[2], right_operand[2]))
     if len(set(parsed)) != len(parsed):
         return None
     return frozenset(parsed)
+
+
+def _postgres_check_cast_matches(cast, column_type, array=False):
+    """Allow only reflection casts that preserve this metadata column type."""
+    if cast is None:
+        return True
+    if array:
+        if not cast.endswith('[]'):
+            return False
+        cast = cast[:-2]
+    elif cast.endswith('[]'):
+        return False
+    rendered = _normalize_type(column_type, postgresql.dialect())
+    if rendered.startswith('VARCHAR'):
+        length = re.search(r'\((\d+)\)', rendered)
+        return cast in {'text', 'varchar', 'charactervarying'} or (
+            length is not None and cast in {f'varchar({length.group(1)})', f'charactervarying({length.group(1)})'}
+        )
+    if rendered == 'TEXT':
+        return cast == 'text'
+    if rendered == 'BIGINT':
+        return cast in {'bigint', 'int8', 'numeric'}
+    if rendered == 'INTEGER':
+        return cast in {'integer', 'int', 'int4'}
+    if rendered == 'SMALLINT':
+        return cast in {'smallint', 'int2'}
+    return False
+
+
+def _normalize_postgres_check_for_table(canonical, table):
+    if canonical is None:
+        return None
+    normalized = []
+    for atom in canonical:
+        column_name, operator, value, column_cast, value_cast = atom
+        column = table.c.get(column_name)
+        if column is None or not _postgres_check_cast_matches(column_cast, column.type):
+            return None
+        if operator == 'in':
+            values = []
+            for kind, literal, literal_cast in value:
+                if kind != 'literal' or not _postgres_check_cast_matches(literal_cast, column.type):
+                    return None
+                values.append(literal)
+            if value_cast is not None and not _postgres_check_cast_matches(value_cast, column.type, array=True):
+                return None
+            normalized.append((column_name, operator, frozenset(values)))
+        else:
+            if not _postgres_check_cast_matches(value_cast, column.type):
+                return None
+            normalized.append((column_name, operator, value))
+    return frozenset(normalized)
 
 
 def _canonical_check_constraint(value, dialect):
@@ -677,7 +737,7 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
             ('unique_constraints', _expected_unique_constraints(table),
              _reflected_unique_constraints(inspector, table_name)),
             ('check_constraints', _expected_check_constraints(table, connection.dialect),
-             _reflected_check_constraints(inspector, table_name, connection.dialect)),
+             _reflected_check_constraints(inspector, table_name, connection.dialect, table)),
             ('indexes', _expected_indexes(table), _reflected_indexes(inspector, table_name)),
         )
         for label, expected, actual in checks:
@@ -894,63 +954,61 @@ def _audit_trigger_differences(connection):
                 if clause not in actual.get(name, '') or 'RAISE(ABORT' not in actual.get(name, '')]
     if dialect == 'postgresql':
         rows = connection.execute(text("""
-            SELECT trigger_name, event_manipulation, action_timing,
-                   action_orientation, action_statement
-            FROM information_schema.triggers
-            WHERE event_object_table = 'audit_event'
-              AND trigger_name IN ('audit_event_no_update', 'audit_event_no_delete')
-        """)).all()
-        actual = {
-            name: (str(event or '').upper(), str(timing or '').upper(),
-                   str(orientation or '').upper(), str(statement or '').lower())
-            for name, event, timing, orientation, statement in rows
-        }
-        defects = [
-            f'audit_event trigger {name} is missing or invalid'
-            for name, event in (
-                ('audit_event_no_update', 'UPDATE'), ('audit_event_no_delete', 'DELETE'),
+            SELECT trigger.tgname, trigger.tgtype, trigger.tgenabled, trigger.tgfoid,
+                   function.oid, function_namespace.nspname, function.proname,
+                   pg_get_function_identity_arguments(function.oid), return_type.typname,
+                   language.lanname, function.prosrc
+            FROM pg_trigger AS trigger
+            JOIN pg_proc AS function ON function.oid = trigger.tgfoid
+            JOIN pg_namespace AS function_namespace ON function_namespace.oid = function.pronamespace
+            JOIN pg_type AS return_type ON return_type.oid = function.prorettype
+            JOIN pg_language AS language ON language.oid = function.prolang
+            WHERE trigger.tgrelid = (
+                SELECT table_class.oid
+                FROM pg_class AS table_class
+                JOIN pg_namespace AS table_namespace ON table_namespace.oid = table_class.relnamespace
+                WHERE table_namespace.nspname = 'public'
+                  AND table_class.relname = 'audit_event'
+                  AND table_class.relkind IN ('r', 'p')
             )
-            if actual.get(name, ('', '', '', ''))[:3] != (event, 'BEFORE', 'ROW')
-            or not re.fullmatch(r'execute function (?:public\.)?audit_event_append_only\(\)', actual[name][3].strip())
-        ]
-        function_rows = connection.execute(text("""
-            SELECT pg_get_functiondef(proc.oid)
-            FROM pg_proc AS proc
-            JOIN pg_namespace AS namespace ON namespace.oid = proc.pronamespace
-            WHERE proc.proname = 'audit_event_append_only'
-              AND namespace.nspname = ANY(current_schemas(false))
-              AND pg_get_function_identity_arguments(proc.oid) = ''
+              AND NOT trigger.tgisinternal
         """)).all()
-        if len(function_rows) != 1:
-            defects.append('audit_event append-only function is missing or invalid')
-        else:
-            if not _is_exact_postgres_audit_function(function_rows[0][0]):
-                defects.append('audit_event append-only function is missing or invalid')
+        expected = {
+            'audit_event_no_update': 19,  # BEFORE | ROW | UPDATE
+            'audit_event_no_delete': 11,  # BEFORE | ROW | DELETE
+        }
+        actual = {}
+        invalid = False
+        for row in rows:
+            (name, trigger_type, enabled, trigger_function_oid, function_oid, function_schema,
+             function_name, identity_arguments, return_type, language, body) = row
+            if name in actual:
+                invalid = True
+            actual[name] = row
+            if (name not in expected or int(trigger_type) != expected[name] or enabled != 'O'
+                    or trigger_function_oid != function_oid or function_schema != 'public'
+                    or function_name != 'audit_event_append_only' or identity_arguments != ''
+                    or return_type != 'trigger' or language != 'plpgsql'
+                    or not _is_exact_postgres_audit_function_body(body)):
+                invalid = True
+        defects = [f'audit_event trigger {name} is missing or invalid'
+                   for name in expected if name not in actual]
+        if invalid or set(actual) != set(expected):
+            defects.append('audit_event trigger/function contract is invalid')
         return defects
     # An unknown dialect cannot prove the invariant.
     return ['audit_event triggers cannot be verified for this database dialect']
 
 
-def _is_exact_postgres_audit_function(definition):
+def _is_exact_postgres_audit_function_body(body):
     """Accept only the unconditional append-only function installed by v04.
 
-    PostgreSQL may change whitespace, ``CREATE OR REPLACE``, schema display,
-    and dollar-quote tags in ``pg_get_functiondef``.  Everything else is part
-    of the security contract. In particular, accepting a substring such as
-    ``RAISE EXCEPTION`` would permit conditional or bypassable bodies.
+    ``pg_proc.prosrc`` provides the body without DDL decoration. Whitespace is
+    harmless; every executable token is part of the security contract.
     """
-    if not isinstance(definition, str):
+    if not isinstance(body, str):
         return False
-    compact = re.sub(r'\s+', '', definition).casefold()
-    match = re.fullmatch(
-        r"create(?:orreplace)?function(?:public\.)?audit_event_append_only\(\)"
-        r"returnstriggerlanguageplpgsqlas\$(?P<tag>[a-z0-9_]*)\$"
-        r"(?P<body>.*?)\$(?P=tag)\$",
-        compact,
-    )
-    if not match:
-        return False
-    return match.group('body') == "beginraiseexception'audit_eventisappend-only';end;"
+    return re.sub(r'\s+', '', body).casefold() == "beginraiseexception'audit_eventisappend-only';end;"
 
 
 def _application_tables(connection):
