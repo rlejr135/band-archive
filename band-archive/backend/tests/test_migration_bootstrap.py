@@ -581,9 +581,9 @@ def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_functio
             return Result(self.trigger_rows)
 
     triggers = [
-        ('audit_event_no_update', 19, 'O', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
+        ('audit_event_no_update', 19, 'O', None, '', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
          "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;"),
-        ('audit_event_no_delete', 11, 'O', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
+        ('audit_event_no_delete', 11, 'O', None, (), 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
          "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;"),
     ]
     assert _audit_trigger_differences(Connection(triggers)) == []
@@ -594,19 +594,28 @@ def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_functio
     disabled[0][2] = 'D'
     assert _audit_trigger_differences(Connection([tuple(row) for row in disabled]))
     other_schema = [list(row) for row in triggers]
-    other_schema[0][5] = 'other'
+    other_schema[0][7] = 'other'
     assert _audit_trigger_differences(Connection([tuple(row) for row in other_schema]))
     wrong_oid = [list(row) for row in triggers]
-    wrong_oid[0][3] = 123
+    wrong_oid[0][5] = 123
     assert _audit_trigger_differences(Connection([tuple(row) for row in wrong_oid]))
     after = [list(row) for row in triggers]
     after[0][1] = 17  # ROW | UPDATE, but AFTER rather than BEFORE.
     assert _audit_trigger_differences(Connection([tuple(row) for row in after]))
     conditional = [list(row) for row in triggers]
-    conditional[0][10] = "BEGIN IF false THEN RAISE EXCEPTION 'audit_event is append-only'; END IF; RETURN NEW; END;"
+    conditional[0][12] = "BEGIN IF false THEN RAISE EXCEPTION 'audit_event is append-only'; END IF; RETURN NEW; END;"
     assert _audit_trigger_differences(Connection([tuple(row) for row in conditional]))
+    when_false = [list(row) for row in triggers]
+    when_false[0][3] = '({OPEXPR :opno 91 :args (...)})'
+    assert _audit_trigger_differences(Connection([tuple(row) for row in when_false]))
+    update_of_one = [list(row) for row in triggers]
+    update_of_one[0][4] = '3'
+    assert _audit_trigger_differences(Connection([tuple(row) for row in update_of_one]))
+    update_of_many = [list(row) for row in triggers]
+    update_of_many[0][4] = '3 7'
+    assert _audit_trigger_differences(Connection([tuple(row) for row in update_of_many]))
     assert _audit_trigger_differences(Connection(triggers + [
-        ('audit_event_no_statement', 18, 'O', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
+        ('audit_event_no_statement', 18, 'O', None, '', 91, 91, 'public', 'audit_event_append_only', '', 'trigger', 'plpgsql',
          "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END;"),
     ]))
 

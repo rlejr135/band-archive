@@ -954,7 +954,7 @@ def _audit_trigger_differences(connection):
                 if clause not in actual.get(name, '') or 'RAISE(ABORT' not in actual.get(name, '')]
     if dialect == 'postgresql':
         rows = connection.execute(text("""
-            SELECT trigger.tgname, trigger.tgtype, trigger.tgenabled, trigger.tgfoid,
+            SELECT trigger.tgname, trigger.tgtype, trigger.tgenabled, trigger.tgqual, trigger.tgattr, trigger.tgfoid,
                    function.oid, function_namespace.nspname, function.proname,
                    pg_get_function_identity_arguments(function.oid), return_type.typname,
                    language.lanname, function.prosrc
@@ -980,12 +980,13 @@ def _audit_trigger_differences(connection):
         actual = {}
         invalid = False
         for row in rows:
-            (name, trigger_type, enabled, trigger_function_oid, function_oid, function_schema,
+            (name, trigger_type, enabled, trigger_qualifier, trigger_attributes, trigger_function_oid, function_oid, function_schema,
              function_name, identity_arguments, return_type, language, body) = row
             if name in actual:
                 invalid = True
             actual[name] = row
             if (name not in expected or int(trigger_type) != expected[name] or enabled != 'O'
+                    or trigger_qualifier is not None or not _postgres_trigger_attributes_are_empty(trigger_attributes)
                     or trigger_function_oid != function_oid or function_schema != 'public'
                     or function_name != 'audit_event_append_only' or identity_arguments != ''
                     or return_type != 'trigger' or language != 'plpgsql'
@@ -1009,6 +1010,15 @@ def _is_exact_postgres_audit_function_body(body):
     if not isinstance(body, str):
         return False
     return re.sub(r'\s+', '', body).casefold() == "beginraiseexception'audit_eventisappend-only';end;"
+
+
+def _postgres_trigger_attributes_are_empty(attributes):
+    """Accept only PostgreSQL's empty int2vector representation for tgattr."""
+    if isinstance(attributes, str):
+        return attributes.strip() == ''
+    if isinstance(attributes, (tuple, list)):
+        return len(attributes) == 0
+    return False
 
 
 def _application_tables(connection):
