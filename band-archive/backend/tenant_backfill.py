@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
 from sqlalchemy import text
 
@@ -36,12 +37,30 @@ def _canonical_key(value, prefix, label, unresolved):
     """Return an existing in-bucket key without guessing at URLs or buckets."""
     if value is None:
         return None
-    value = str(value).strip()
+    value = str(value)
     if not value:
         unresolved.append({'field': label, 'reason': 'empty stored name'})
         return None
-    if '://' in value or value.startswith('/') or '\\' in value or '..' in value.split('/'):
-        unresolved.append({'field': label, 'reason': 'URL, absolute, or traversal value'})
+    if value != value.strip():
+        unresolved.append({'field': label, 'reason': 'leading or trailing whitespace is not canonical'})
+        return None
+    decoded = value
+    # This is detection only: stored keys are never decoded or rewritten. A
+    # bounded loop also catches a doubly-encoded dot segment without treating
+    # an arbitrary URL-ish value as a safe object key.
+    for _ in range(4):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    raw_segments = value.split('/')
+    decoded_segments = decoded.split('/')
+    if ('://' in value or '://' in decoded or value.startswith('/') or '\\' in value
+            or '\\' in decoded or any(not segment for segment in raw_segments)
+            or any(not segment for segment in decoded_segments)
+            or any(segment in {'.', '..'} for segment in raw_segments)
+            or any(segment in {'.', '..'} for segment in decoded_segments)):
+        unresolved.append({'field': label, 'reason': 'URL, non-canonical separator, or traversal value'})
         return None
     if not prefix:
         return value

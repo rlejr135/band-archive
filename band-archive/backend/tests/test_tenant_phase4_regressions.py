@@ -21,7 +21,7 @@ from models import (
     MediaVote, Member, MultipartUploadSession, PersonalLog,
     PersonalLogMultipartUploadSession, Rehearsal, Song, SongSuggestion, SongVote,
 )
-from tenant_backfill import TenantBackfillError, apply, plan, _validate_relationships
+from tenant_backfill import TenantBackfillError, _canonical_key, apply, plan, _validate_relationships
 
 
 def _url(path):
@@ -195,6 +195,30 @@ def test_backfill_records_provable_legacy_sheet_music_key_without_storage_io(tmp
             )).scalar_one() == 'media/sheet.pdf'
     finally:
         _dispose(app)
+
+
+@pytest.mark.parametrize(
+    ('value', 'prefix'),
+    [
+        ('gallery/./photo.png', 'gallery'),
+        ('media/foo/./bar', 'media'),
+        ('gallery/../photo.png', 'gallery'),
+        ('gallery/%2e/photo.png', 'gallery'),
+        ('gallery/%252e/photo.png', 'gallery'),
+        ('gallery//photo.png', 'gallery'),
+        ('gallery/photo.png/', 'gallery'),
+    ],
+)
+def test_canonical_key_refuses_dot_segments_and_noncanonical_separators(value, prefix):
+    unresolved = []
+    assert _canonical_key(value, prefix, 'fixture', unresolved) is None
+    assert unresolved
+
+
+def test_canonical_key_keeps_safe_unicode_and_spaces_as_stored():
+    unresolved = []
+    assert _canonical_key('한글 사진.png', 'gallery', 'fixture', unresolved) == 'gallery/한글 사진.png'
+    assert not unresolved
 
 
 def _backfilled_runtime(path):

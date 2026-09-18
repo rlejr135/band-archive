@@ -273,14 +273,30 @@ def test_phase4_canonical_key_rules_allow_korean_spaces_without_leaking_upload_s
     assert "opaque" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("filename", ["../escape.mp4", "https://storage.example.test/object.mp4", "media/wrong-prefix.png"])
-def test_phase4_canonical_key_rules_refuse_traversal_url_and_cross_prefix_values(tmp_path, filename):
+@pytest.mark.parametrize(
+    ("table", "filename"),
+    [
+        ("gallery_image", "../escape.mp4"),
+        ("gallery_image", "gallery/./photo.png"),
+        ("gallery_image", "gallery/%2e/photo.png"),
+        ("gallery_image", "gallery//photo.png"),
+        ("gallery_image", "https://storage.example.test/object.mp4"),
+        ("gallery_image", "media/wrong-prefix.png"),
+        ("media", "media/foo/./bar"),
+    ],
+)
+def test_phase4_canonical_key_rules_refuse_traversal_url_and_cross_prefix_values(tmp_path, table, filename):
     source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
     _legacy_fixture(source)
     engine = create_engine(_url(source))
     try:
         with engine.begin() as connection:
-            connection.execute(text("UPDATE gallery_image SET filename = :filename WHERE id = 12"), {"filename": filename})
+            if table == "gallery_image":
+                connection.execute(text("UPDATE gallery_image SET filename = :filename WHERE id = 12"),
+                                   {"filename": filename})
+            else:
+                connection.execute(text("UPDATE media SET filename = :filename WHERE id = 10"),
+                                   {"filename": filename})
     finally:
         engine.dispose()
     _upgrade(target)
