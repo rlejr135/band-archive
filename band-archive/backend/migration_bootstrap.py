@@ -252,8 +252,57 @@ def _postgres_automatic_integer_primary_key(column):
     return bool(column.primary_key and column.autoincrement and column.server_default is None)
 
 
-def _postgres_owned_sequence_default(value, table_name, column):
-    """Recognize only the conventional serial sequence for this PK column."""
+def _postgres_serial_sequence_is_owned(connection, table_name, column_name, sequence_name):
+    """Prove that the column default and sequence have the expected PG ownership.
+
+    The reflected ``nextval`` text deliberately is not enough: an unqualified
+    regclass can look like the expected sequence while resolving through a
+    different search path.  This catalog proof binds the exact public sequence
+    to both the column default and the sequence ownership dependency.
+    """
+    expected_reference = f'public.{sequence_name}'
+    serial_sequence = connection.execute(text("""
+        SELECT pg_get_serial_sequence(:table_name, :column_name)
+    """), {'table_name': f'public.{table_name}', 'column_name': column_name}).scalar_one_or_none()
+    if serial_sequence != expected_reference:
+        return False
+    return bool(connection.execute(text("""
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_attribute AS attribute
+            JOIN pg_class AS table_class ON table_class.oid = attribute.attrelid
+            JOIN pg_namespace AS table_namespace ON table_namespace.oid = table_class.relnamespace
+            JOIN pg_attrdef AS attribute_default
+              ON attribute_default.adrelid = attribute.attrelid
+             AND attribute_default.adnum = attribute.attnum
+            JOIN pg_class AS sequence_class
+              ON sequence_class.relname = :sequence_name
+            JOIN pg_namespace AS sequence_namespace
+              ON sequence_namespace.oid = sequence_class.relnamespace
+             AND sequence_namespace.nspname = 'public'
+            JOIN pg_depend AS default_dependency
+              ON default_dependency.classid = 'pg_attrdef'::regclass
+             AND default_dependency.objid = attribute_default.oid
+             AND default_dependency.refobjid = sequence_class.oid
+            JOIN pg_depend AS ownership_dependency
+              ON ownership_dependency.classid = 'pg_class'::regclass
+             AND ownership_dependency.objid = sequence_class.oid
+             AND ownership_dependency.refobjid = attribute.attrelid
+             AND ownership_dependency.refobjsubid = attribute.attnum
+             AND ownership_dependency.deptype = 'a'
+            WHERE table_namespace.nspname = 'public'
+              AND table_class.relname = :table_name
+              AND attribute.attname = :column_name
+        )
+    """), {
+        'table_name': table_name,
+        'column_name': column_name,
+        'sequence_name': sequence_name,
+    }).scalar_one())
+
+
+def _postgres_owned_sequence_default(value, table_name, column, connection=None, sequence_resolver=None):
+    """Recognize only a catalog-proven serial sequence for this PK column."""
     if not _postgres_automatic_integer_primary_key(column):
         return False
     raw = _strip_sql_parentheses(str(value).strip()) if value is not None else ''
@@ -263,18 +312,26 @@ def _postgres_owned_sequence_default(value, table_name, column):
     )
     if not match:
         return False
-    # pg_get_expr may schema-qualify or quote the relation inside regclass.
-    pieces = [piece.strip().strip('"') for piece in match.group('sequence').split('.')]
-    return bool(pieces) and pieces[-1] == f'{table_name}_{column.name}_seq'
+    # Do not tolerate qualification or quoted identifiers in the reflected
+    # expression. The catalog proof below resolves the unqualified regclass to
+    # the exact public relation created by our migrations.
+    sequence_name = f'{table_name}_{column.name}_seq'
+    if match.group('sequence') != sequence_name:
+        return False
+    resolver = sequence_resolver or _postgres_serial_sequence_is_owned
+    return bool(resolver(connection, table_name, column.name, sequence_name))
 
 
-def _defaults_are_equivalent(expected_default, actual_default, column, table_name, dialect):
+def _defaults_are_equivalent(expected_default, actual_default, column, table_name, dialect,
+                             connection=None, sequence_resolver=None):
     """Compare defaults with PostgreSQL reflection-only normalization."""
     if dialect.name != 'postgresql':
         return _normalize_default(actual_default) == _normalize_default(expected_default)
     if expected_default is None:
         if _postgres_automatic_integer_primary_key(column):
-            return _postgres_owned_sequence_default(actual_default, table_name, column)
+            return _postgres_owned_sequence_default(
+                actual_default, table_name, column, connection, sequence_resolver,
+            )
         return actual_default is None
     expected_value = _postgres_default_cast(expected_default, column)
     actual_value = _postgres_default_cast(actual_default, column, reflected=True)
@@ -370,11 +427,17 @@ def _constraints_are_equivalent(expected, actual):
 
 
 def _expected_check_constraints(table, dialect=None):
-    return Counter(
-        (constraint.name, _canonical_check_constraint(constraint.sqltext, dialect))
-        for constraint in table.constraints
-        if constraint.__class__.__name__ == 'CheckConstraint'
-    )
+    expected = []
+    for constraint in table.constraints:
+        if constraint.__class__.__name__ != 'CheckConstraint':
+            continue
+        canonical = _canonical_check_constraint(constraint.sqltext, dialect)
+        if getattr(dialect, 'name', None) == 'postgresql' and canonical is None:
+            raise MigrationBootstrapError(
+                f'PostgreSQL CHECK metadata is outside the audited grammar for {table.name}; refusing to stamp.'
+            )
+        expected.append((constraint.name, canonical))
+    return Counter(expected)
 
 
 def _reflected_check_constraints(inspector, table_name, dialect=None):
@@ -485,6 +548,15 @@ def _canonical_postgres_check_constraint(value):
                 return None
             parsed.append((column[1], 'in', parsed_values))
             continue
+        greater_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '>')
+        if greater_parts is not None and len(greater_parts) == 2:
+            left = _postgres_check_operand(greater_parts[0])
+            right = _postgres_check_operand(greater_parts[1])
+            if (not left or not right or left[0] != 'column' or right[0] != 'literal'
+                    or not re.fullmatch(r'-?\d+', right[1])):
+                return None
+            parsed.append((left[1], '>', right[1]))
+            continue
         equality_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '=')
         if equality_parts is None or len(equality_parts) != 2:
             return None
@@ -515,9 +587,7 @@ def _canonical_postgres_check_constraint(value):
 
 def _canonical_check_constraint(value, dialect):
     if getattr(dialect, 'name', None) == 'postgresql':
-        canonical = _canonical_postgres_check_constraint(str(value))
-        if canonical is not None:
-            return canonical
+        return _canonical_postgres_check_constraint(str(value))
     return _normalize_sql(value)
 
 
@@ -587,7 +657,8 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
             if (not types_are_equivalent(expected.type, actual['type'], connection.dialect)
                     or actual_nullable != expected.nullable
                     or not _defaults_are_equivalent(
-                        _metadata_default(expected), actual.get('default'), expected, table_name, connection.dialect
+                        _metadata_default(expected), actual.get('default'), expected, table_name, connection.dialect,
+                        connection=connection,
                     )):
                 differences.append(
                     f'{table_name}.{name} column expected='
@@ -853,14 +924,33 @@ def _audit_trigger_differences(connection):
         if len(function_rows) != 1:
             defects.append('audit_event append-only function is missing or invalid')
         else:
-            definition = re.sub(r'\s+', ' ', str(function_rows[0][0] or '')).casefold()
-            if ('returns trigger' not in definition
-                    or 'raise exception' not in definition
-                    or 'audit_event is append-only' not in definition):
+            if not _is_exact_postgres_audit_function(function_rows[0][0]):
                 defects.append('audit_event append-only function is missing or invalid')
         return defects
     # An unknown dialect cannot prove the invariant.
     return ['audit_event triggers cannot be verified for this database dialect']
+
+
+def _is_exact_postgres_audit_function(definition):
+    """Accept only the unconditional append-only function installed by v04.
+
+    PostgreSQL may change whitespace, ``CREATE OR REPLACE``, schema display,
+    and dollar-quote tags in ``pg_get_functiondef``.  Everything else is part
+    of the security contract. In particular, accepting a substring such as
+    ``RAISE EXCEPTION`` would permit conditional or bypassable bodies.
+    """
+    if not isinstance(definition, str):
+        return False
+    compact = re.sub(r'\s+', '', definition).casefold()
+    match = re.fullmatch(
+        r"create(?:orreplace)?function(?:public\.)?audit_event_append_only\(\)"
+        r"returnstriggerlanguageplpgsqlas\$(?P<tag>[a-z0-9_]*)\$"
+        r"(?P<body>.*?)\$(?P=tag)\$",
+        compact,
+    )
+    if not match:
+        return False
+    return match.group('body') == "beginraiseexception'audit_eventisappend-only';end;"
 
 
 def _application_tables(connection):

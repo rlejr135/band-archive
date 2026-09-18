@@ -25,6 +25,8 @@ from migration_bootstrap import (
     _defaults_are_equivalent,
     _reflected_indexes,
     _audit_trigger_differences,
+    _expected_check_constraints,
+    _postgres_serial_sequence_is_owned,
     _partial_index_differences,
     schema_contract_differences,
     schema_differences,
@@ -420,12 +422,26 @@ def test_postgres_default_normalization_is_limited_to_the_column_contract():
         sa.Column('quota', sa.BigInteger, nullable=False, server_default='21474836480'),
     )
     dialect = postgresql.dialect()
-    assert _defaults_are_equivalent(None, "nextval('audit_event_id_seq'::regclass)", table.c.id, 'audit_event', dialect)
+    resolver = lambda connection, table_name, column_name, sequence_name: (
+        table_name, column_name, sequence_name,
+    ) == ('audit_event', 'id', 'audit_event_id_seq')
+    assert _defaults_are_equivalent(
+        None, "nextval('audit_event_id_seq'::regclass)", table.c.id, 'audit_event', dialect,
+        sequence_resolver=resolver,
+    )
     for invalid in (
         "nextval('other_id_seq'::regclass)", "nextval('audit_event_other_seq'::regclass)",
+        "nextval('public.audit_event_id_seq'::regclass)",
+        "nextval('\"audit_event_id_seq\"'::regclass)",
         "nextval('audit_event_id_seq'::text)", None,
     ):
-        assert not _defaults_are_equivalent(None, invalid, table.c.id, 'audit_event', dialect)
+        assert not _defaults_are_equivalent(
+            None, invalid, table.c.id, 'audit_event', dialect, sequence_resolver=resolver,
+        )
+    assert not _defaults_are_equivalent(
+        None, "nextval('audit_event_id_seq'::regclass)", table.c.id, 'audit_event', dialect,
+        sequence_resolver=lambda *args: False,
+    )
     assert _defaults_are_equivalent('0', 'false', table.c.enabled, 'audit_event', dialect)
     assert _defaults_are_equivalent('1', 'true', table.c.enabled, 'audit_event', dialect)
     assert not _defaults_are_equivalent('0', 'true', table.c.enabled, 'audit_event', dialect)
@@ -457,6 +473,55 @@ def test_postgres_check_normalization_handles_only_literal_in_and_any_forms():
     assert _canonical_postgres_check_constraint("visibility IN ('PUBLIC')") != expected
     assert _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS') OR visibility = 'PRIVATE'") is None
     assert _canonical_postgres_check_constraint("visibility = current_setting('app.visibility')") is None
+
+
+def test_postgres_numeric_check_normalization_is_structured_and_fail_closed():
+    expected = _canonical_postgres_check_constraint('storage_quota_bytes > 0')
+    assert expected == _canonical_postgres_check_constraint('(((storage_quota_bytes)::bigint) > (0)::bigint)')
+    for invalid in ('storage_quota_bytes > 1', 'other_column > 0'):
+        assert _canonical_postgres_check_constraint(invalid) != expected
+    for invalid in ('storage_quota_bytes >= 0', 'storage_quota_bytes > 0 OR storage_quota_bytes > 1',
+                    'storage_quota_bytes > random()'):
+        assert _canonical_postgres_check_constraint(invalid) is None
+    metadata = sa.MetaData()
+    table = sa.Table('quota', metadata, sa.Column('storage_quota_bytes', sa.BigInteger),
+                     sa.CheckConstraint('storage_quota_bytes > 0', name='ck_quota'))
+    assert _expected_check_constraints(table, postgresql.dialect())
+    unsupported = sa.Table('unsupported', sa.MetaData(), sa.Column('value', sa.Integer),
+                           sa.CheckConstraint('value IS NOT NULL', name='ck_unsupported'))
+    with pytest.raises(Exception, match='outside the audited grammar'):
+        _expected_check_constraints(unsupported, postgresql.dialect())
+
+
+def test_postgres_serial_catalog_proof_requires_public_exact_owned_sequence():
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+        def scalar_one(self):
+            return self.value
+
+    class Connection:
+        def __init__(self, serial_sequence, ownership):
+            self.serial_sequence = serial_sequence
+            self.ownership = ownership
+            self.calls = []
+
+        def execute(self, statement, params):
+            self.calls.append((str(statement), params))
+            if 'pg_get_serial_sequence' in str(statement):
+                return Result(self.serial_sequence)
+            return Result(self.ownership)
+
+    connection = Connection('public.audit_event_id_seq', True)
+    assert _postgres_serial_sequence_is_owned(connection, 'audit_event', 'id', 'audit_event_id_seq')
+    assert len(connection.calls) == 2
+    assert not _postgres_serial_sequence_is_owned(
+        Connection('other.audit_event_id_seq', True), 'audit_event', 'id', 'audit_event_id_seq',
+    )
 
 
 def test_backing_constraint_indexes_are_filtered_without_hiding_real_indexes():
@@ -503,6 +568,10 @@ def test_postgres_audit_trigger_verifier_checks_events_and_function_body():
     ))
     assert _audit_trigger_differences(Connection(triggers, [("CREATE FUNCTION audit_event_append_only() "
                                                                "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$",)]))
+    assert _audit_trigger_differences(Connection(triggers, [("CREATE FUNCTION audit_event_append_only() "
+                                                               "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+                                                               "IF false THEN RAISE EXCEPTION 'audit_event is append-only'; END IF; "
+                                                               "RETURN NEW; END; $$",)]))
 
 
 @pytest.mark.parametrize(
