@@ -1,5 +1,6 @@
 from io import StringIO
 import importlib
+from collections import Counter
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -19,6 +20,11 @@ from migration_bootstrap import (
     create_migration_app,
     migration_head_revision,
     _canonical_postgres_partial_predicate,
+    _canonical_postgres_check_constraint,
+    _constraints_are_equivalent,
+    _defaults_are_equivalent,
+    _reflected_indexes,
+    _audit_trigger_differences,
     _partial_index_differences,
     schema_contract_differences,
     schema_differences,
@@ -402,6 +408,101 @@ def test_postgres_float_and_double_precision_are_semantically_equivalent():
     assert not types_are_equivalent(sa.Float(), postgresql.REAL(), dialect)
     assert not types_are_equivalent(sa.Float(), sa.Integer(), dialect)
     assert not types_are_equivalent(sa.Integer(), sa.String(20), dialect)
+
+
+def test_postgres_default_normalization_is_limited_to_the_column_contract():
+    metadata = sa.MetaData()
+    table = sa.Table(
+        'audit_event', metadata,
+        sa.Column('id', sa.Integer, primary_key=True),
+        sa.Column('enabled', sa.Boolean, nullable=False, server_default='0'),
+        sa.Column('status', sa.String(20), nullable=False, server_default='active'),
+        sa.Column('quota', sa.BigInteger, nullable=False, server_default='21474836480'),
+    )
+    dialect = postgresql.dialect()
+    assert _defaults_are_equivalent(None, "nextval('audit_event_id_seq'::regclass)", table.c.id, 'audit_event', dialect)
+    for invalid in (
+        "nextval('other_id_seq'::regclass)", "nextval('audit_event_other_seq'::regclass)",
+        "nextval('audit_event_id_seq'::text)", None,
+    ):
+        assert not _defaults_are_equivalent(None, invalid, table.c.id, 'audit_event', dialect)
+    assert _defaults_are_equivalent('0', 'false', table.c.enabled, 'audit_event', dialect)
+    assert _defaults_are_equivalent('1', 'true', table.c.enabled, 'audit_event', dialect)
+    assert not _defaults_are_equivalent('0', 'true', table.c.enabled, 'audit_event', dialect)
+    assert _defaults_are_equivalent('active', "'active'::character varying", table.c.status, 'audit_event', dialect)
+    assert not _defaults_are_equivalent('active', "'other'::character varying", table.c.status, 'audit_event', dialect)
+    assert not _defaults_are_equivalent('active', "'active'::integer", table.c.status, 'audit_event', dialect)
+    assert not _defaults_are_equivalent('active', 'current_user', table.c.status, 'audit_event', dialect)
+    assert _defaults_are_equivalent('21474836480', '21474836480::bigint', table.c.quota, 'audit_event', dialect)
+
+
+def test_postgres_constraint_names_only_wildcard_anonymous_metadata():
+    anonymous = Counter({(None, ('band_id',), 'band', ('id',), 'CASCADE', '', (None, None)): 1})
+    generated = Counter({('band_membership_band_id_fkey', ('band_id',), 'band', ('id',), 'CASCADE', '', (None, None)): 1})
+    assert _constraints_are_equivalent(anonymous, generated)
+    named = Counter({('fk_membership_band', ('band_id',), 'band', ('id',), 'CASCADE', '', (None, None)): 1})
+    assert not _constraints_are_equivalent(named, generated)
+    wrong_action = Counter({('band_membership_band_id_fkey', ('band_id',), 'band', ('id',), 'SET NULL', '', (None, None)): 1})
+    assert not _constraints_are_equivalent(anonymous, wrong_action)
+    wrong_target = Counter({('band_membership_band_id_fkey', ('band_id',), 'app_user', ('id',), 'CASCADE', '', (None, None)): 1})
+    assert not _constraints_are_equivalent(anonymous, wrong_target)
+
+
+def test_postgres_check_normalization_handles_only_literal_in_and_any_forms():
+    expected = _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS')")
+    actual = _canonical_postgres_check_constraint(
+        "((visibility)::text = ANY ((ARRAY['MEMBERS'::character varying, 'PUBLIC'::character varying])::text[]))"
+    )
+    assert expected == actual
+    assert _canonical_postgres_check_constraint("visibility IN ('PUBLIC')") != expected
+    assert _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS') OR visibility = 'PRIVATE'") is None
+    assert _canonical_postgres_check_constraint("visibility = current_setting('app.visibility')") is None
+
+
+def test_backing_constraint_indexes_are_filtered_without_hiding_real_indexes():
+    class Inspector:
+        def get_indexes(self, table_name):
+            return [
+                {'name': 'uq_backing', 'column_names': ['email'], 'unique': True, 'duplicates_constraint': 'uq_email'},
+                {'name': 'uq_partial', 'column_names': ['band_id'], 'unique': True,
+                 'dialect_options': {'postgresql_where': "role = 'owner'"}},
+            ]
+
+    assert _reflected_indexes(Inspector(), 'band_membership') == Counter({
+        ('uq_partial', ('band_id',), True): 1,
+    })
+
+
+def test_postgres_audit_trigger_verifier_checks_events_and_function_body():
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def all(self):
+            return self.rows
+
+    class Connection:
+        dialect = type('Dialect', (), {'name': 'postgresql'})()
+
+        def __init__(self, trigger_rows, function_rows):
+            self.trigger_rows = trigger_rows
+            self.function_rows = function_rows
+
+        def execute(self, statement):
+            return Result(self.trigger_rows if 'information_schema.triggers' in str(statement) else self.function_rows)
+
+    triggers = [
+        ('audit_event_no_update', 'UPDATE', 'BEFORE', 'ROW', 'EXECUTE FUNCTION audit_event_append_only()'),
+        ('audit_event_no_delete', 'DELETE', 'BEFORE', 'ROW', 'EXECUTE FUNCTION audit_event_append_only()'),
+    ]
+    function = [("CREATE FUNCTION audit_event_append_only() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                 "BEGIN RAISE EXCEPTION 'audit_event is append-only'; END; $$",)]
+    assert _audit_trigger_differences(Connection(triggers, function)) == []
+    assert _audit_trigger_differences(Connection(
+        [('audit_event_no_update', 'UPDATE', 'AFTER', 'ROW', 'EXECUTE FUNCTION audit_event_append_only()')], function,
+    ))
+    assert _audit_trigger_differences(Connection(triggers, [("CREATE FUNCTION audit_event_append_only() "
+                                                               "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$",)]))
 
 
 @pytest.mark.parametrize(

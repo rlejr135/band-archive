@@ -16,7 +16,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from flask import current_app
-from sqlalchemy import MetaData, inspect, text
+from sqlalchemy import Boolean, Integer, BigInteger, SmallInteger, MetaData, inspect, text
 
 from extensions import db
 
@@ -152,22 +152,6 @@ def _normalize_type(column_type, dialect):
     return re.sub(r'\s+', '', column_type.compile(dialect=dialect)).upper()
 
 
-def _postgres_float_family(column_type, dialect):
-    """Return PostgreSQL's effective float width, or None when not a float.
-
-    PostgreSQL reflects an unqualified SQLAlchemy ``Float`` as
-    ``DOUBLE PRECISION`` even though the model renders it as ``FLOAT``.  Those
-    are the same PostgreSQL type.  ``REAL`` and precision-qualified floats are
-    deliberately left distinct so this exception cannot hide a real drift.
-    """
-    rendered = _normalize_type(column_type, dialect)
-    if rendered in {'FLOAT', 'DOUBLEPRECISION'} and getattr(column_type, 'precision', None) is None:
-        return 'float64'
-    if rendered == 'REAL':
-        return 'float32'
-    return None
-
-
 def types_are_equivalent(expected, actual, dialect):
     """Compare reflected types while retaining dialect-specific safety rules."""
     expected_rendered = _normalize_type(expected, dialect)
@@ -175,9 +159,15 @@ def types_are_equivalent(expected, actual, dialect):
     if expected_rendered == actual_rendered:
         return True
     if dialect.name == 'postgresql':
-        expected_family = _postgres_float_family(expected, dialect)
-        actual_family = _postgres_float_family(actual, dialect)
-        return expected_family is not None and expected_family == actual_family
+        # PostgreSQL reflects an unqualified SQLAlchemy Float as DOUBLE
+        # PRECISION.  This is intentionally directional and narrow: REAL,
+        # FLOAT(24), and every other explicit precision remain drift.
+        return (
+            expected_rendered == 'FLOAT'
+            and getattr(expected, 'precision', None) is None
+            and actual_rendered == 'DOUBLEPRECISION'
+            and getattr(actual, 'precision', None) in (None, 53)
+        )
     return False
 
 
@@ -207,6 +197,94 @@ def _normalize_default(value):
     return normalized
 
 
+def _postgres_default_cast(value, column, reflected=False):
+    """Normalize one PostgreSQL reflection cast only when it is type-safe.
+
+    PostgreSQL adds casts such as ``'active'::character varying`` and
+    ``21474836480::bigint`` to reflected defaults.  Do not strip arbitrary
+    casts: doing so could turn a changed type or an expression into a match.
+    """
+    if value is None:
+        return None
+    raw = _strip_sql_parentheses(str(value).strip())
+    match = re.fullmatch(r'(.+?)\s*::\s*([a-z ]+(?:\[\])?)', raw, flags=re.IGNORECASE)
+    if not match:
+        expression = raw
+        cast = None
+    else:
+        expression = _strip_sql_parentheses(match.group(1))
+        cast = re.sub(r'\s+', ' ', match.group(2).strip().casefold())
+    # Do not depend on metadata.bind in normal use; the isinstance checks are
+    # stable across SQLAlchemy's PostgreSQL type subclasses.
+    if isinstance(column.type, Boolean):
+        allowed = {'boolean', 'bool'}
+    elif isinstance(column.type, (BigInteger,)):
+        allowed = {'bigint', 'int8'}
+    elif isinstance(column.type, (Integer, SmallInteger)):
+        allowed = {'integer', 'int', 'int4', 'smallint', 'int2'}
+    else:
+        allowed = {'character varying', 'varchar', 'text', 'character', 'char'}
+    if cast is not None and (cast not in allowed or '::' in expression):
+        # A non-safe cast is retained with a marker that cannot compare equal
+        # to a metadata literal.
+        return f'__unsafe_postgres_cast__:{raw}'
+    # Metadata's string server_default shorthand is unquoted, but a reflected
+    # PostgreSQL text literal must be quoted.  This prevents a bare keyword or
+    # expression from being mistaken for that shorthand.
+    if reflected and not isinstance(column.type, (Boolean, Integer, BigInteger, SmallInteger)) and not re.fullmatch(
+            r"'(?:''|[^'])*'", expression):
+        return f'__unsafe_postgres_text_default__:{raw}'
+    return expression
+
+
+def _postgres_boolean_default(value):
+    normalized = _normalize_default(value)
+    if normalized in {'1', 'true'}:
+        return True
+    if normalized in {'0', 'false'}:
+        return False
+    return None
+
+
+def _postgres_automatic_integer_primary_key(column):
+    if not isinstance(column.type, (Integer, BigInteger, SmallInteger)):
+        return False
+    return bool(column.primary_key and column.autoincrement and column.server_default is None)
+
+
+def _postgres_owned_sequence_default(value, table_name, column):
+    """Recognize only the conventional serial sequence for this PK column."""
+    if not _postgres_automatic_integer_primary_key(column):
+        return False
+    raw = _strip_sql_parentheses(str(value).strip()) if value is not None else ''
+    match = re.fullmatch(
+        r"nextval\(\s*'(?P<sequence>[^']+)'\s*::\s*regclass\s*\)", raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return False
+    # pg_get_expr may schema-qualify or quote the relation inside regclass.
+    pieces = [piece.strip().strip('"') for piece in match.group('sequence').split('.')]
+    return bool(pieces) and pieces[-1] == f'{table_name}_{column.name}_seq'
+
+
+def _defaults_are_equivalent(expected_default, actual_default, column, table_name, dialect):
+    """Compare defaults with PostgreSQL reflection-only normalization."""
+    if dialect.name != 'postgresql':
+        return _normalize_default(actual_default) == _normalize_default(expected_default)
+    if expected_default is None:
+        if _postgres_automatic_integer_primary_key(column):
+            return _postgres_owned_sequence_default(actual_default, table_name, column)
+        return actual_default is None
+    expected_value = _postgres_default_cast(expected_default, column)
+    actual_value = _postgres_default_cast(actual_default, column, reflected=True)
+    if isinstance(column.type, Boolean):
+        expected_boolean = _postgres_boolean_default(expected_value)
+        actual_boolean = _postgres_boolean_default(actual_value)
+        return expected_boolean is not None and expected_boolean == actual_boolean
+    return _normalize_default(expected_value) == _normalize_default(actual_value)
+
+
 def _expected_foreign_keys(table):
     expected = []
     for constraint in table.foreign_key_constraints:
@@ -217,6 +295,7 @@ def _expected_foreign_keys(table):
             tuple(element.column.name for element in constraint.elements),
             (constraint.ondelete or '').upper(),
             (constraint.onupdate or '').upper(),
+            _constraint_deferrability(constraint),
         ))
     return Counter(expected)
 
@@ -226,11 +305,6 @@ def _reflected_foreign_keys(inspector, table_name):
     for foreign_key in inspector.get_foreign_keys(table_name):
         options = foreign_key.get('options') or {}
         name = foreign_key.get('name')
-        # Phase 4 batch rebuild needs explicit names on SQLite, while the ORM
-        # models intentionally keep portable anonymous ForeignKey objects.
-        # The FK shape—not a dialect-generated label—is the contract here.
-        if isinstance(name, str) and name.startswith('fk_'):
-            name = None
         reflected.append((
             name,
             tuple(foreign_key.get('constrained_columns') or ()),
@@ -238,13 +312,15 @@ def _reflected_foreign_keys(inspector, table_name):
             tuple(foreign_key.get('referred_columns') or ()),
             str(options.get('ondelete') or '').upper(),
             str(options.get('onupdate') or '').upper(),
+            _reflected_constraint_deferrability(options),
         ))
     return Counter(reflected)
 
 
 def _expected_unique_constraints(table):
     return Counter(
-        (constraint.name, tuple(column.name for column in constraint.columns))
+        (constraint.name, tuple(column.name for column in constraint.columns),
+         _constraint_deferrability(constraint))
         for constraint in table.constraints
         if constraint.__class__.__name__ == 'UniqueConstraint'
     )
@@ -257,20 +333,51 @@ def _reflected_unique_constraints(inspector, table_name):
             f'Dialect cannot reflect unique constraints for {table_name}; refusing to stamp.'
         )
     return Counter(
-        (constraint.get('name'), tuple(constraint.get('column_names') or ()))
+        (constraint.get('name'), tuple(constraint.get('column_names') or ()),
+         _reflected_constraint_deferrability(constraint.get('options') or constraint.get('dialect_options') or {}))
         for constraint in constraints
     )
 
 
-def _expected_check_constraints(table):
+def _constraint_deferrability(constraint):
+    return (getattr(constraint, 'deferrable', None), getattr(constraint, 'initially', None))
+
+
+def _reflected_constraint_deferrability(options):
+    deferrable = options.get('deferrable')
+    initially = options.get('initially')
+    if isinstance(deferrable, str):
+        deferrable = deferrable.casefold() == 'true'
+    if isinstance(initially, str):
+        initially = initially.upper()
+    return deferrable, initially
+
+
+def _constraints_are_equivalent(expected, actual):
+    """Match anonymous metadata constraints by structure, named ones exactly."""
+    remaining = list(actual.elements())
+    for expected_item in expected.elements():
+        expected_name, *expected_shape = expected_item
+        match_index = next((
+            index for index, actual_item in enumerate(remaining)
+            if actual_item[1:] == tuple(expected_shape)
+            and (expected_name is None or actual_item[0] == expected_name)
+        ), None)
+        if match_index is None:
+            return False
+        remaining.pop(match_index)
+    return not remaining
+
+
+def _expected_check_constraints(table, dialect=None):
     return Counter(
-        (constraint.name, _normalize_sql(constraint.sqltext))
+        (constraint.name, _canonical_check_constraint(constraint.sqltext, dialect))
         for constraint in table.constraints
         if constraint.__class__.__name__ == 'CheckConstraint'
     )
 
 
-def _reflected_check_constraints(inspector, table_name):
+def _reflected_check_constraints(inspector, table_name, dialect=None):
     constraints = inspector.get_check_constraints(table_name)
     if constraints is None:
         raise MigrationBootstrapError(
@@ -282,8 +389,136 @@ def _reflected_check_constraints(inspector, table_name):
             raise MigrationBootstrapError(
                 f'Dialect returned an unreadable CHECK constraint for {table_name}; refusing to stamp.'
             )
-        reflected.append((constraint.get('name'), _normalize_sql(constraint['sqltext'])))
+        reflected.append((constraint.get('name'), _canonical_check_constraint(constraint['sqltext'], dialect)))
     return Counter(reflected)
+
+
+_POSTGRES_SAFE_CHECK_CAST = re.compile(
+    r'(.+?)\s*::\s*(?:text|character\s+varying|varchar|character|char|'
+    r'integer|int|int4|bigint|int8|smallint|int2)(?:\[\])?\s*$', re.IGNORECASE,
+)
+
+
+def _strip_postgres_safe_check_casts(value):
+    value = _strip_sql_parentheses(value)
+    while True:
+        match = _POSTGRES_SAFE_CHECK_CAST.fullmatch(value)
+        if not match:
+            return value
+        value = _strip_sql_parentheses(match.group(1))
+
+
+def _split_postgres_top_level(value, delimiter):
+    """Split a controlled SQL list without accepting malformed quoting."""
+    pieces, start, depth, quote = [], 0, 0, False
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "'":
+            if quote and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            quote = not quote
+        elif not quote and character == '(':
+            depth += 1
+        elif not quote and character == ')':
+            depth -= 1
+            if depth < 0:
+                return None
+        elif not quote and depth == 0 and value.startswith(delimiter, index):
+            pieces.append(value[start:index].strip())
+            index += len(delimiter)
+            start = index
+            continue
+        index += 1
+    if quote or depth != 0:
+        return None
+    pieces.append(value[start:].strip())
+    return pieces if all(pieces) else None
+
+
+def _postgres_check_operand(value):
+    value = _strip_postgres_safe_check_casts(value)
+    if '::' in value:
+        return None
+    if re.fullmatch(r"'(?:''|[^'])*'", value):
+        return ('literal', value[1:-1].replace("''", "'"))
+    if re.fullmatch(r'-?\d+', value):
+        return ('literal', value)
+    match = re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?([a-z_][a-z0-9_]*)', value)
+    return ('column', match.group(1)) if match else None
+
+
+def _postgres_check_in_values(value):
+    values = _split_postgres_top_level(value, ',')
+    if not values:
+        return None
+    parsed = [_postgres_check_operand(item) for item in values]
+    if any(item is None or item[0] != 'literal' for item in parsed):
+        return None
+    return frozenset(item[1] for item in parsed)
+
+
+def _canonical_postgres_check_constraint(value):
+    """Canonicalize the reflected, literal-only PostgreSQL CHECK grammar.
+
+    This intentionally recognizes only equality and IN/ANY literal checks
+    joined by AND.  It is enough for the checked-in metadata while refusing
+    OR, functions, expressions, and unfamiliar casts rather than treating
+    those as cosmetic server formatting.
+    """
+    if not isinstance(value, str):
+        return None
+    atoms = _split_postgres_predicate_and(value.strip().casefold())
+    if not atoms:
+        return None
+    parsed = []
+    for atom in atoms:
+        atom = _strip_sql_parentheses(atom)
+        # ``column IN (literal, ...)``.
+        in_parts = _split_postgres_top_level(atom, ' in ')
+        if in_parts is not None and len(in_parts) == 2:
+            column = _postgres_check_operand(in_parts[0])
+            values = _strip_sql_parentheses(in_parts[1])
+            parsed_values = _postgres_check_in_values(values)
+            if not column or column[0] != 'column' or parsed_values is None:
+                return None
+            parsed.append((column[1], 'in', parsed_values))
+            continue
+        equality_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '=')
+        if equality_parts is None or len(equality_parts) != 2:
+            return None
+        left = _postgres_check_operand(equality_parts[0])
+        if not left or left[0] != 'column':
+            return None
+        column = left[1]
+        # ``column = ANY (ARRAY[...])`` is PostgreSQL's reflected IN form.
+        right = equality_parts[1]
+        any_match = re.fullmatch(r'any\s*\((.*)\)', _strip_sql_parentheses(right), re.IGNORECASE)
+        if any_match:
+            array = _strip_postgres_safe_check_casts(any_match.group(1))
+            array_match = re.fullmatch(r'array\s*\[(.*)\]', _strip_sql_parentheses(array), re.IGNORECASE)
+            values = _postgres_check_in_values(array_match.group(1)) if array_match else None
+            if values is None:
+                return None
+            parsed.append((column, 'in', values))
+        else:
+            right_operand = _postgres_check_operand(right)
+            if not right_operand or right_operand[0] != 'literal':
+                return None
+            literal = right_operand[1]
+            parsed.append((column, '=', literal))
+    if len(set(parsed)) != len(parsed):
+        return None
+    return frozenset(parsed)
+
+
+def _canonical_check_constraint(value, dialect):
+    if getattr(dialect, 'name', None) == 'postgresql':
+        canonical = _canonical_postgres_check_constraint(str(value))
+        if canonical is not None:
+            return canonical
+    return _normalize_sql(value)
 
 
 def _expected_indexes(table):
@@ -299,6 +534,10 @@ def _reflected_indexes(inspector, table_name):
         raise MigrationBootstrapError(
             f'Dialect cannot reflect indexes for {table_name}; refusing to stamp.'
         )
+    # PostgreSQL exposes the physical indexes backing PK/UQ constraints too.
+    # They are not ORM Index objects.  Only the inspector's explicit marker is
+    # trusted; named/unique/partial indexes are never filtered heuristically.
+    indexes = [index for index in indexes if not index.get('duplicates_constraint')]
     return Counter(
         (index.get('name'), tuple(index.get('column_names') or ()), bool(index.get('unique')))
         for index in indexes
@@ -346,7 +585,10 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
             expected_default = _normalize_default(_metadata_default(expected))
             actual_nullable = bool(actual.get('nullable'))
             if (not types_are_equivalent(expected.type, actual['type'], connection.dialect)
-                    or (actual_nullable, actual_default) != (expected.nullable, expected_default)):
+                    or actual_nullable != expected.nullable
+                    or not _defaults_are_equivalent(
+                        _metadata_default(expected), actual.get('default'), expected, table_name, connection.dialect
+                    )):
                 differences.append(
                     f'{table_name}.{name} column expected='
                     f'({expected_type}, {expected.nullable}, {expected_default!r}) actual='
@@ -363,12 +605,14 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
             ('foreign_keys', _expected_foreign_keys(table), _reflected_foreign_keys(inspector, table_name)),
             ('unique_constraints', _expected_unique_constraints(table),
              _reflected_unique_constraints(inspector, table_name)),
-            ('check_constraints', _expected_check_constraints(table),
-             _reflected_check_constraints(inspector, table_name)),
+            ('check_constraints', _expected_check_constraints(table, connection.dialect),
+             _reflected_check_constraints(inspector, table_name, connection.dialect)),
             ('indexes', _expected_indexes(table), _reflected_indexes(inspector, table_name)),
         )
         for label, expected, actual in checks:
-            if expected != actual:
+            if (label in {'foreign_keys', 'unique_constraints'}
+                    and not _constraints_are_equivalent(expected, actual)) or (
+                        label not in {'foreign_keys', 'unique_constraints'} and expected != actual):
                 differences.append(
                     f'{table_name}.{label} expected={expected!r} actual={actual!r}'
                 )
@@ -579,15 +823,42 @@ def _audit_trigger_differences(connection):
                 if clause not in actual.get(name, '') or 'RAISE(ABORT' not in actual.get(name, '')]
     if dialect == 'postgresql':
         rows = connection.execute(text("""
-            SELECT trigger_name, action_statement
+            SELECT trigger_name, event_manipulation, action_timing,
+                   action_orientation, action_statement
             FROM information_schema.triggers
             WHERE event_object_table = 'audit_event'
               AND trigger_name IN ('audit_event_no_update', 'audit_event_no_delete')
         """)).all()
-        actual = {name: (statement or '').lower() for name, statement in rows}
-        return [f'audit_event trigger {name} is missing or invalid'
-                for name in ('audit_event_no_update', 'audit_event_no_delete')
-                if 'audit_event_append_only' not in actual.get(name, '')]
+        actual = {
+            name: (str(event or '').upper(), str(timing or '').upper(),
+                   str(orientation or '').upper(), str(statement or '').lower())
+            for name, event, timing, orientation, statement in rows
+        }
+        defects = [
+            f'audit_event trigger {name} is missing or invalid'
+            for name, event in (
+                ('audit_event_no_update', 'UPDATE'), ('audit_event_no_delete', 'DELETE'),
+            )
+            if actual.get(name, ('', '', '', ''))[:3] != (event, 'BEFORE', 'ROW')
+            or not re.fullmatch(r'execute function (?:public\.)?audit_event_append_only\(\)', actual[name][3].strip())
+        ]
+        function_rows = connection.execute(text("""
+            SELECT pg_get_functiondef(proc.oid)
+            FROM pg_proc AS proc
+            JOIN pg_namespace AS namespace ON namespace.oid = proc.pronamespace
+            WHERE proc.proname = 'audit_event_append_only'
+              AND namespace.nspname = ANY(current_schemas(false))
+              AND pg_get_function_identity_arguments(proc.oid) = ''
+        """)).all()
+        if len(function_rows) != 1:
+            defects.append('audit_event append-only function is missing or invalid')
+        else:
+            definition = re.sub(r'\s+', ' ', str(function_rows[0][0] or '')).casefold()
+            if ('returns trigger' not in definition
+                    or 'raise exception' not in definition
+                    or 'audit_event is append-only' not in definition):
+                defects.append('audit_event append-only function is missing or invalid')
+        return defects
     # An unknown dialect cannot prove the invariant.
     return ['audit_event triggers cannot be verified for this database dialect']
 
