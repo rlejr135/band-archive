@@ -1,5 +1,6 @@
 """Offline-only coverage for the Phase 5 legacy rehearsal boundary."""
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -714,3 +715,49 @@ def test_cli_error_never_exposes_driver_sql_or_credentials(tmp_path, monkeypatch
     assert "rehearsal_failed correlation_id=" in result.output
     assert "sensitive-value" not in result.output
     assert "SELECT" not in result.output
+
+
+def test_cli_report_output_writes_unicode_as_utf8_without_shell_round_trip(tmp_path, monkeypatch):
+    source = tmp_path / "source.sqlite"
+    source.touch()
+    output = tmp_path / "retained-report.json"
+    key = "gallery/한글 사진 🎵.png"
+    report = {"before": {"object_manifest": [{"key": key}]}}
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    monkeypatch.setattr(rehearsal, "run_rehearsal", lambda *args, **kwargs: report)
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", "postgresql://user:value@host/db",
+        "--expected-target-host", "host", "--expected-target-database", "db",
+        "--expected-target-schema", "public", "--report-output", str(output),
+    ])
+
+    assert result.exit_code == 0
+    payload = output.read_bytes()
+    assert payload.endswith(b"\n")
+    assert b"\\u" not in payload
+    assert json.loads(payload.decode("utf-8"))["before"]["object_manifest"][0]["key"] == key
+    assert "\ufffd" not in payload.decode("utf-8")
+    assert key not in result.output
+    assert f"sha256={hashlib.sha256(payload).hexdigest()}" in result.output
+
+
+def test_cli_report_output_refuses_to_overwrite_existing_evidence(tmp_path, monkeypatch):
+    source = tmp_path / "source.sqlite"
+    source.touch()
+    output = tmp_path / "retained-report.json"
+    output.write_bytes(b"retained")
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    called = []
+    monkeypatch.setattr(rehearsal, "run_rehearsal", lambda *args, **kwargs: called.append(True))
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", "postgresql://user:value@host/db",
+        "--expected-target-host", "host", "--expected-target-database", "db",
+        "--expected-target-schema", "public", "--report-output", str(output),
+    ])
+
+    assert result.exit_code != 0
+    assert "rehearsal_failed correlation_id=" in result.output
+    assert output.read_bytes() == b"retained"
+    assert called == []

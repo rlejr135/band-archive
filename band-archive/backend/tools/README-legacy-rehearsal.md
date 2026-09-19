@@ -21,6 +21,7 @@ python tools/legacy_rehearsal/rehearsal.py `
   --expected-target-host db.staging.example.test `
   --expected-target-database rehearsal `
   --expected-target-schema public `
+  --report-output E:\operator\reports\phase5-dry-run.json `
   --dry-run
 ```
 
@@ -32,6 +33,14 @@ tokens, upload ids, passwords, URLs, and credentials are redacted. A real
 import is the same command without `--dry-run`; it is one target transaction,
 resets PostgreSQL sequences only after rows are inserted, verifies full-row
 content digests (not just counts/PKs), and rolls back on any mismatch.
+
+Always retain operator evidence with `--report-output`. The tool writes the
+JSON bytes directly as UTF-8, publishes the file atomically, and refuses to
+overwrite an existing report. Do not capture the JSON through PowerShell or
+another shell's stdout redirection: a console encoding conversion can replace
+valid non-ASCII object-key characters even though the database import itself
+is exact. When `--report-output` is used, stdout contains only the SHA-256 of
+the report bytes.
 
 ## Required operator gates
 

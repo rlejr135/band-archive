@@ -102,6 +102,48 @@ def safe_target_identity(database_url: str) -> dict[str, str]:
     return {"dialect": url.get_backend_name(), "host_fingerprint": fingerprint}
 
 
+def _report_payload(report: dict[str, Any]) -> bytes:
+    """Serialize retained evidence without passing Unicode through a shell."""
+    rendered = json.dumps(redact(report), default=str, ensure_ascii=False, sort_keys=True)
+    return (rendered + "\n").encode("utf-8")
+
+
+def _report_destination(path: Path) -> Path:
+    """Fail before migration when retained evidence cannot be published safely."""
+    destination = path.expanduser().resolve()
+    if not destination.parent.is_dir():
+        raise RehearsalError("report output parent must already exist")
+    if os.path.lexists(destination):
+        raise RehearsalError("report output already exists")
+    return destination
+
+
+def _write_report_exclusive(path: Path, report: dict[str, Any]) -> str:
+    """Write a UTF-8 report once, atomically, and return its byte digest."""
+    destination = _report_destination(path)
+
+    payload = _report_payload(report)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # A same-directory hard link is an exclusive publish: it cannot
+        # replace an existing report and never exposes the temporary name.
+        os.link(temporary, destination)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _file_fingerprint(path: Path) -> dict[str, Any]:
     """Stable evidence that does not reveal a local path or any DB content."""
     stat = path.stat()
@@ -1255,22 +1297,32 @@ class ReadOnlyS3Adapter:
 @click.option("--allow-sqlite-target", is_flag=True, help="TEST ONLY: permit SQLite compatibility target.")
 @click.option("--sqlite-test-target-path", type=click.Path(dir_okay=False, path_type=Path),
               help="TEST ONLY: resolved path that must exactly equal the SQLite target URL path.")
+@click.option("--report-output", type=click.Path(dir_okay=False, path_type=Path),
+              help="Write retained evidence directly as UTF-8 JSON; refuses to overwrite an existing file.")
 def cli(source_sqlite: Path, target_url: str, expected_target_host: str | None,
         expected_target_database: str | None, expected_target_schema: str | None,
-        dry_run: bool, allow_sqlite_target: bool, sqlite_test_target_path: Path | None) -> None:
+        dry_run: bool, allow_sqlite_target: bool, sqlite_test_target_path: Path | None,
+        report_output: Path | None) -> None:
     """Run one offline, non-repeatable legacy-migration rehearsal."""
     try:
+        if report_output is not None:
+            _report_destination(report_output)
         report = run_rehearsal(
             str(source_sqlite), target_url, expected_target_host=expected_target_host,
             expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
             dry_run=dry_run, allow_sqlite_target=allow_sqlite_target,
             sqlite_test_target_path=str(sqlite_test_target_path) if sqlite_test_target_path else None,
         )
+        if report_output is not None:
+            report_sha256 = _write_report_exclusive(report_output, report)
     except Exception as error:
         correlation_id = uuid.uuid4().hex
         # Do not expose driver SQL, parameter values, paths, or credentials.
         raise click.ClickException(f"rehearsal_failed correlation_id={correlation_id}") from error
-    click.echo(json.dumps(redact(report), default=str, ensure_ascii=False, sort_keys=True))
+    if report_output is not None:
+        click.echo(f"report_written sha256={report_sha256}")
+    else:
+        click.echo(_report_payload(report).decode("utf-8"), nl=False)
 
 
 if __name__ == "__main__":
