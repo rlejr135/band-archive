@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -17,9 +18,11 @@ import tempfile
 import base64
 import math
 import uuid
+from copy import deepcopy
 from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -174,19 +177,154 @@ def preflight_sqlite_snapshot(source: str) -> Path:
     return path
 
 
-def _source_schema_fingerprint(path: Path) -> dict[str, Any]:
-    """Read schema names only; never print source rows or opaque user data."""
+def _quote_sqlite_identifier(name: str) -> str:
+    """Quote a schema identifier after it was read from SQLite metadata."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _canonical_sqlite_sql(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", value.strip()).replace('"', '').replace('`', '').casefold()
+
+
+def _sqlite_check_contract(create_sql: str | None) -> list[str]:
+    """Extract normalized CHECK clauses; SQLite has no CHECK pragma."""
+    sql = _canonical_sqlite_sql(create_sql) or ""
+    checks, cursor = [], 0
+    while True:
+        match = re.search(r"(?:constraint ([a-z0-9_]+) )?check\s*\(", sql[cursor:])
+        if not match:
+            return checks
+        start = cursor + match.start()
+        opening = cursor + match.end() - 1
+        depth, end = 0, None
+        for index in range(opening, len(sql)):
+            if sql[index] == '(':
+                depth += 1
+            elif sql[index] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        if end is None:
+            checks.append("malformed_check")
+            return checks
+        checks.append(sql[start:end])
+        cursor = end
+
+
+def _sqlite_schema_contract(path: Path) -> dict[str, Any]:
+    """Deterministic, row-free contract for every SQLite schema invariant."""
     uri = f"file:{path.as_posix()}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as conn:
-        tables = sorted(row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ))
-        columns = {
-            table: sorted(row[1] for row in conn.execute(f'PRAGMA table_info("{table}")'))
-            for table in tables
-        }
-    encoded = json.dumps({"tables": tables, "columns": columns}, sort_keys=True, separators=(",", ":"))
-    return {"tables": tables, "columns": columns, "checksum": hashlib.sha256(encoded.encode()).hexdigest()}
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        records = conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' AND type IN ('table', 'index', 'trigger')"
+        ).fetchall()
+        table_sql = {row[1]: row[3] for row in records if row[0] == 'table'}
+        tables = sorted(table_sql)
+        table_contracts: dict[str, Any] = {}
+        for table in tables:
+            quoted = _quote_sqlite_identifier(table)
+            columns = []
+            for cid, name, declared_type, notnull, default, pk in conn.execute(f"PRAGMA table_info({quoted})"):
+                columns.append({
+                    "cid": cid, "name": name,
+                    "type": re.sub(r"\s+", " ", (declared_type or "").strip()).upper(),
+                    "notnull": bool(notnull), "default": _canonical_sqlite_sql(default), "pk": pk,
+                })
+            indexes = []
+            for _, name, unique, origin, partial in conn.execute(f"PRAGMA index_list({quoted})"):
+                index_columns = [
+                    {"seqno": seqno, "cid": cid, "name": column_name}
+                    for seqno, cid, column_name in conn.execute(
+                        f"PRAGMA index_info({_quote_sqlite_identifier(name)})")
+                ]
+                index_sql = next((row[3] for row in records if row[0] == 'index' and row[1] == name), None)
+                indexes.append({"name": name, "unique": bool(unique), "origin": origin,
+                                "partial": bool(partial), "columns": index_columns,
+                                "sql": _canonical_sqlite_sql(index_sql)})
+            foreign_keys = [
+                {"id": item[0], "seq": item[1], "table": item[2], "from": item[3], "to": item[4],
+                 "on_update": item[5], "on_delete": item[6], "match": item[7]}
+                for item in conn.execute(f"PRAGMA foreign_key_list({quoted})")
+            ]
+            table_contracts[table] = {
+                "columns": columns, "indexes": sorted(indexes, key=lambda value: value["name"]),
+                "foreign_keys": sorted(foreign_keys, key=lambda value: (value["id"], value["seq"])),
+                "checks": _sqlite_check_contract(table_sql[table]),
+            }
+        triggers = {name: _canonical_sqlite_trigger_sql(sql)
+                    for kind, name, _, sql in records if kind == 'trigger'}
+    finally:
+        conn.close()
+    return {"tables": table_contracts, "triggers": dict(sorted(triggers.items()))}
+
+
+def _contract_checksum(contract: dict[str, Any]) -> str:
+    encoded = json.dumps(contract, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _source_schema_fingerprint(path: Path) -> dict[str, Any]:
+    """Return a deterministic structural fingerprint without source row data."""
+    contract = _sqlite_schema_contract(path)
+    tables = sorted(contract["tables"])
+    return {"tables": tables,
+            "columns": {name: [column["name"] for column in contract["tables"][name]["columns"]]
+                        for name in tables},
+            "checksum": _contract_checksum(contract)}
+
+
+def _create_baseline_sqlite(path: Path) -> None:
+    """Build revision 01 through the checked-in migration contract only."""
+    app = create_migration_app(f"sqlite:///{path.as_posix()}")
+    try:
+        with app.app_context():
+            upgrade(revision="20260914_01", directory=str(MIGRATIONS_DIRECTORY))
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+@lru_cache(maxsize=1)
+def _baseline_sqlite_contract() -> dict[str, Any]:
+    """Exact unversioned rev01 contract, generated rather than copied by hand."""
+    with tempfile.TemporaryDirectory(prefix="band-archive-rev01-contract-") as directory:
+        path = Path(directory) / "baseline.sqlite"
+        _create_baseline_sqlite(path)
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute("DROP TABLE alembic_version")
+            conn.commit()
+        finally:
+            conn.close()
+        return _sqlite_schema_contract(path)
+
+
+_PRODUCTION_LEGACY_VARIANT = "fly_production_legacy_20260919"
+
+
+def _production_legacy_contract() -> dict[str, Any]:
+    """The only historical Fly layout this normalizer is authorized to map."""
+    contract = deepcopy(_baseline_sqlite_contract())
+    song_columns = contract["tables"]["song"]["columns"]
+    song_columns.append({"cid": len(song_columns), "name": "lyrics", "type": "TEXT",
+                         "notnull": False, "default": None, "pk": 0})
+    changes = {
+        ("media", "is_featured"): {"default": "0"},
+        ("media", "processing_attempts"): {"notnull": False, "default": "0"},
+        ("media", "transcoding_status"): {"notnull": False, "default": "'pending'"},
+        ("personal_log", "processing_attempts"): {"notnull": False, "default": "0"},
+        ("personal_log", "transcoding_status"): {"notnull": False, "default": "'not_required'"},
+    }
+    for (table, column), values in changes.items():
+        item = next(value for value in contract["tables"][table]["columns"] if value["name"] == column)
+        item.update(values)
+    return contract
 
 
 def _canonical_sqlite_trigger_sql(value: str | None) -> str:
@@ -208,14 +346,8 @@ def _assert_exact_sqlite_trigger_contract(path: Path, revision: str | None) -> N
         raise RehearsalError("source SQLite trigger contract does not match its recorded revision")
 
 
-def _assert_supported_source_schema(path: Path) -> str | None:
-    """Reject partial historical variants before Alembic could alter them.
-
-    The checked-in baseline is the only pre-Alembic layout this rehearsal can
-    safely stamp.  Older deployments with, for example, ``practice_log`` or
-    ``song.lyrics`` need an explicit, reviewed normalizer; guessing would lose
-    content and is not a migration rehearsal.
-    """
+def _assert_supported_source_schema(path: Path) -> tuple[str | None, str | None]:
+    """Recognize only rev01 or the one reviewed Fly legacy schema variant."""
     fingerprint = _source_schema_fingerprint(path)
     tables = set(fingerprint["tables"])
     if "alembic_version" in tables:
@@ -227,25 +359,184 @@ def _assert_supported_source_schema(path: Path) -> str | None:
                 "unsupported Alembic source revision; schema fingerprint " + fingerprint["checksum"][:16]
                 + ". Do not stamp or import it; restore a known snapshot or review an explicit normalizer."
             )
-        return versions[0]
-    from migration_bootstrap import BASELINE_TABLE_NAMES
-    required = set(BASELINE_TABLE_NAMES)
-    missing = sorted(required - tables)
-    unsupported = sorted(tables - required)
-    if missing or unsupported:
-        # Keep the fingerprint (schema-only) actionable without leaking rows.
-        raise RehearsalError(
-            "unsupported pre-Alembic SQLite schema fingerprint " + fingerprint["checksum"][:16]
-            + "; missing=" + ",".join(missing or ["none"])
-            + "; extra=" + ",".join(unsupported or ["none"])
-            + ". Do not stamp or import it. Build and review an explicit variant normalizer first."
-        )
-    return None
+        return versions[0], None
+    actual = _sqlite_schema_contract(path)
+    if actual == _baseline_sqlite_contract():
+        return None, None
+    if actual == _production_legacy_contract():
+        return None, _PRODUCTION_LEGACY_VARIANT
+    # Keep the fingerprint actionable but do not expose table names or rows
+    # from an unsupported operator snapshot.
+    raise RehearsalError(
+        "unsupported pre-Alembic SQLite schema fingerprint " + fingerprint["checksum"][:16]
+        + "; category=schema_contract_drift. Do not stamp or import it. "
+        "Build and review an explicit variant normalizer first."
+    )
+
+
+def _mapped_sqlite_digests(path: Path, contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Digest each expected column and PK in deterministic FK-safe source order."""
+    result: dict[str, dict[str, Any]] = {}
+    uri = f"file:{path.as_posix()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        for table, definition in sorted(contract["tables"].items()):
+            columns = [item["name"] for item in definition["columns"]]
+            pk_columns = [item["name"] for item in sorted(definition["columns"], key=lambda item: item["pk"])
+                          if item["pk"]]
+            order = pk_columns or columns
+            selected = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+            ordered = ", ".join(_quote_sqlite_identifier(column) for column in order)
+            full, pk, count = hashlib.sha256(), hashlib.sha256(), 0
+            per_column = {column: hashlib.sha256() for column in columns}
+            for row in conn.execute(f"SELECT {selected} FROM {_quote_sqlite_identifier(table)} ORDER BY {ordered}"):
+                full.update(b"table\0" + table.encode() + b"\0")
+                for column in columns:
+                    encoded = _stable_value(row[column])
+                    record = column.encode() + b"\0" + str(len(encoded)).encode() + b":" + encoded
+                    full.update(record)
+                    per_column[column].update(record + b"\n")
+                for column in pk_columns:
+                    encoded = _stable_value(row[column])
+                    pk.update(column.encode() + b"\0" + str(len(encoded)).encode() + b":" + encoded)
+                full.update(b"\n")
+                pk.update(b"\n")
+                count += 1
+            result[table] = {"count": count, "primary_key_sha256": pk.hexdigest(),
+                             "sha256": full.hexdigest(),
+                             "column_sha256": {column: digest.hexdigest()
+                                               for column, digest in per_column.items()}}
+    return result
+
+
+def _foreign_key_safe_table_order(contract: dict[str, Any]) -> list[str]:
+    """Parents first; self references remain in their table's one transaction."""
+    remaining = {
+        table: {fk["table"] for fk in definition["foreign_keys"] if fk["table"] != table}
+        for table, definition in contract["tables"].items()
+    }
+    ordered: list[str] = []
+    while remaining:
+        ready = sorted(table for table, parents in remaining.items() if not parents)
+        if not ready:
+            raise RehearsalError("legacy normalizer failed category=foreign_key_copy_order")
+        ordered.extend(ready)
+        for table in ready:
+            del remaining[table]
+        ready_set = set(ready)
+        for parents in remaining.values():
+            parents.difference_update(ready_set)
+    return ordered
+
+
+def _legacy_lyrics_evidence(path: Path) -> dict[str, Any]:
+    """Prove omitted lyrics were empty without exporting their plaintext."""
+    digest, count, invalid = hashlib.sha256(), 0, 0
+    uri = f"file:{path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        for (value,) in conn.execute('SELECT "lyrics" FROM "song" ORDER BY "id"'):
+            encoded = _stable_value(value)
+            digest.update(str(len(encoded)).encode() + b":" + encoded + b"\n")
+            count += 1
+            if value is not None and value != "":
+                invalid += 1
+    finally:
+        conn.close()
+    if invalid:
+        raise RehearsalError("legacy normalizer validation failed category=unmapped_content "
+                             "table=song column=lyrics count=" + str(invalid))
+    return {"count": count, "typed_sha256": digest.hexdigest(),
+            "reason": "empty_or_null_unmapped_legacy_column"}
+
+
+_NORMALIZER_REQUIRED_COLUMNS = (
+    ("media", "processing_attempts"), ("media", "transcoding_status"),
+    ("personal_log", "processing_attempts"), ("personal_log", "transcoding_status"),
+)
+
+
+def _assert_normalizer_values(path: Path) -> dict[str, Any]:
+    excluded = {"song.lyrics": _legacy_lyrics_evidence(path)}
+    uri = f"file:{path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        for table, column in _NORMALIZER_REQUIRED_COLUMNS:
+            count = conn.execute(
+                f"SELECT count(*) FROM {_quote_sqlite_identifier(table)} "
+                f"WHERE {_quote_sqlite_identifier(column)} IS NULL"
+            ).fetchone()[0]
+            if count:
+                raise RehearsalError("legacy normalizer validation failed category=required_nonnull "
+                                     f"table={table} column={column} count={count}")
+    finally:
+        conn.close()
+    return excluded
+
+
+def _write_normalization_evidence(directory: Path, source_snapshot: dict[str, Any],
+                                  excluded: dict[str, Any], mapped: dict[str, Any]) -> dict[str, Any]:
+    """Keep a mode-0600 digest-only sidecar; reports receive no local path."""
+    evidence = {"variant": _PRODUCTION_LEGACY_VARIANT,
+                "source_snapshot_sha256": source_snapshot["sha256"],
+                "excluded_columns": excluded, "mapped_content_digests": mapped}
+    sidecar = directory / "normalization-quarantine-evidence.json"
+    sidecar.write_text(json.dumps(evidence, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    try:
+        os.chmod(sidecar, 0o600)
+    except OSError:
+        # Windows ACLs are inherited from the private temporary directory; the
+        # digest-only payload is still safe to return to the operator report.
+        pass
+    return {"variant": evidence["variant"], "source_snapshot_sha256": evidence["source_snapshot_sha256"],
+            "excluded_columns": excluded, "mapped_content_digests": mapped,
+            "sidecar_mode": "0600"}
+
+
+def _normalize_production_legacy_copy(snapshot_path: Path, working_path: Path,
+                                      source_snapshot: dict[str, Any], temporary_dir: Path) -> dict[str, Any]:
+    """Construct an exact rev01 work DB and copy only reviewed mapped fields."""
+    baseline = _baseline_sqlite_contract()
+    excluded = _assert_normalizer_values(snapshot_path)
+    source_digests = _mapped_sqlite_digests(snapshot_path, baseline)
+    _create_baseline_sqlite(working_path)
+    with sqlite3.connect(working_path) as target, sqlite3.connect(
+            f"file:{snapshot_path.as_posix()}?mode=ro", uri=True) as source:
+        target.execute("DROP TABLE alembic_version")
+        target.execute("PRAGMA foreign_keys = ON")
+        target.execute("PRAGMA defer_foreign_keys = ON")
+        try:
+            target.execute("BEGIN")
+            for table in _foreign_key_safe_table_order(baseline):
+                definition = baseline["tables"][table]
+                columns = [item["name"] for item in definition["columns"]]
+                quoted_columns = ", ".join(_quote_sqlite_identifier(column) for column in columns)
+                rows = source.execute(
+                    f"SELECT {quoted_columns} FROM {_quote_sqlite_identifier(table)}"
+                )
+                target.executemany(
+                    f"INSERT INTO {_quote_sqlite_identifier(table)} ({quoted_columns}) "
+                    f"VALUES ({', '.join('?' for _ in columns)})", rows,
+                )
+            target.execute("COMMIT")
+        except sqlite3.Error as error:
+            target.execute("ROLLBACK")
+            raise RehearsalError("legacy normalizer failed category=copy_contract") from error
+        integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
+        fk_errors = target.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity != "ok" or fk_errors:
+            raise RehearsalError("legacy normalizer failed category=normalized_integrity")
+    if _sqlite_schema_contract(working_path) != baseline:
+        raise RehearsalError("legacy normalizer failed category=normalized_schema_contract")
+    normalized_digests = _mapped_sqlite_digests(working_path, baseline)
+    if source_digests != normalized_digests:
+        raise RehearsalError("legacy normalizer failed category=mapped_content_digest")
+    return _write_normalization_evidence(temporary_dir, source_snapshot, excluded, source_digests)
 
 
 def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     source_path = preflight_sqlite_snapshot(source)
-    source_revision = _assert_supported_source_schema(source_path)
+    source_revision, normalizer_variant = _assert_supported_source_schema(source_path)
     _assert_exact_sqlite_trigger_contract(source_path, source_revision)
     source_before = _file_fingerprint(source_path)
     snapshot_path = temporary_dir / "legacy-rehearsal-snapshot.sqlite"
@@ -254,12 +545,18 @@ def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str
     snapshot_fingerprint = _file_fingerprint(snapshot_path)
     if source_before != _file_fingerprint(source_path) or source_before["sha256"] != snapshot_fingerprint["sha256"]:
         raise RehearsalError("source SQLite snapshot changed while being copied")
-    # Keep the copied snapshot immutable as operator evidence. Only its second
-    # copy is upgraded/backfilled.
-    shutil.copy2(snapshot_path, working_path)
+    # Keep the copied snapshot immutable as operator evidence.  The supported
+    # Fly variant is rebuilt into a fresh rev01 work DB; ordinary rev01/stamped
+    # sources still use an exact second byte-copy.
+    normalization = None
+    if normalizer_variant == _PRODUCTION_LEGACY_VARIANT:
+        normalization = _normalize_production_legacy_copy(
+            snapshot_path, working_path, snapshot_fingerprint, temporary_dir)
+    else:
+        shutil.copy2(snapshot_path, working_path)
+        if snapshot_fingerprint["sha256"] != _file_fingerprint(working_path)["sha256"]:
+            raise RehearsalError("working SQLite copy does not match immutable snapshot")
     working_before = _file_fingerprint(working_path)
-    if snapshot_fingerprint["sha256"] != working_before["sha256"]:
-        raise RehearsalError("working SQLite copy does not match immutable snapshot")
     source_url = f"sqlite:///{working_path.as_posix()}"
     app = create_migration_app(source_url)
     # A rehearsal must be byte/report stable. Phase 4's import-only rows have
@@ -290,11 +587,14 @@ def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str
             db.engine.dispose()
     if snapshot_fingerprint != _file_fingerprint(snapshot_path):
         raise RehearsalError("immutable copied snapshot changed during rehearsal")
-    return working_path, redact(report), {
+    source_files = {
         "source_before": source_before,
         "immutable_snapshot": snapshot_fingerprint,
         "working_copy_before": working_before,
     }
+    if normalization is not None:
+        source_files["normalization"] = normalization
+    return working_path, redact(report), source_files
 
 
 def _table_names(connection: Connection) -> list[str]:

@@ -68,12 +68,33 @@ record. Do **not** run `migration_runner.py`, Alembic, or this tool against a
 mounted production volume. Do **not** put production URLs, bucket names,
 credentials, or signed URLs in tickets or JSON reports.
 
-The tool supports only the checked-in pre-Alembic baseline or an Alembic-known
-schema. A stamped source must pass its exact revision-specific structural
-contract—including unexpected indexes, triggers, and constraints—before it is
-upgraded. It deliberately refuses older partial variants such as a `practice_log`
-table or a `song.lyrics` column before stamping anything. Those need an
-explicit, reviewed normalizer that maps every legacy field without guesswork.
+The tool supports the checked-in pre-Alembic baseline, an Alembic-known schema,
+and one explicitly named Fly production variant:
+`fly_production_legacy_20260919`. Its deterministic schema contract includes
+every table/column position, declared type, nullability, default, index,
+foreign key, CHECK clause, and trigger. Any other structural difference is
+rejected before stamping or importing.
+
+That named variant has only the historically observed differences: an optional
+`song.lyrics` field and the six reviewed media/personal-log default/nullability
+differences. The tool never alters or drops anything on the supplied source or
+its immutable copied snapshot. Instead it creates a fresh exact revision-01
+SQLite work database through the checked-in migration, copies only revision-01
+columns in a foreign-key checked transaction, verifies source-to-work row
+counts, primary-key hashes, full mapped-column typed digests, integrity, and
+the exact normalized schema, then follows the normal stamp/upgrade/backfill
+path.
+
+`song.lyrics` is intentionally not mapped: every value must be exactly `NULL`
+or the empty string. Any non-empty value, including whitespace, stops the
+rehearsal; the operator-retained immutable source snapshot remains the recovery
+source. The four
+fields that become revision-01 `NOT NULL` (`media.processing_attempts`,
+`media.transcoding_status`, `personal_log.processing_attempts`, and
+`personal_log.transcoding_status`) must already contain no NULLs. Normalization
+creates a private mode-0600, digest-only quarantine sidecar in the temporary
+operator workspace; the JSON report carries only its variant, source snapshot
+hash, counts, and typed hashes—never lyric values, primary keys, or local paths.
 
 Phase 5 is evidence gathering. It does not authorize the later `NOT NULL`,
 per-band uniqueness, Fly cutover, Supabase production, or R2 object contract.

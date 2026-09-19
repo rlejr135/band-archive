@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import shutil
 
 import pytest
 from flask_migrate import upgrade
@@ -13,7 +14,9 @@ from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
 from click.testing import CliRunner
 
 from tools.legacy_rehearsal.rehearsal import (
-    RehearsalError, _validate_target_url, cli, reconcile, run_rehearsal,
+    RehearsalError, _baseline_sqlite_contract, _file_fingerprint,
+    _mapped_sqlite_digests, _normalize_production_legacy_copy,
+    _sqlite_schema_contract, _validate_target_url, cli, reconcile, run_rehearsal,
     safe_target_identity,
 )
 
@@ -57,6 +60,109 @@ def _legacy_fixture(path):
             conn.execute(text("INSERT INTO personal_log_multipart_upload_part (id,session_id,part_number,uploaded_bytes,created_at) VALUES (18,'s2',1,44,'2026-01-01')"))
     finally:
         engine.dispose()
+
+
+def _exact_fly_legacy_fixture(path):
+    """Construct only the reviewed production-layout difference from rev01."""
+    _legacy_fixture(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("ALTER TABLE song ADD COLUMN lyrics TEXT")
+        for table, replacements in {
+            "media": {
+                "transcoding_status VARCHAR(20) NOT NULL": "transcoding_status VARCHAR(20) DEFAULT 'pending'",
+                "processing_attempts INTEGER NOT NULL": "processing_attempts INTEGER DEFAULT 0",
+                "is_featured BOOLEAN,": "is_featured BOOLEAN DEFAULT 0,",
+            },
+            "personal_log": {
+                "transcoding_status VARCHAR(20) NOT NULL": "transcoding_status VARCHAR(20) DEFAULT 'not_required'",
+                "processing_attempts INTEGER NOT NULL": "processing_attempts INTEGER DEFAULT 0",
+            },
+        }.items():
+            ddl = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()[0]
+            for old, new in replacements.items():
+                assert old in ddl
+                ddl = ddl.replace(old, new)
+            legacy_table = table + "_legacy_shape"
+            connection.execute(ddl.replace(f"CREATE TABLE {table}", f"CREATE TABLE {legacy_table}", 1))
+            columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')]
+            quoted = ", ".join(f'"{column}"' for column in columns)
+            connection.execute(f'INSERT INTO "{legacy_table}" ({quoted}) SELECT {quoted} FROM "{table}"')
+            connection.execute(f'DROP TABLE "{table}"')
+            connection.execute(f'ALTER TABLE "{legacy_table}" RENAME TO "{table}"')
+        connection.execute("DROP TABLE alembic_version")
+        connection.execute("PRAGMA foreign_keys = ON")
+
+
+def test_exact_fly_legacy_variant_normalizes_only_a_work_copy(tmp_path):
+    source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
+    _exact_fly_legacy_fixture(source)
+    _upgrade(target)
+    before = source.read_bytes()
+    report = run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                           sqlite_test_target_path=str(target))
+    assert source.read_bytes() == before
+    normalization = report["source_files"]["normalization"]
+    assert normalization["variant"] == "fly_production_legacy_20260919"
+    assert normalization["excluded_columns"]["song.lyrics"]["count"] == 1
+    assert normalization["sidecar_mode"] == "0600"
+    assert "lyrics" not in report["before"]["content_digests"]["song"]["column_sha256"]
+
+
+def test_exact_fly_legacy_normalizer_builds_exact_rev01_and_writes_digest_only_evidence(tmp_path):
+    source, snapshot, normalized = tmp_path / "fly.sqlite", tmp_path / "snapshot.sqlite", tmp_path / "work.sqlite"
+    _exact_fly_legacy_fixture(source)
+    source_bytes = source.read_bytes()
+    shutil.copy2(source, snapshot)
+    evidence = _normalize_production_legacy_copy(snapshot, normalized, _file_fingerprint(snapshot), tmp_path)
+    assert source.read_bytes() == source_bytes
+    assert _sqlite_schema_contract(normalized) == _baseline_sqlite_contract()
+    assert evidence["mapped_content_digests"] == _mapped_sqlite_digests(snapshot, _baseline_sqlite_contract())
+    sidecar = tmp_path / "normalization-quarantine-evidence.json"
+    assert sidecar.is_file()
+    assert "typed_sha256" in sidecar.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("lyrics", ["not empty", "   "])
+def test_exact_fly_legacy_variant_rejects_unmapped_lyrics_without_touching_target(tmp_path, lyrics):
+    source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
+    _exact_fly_legacy_fixture(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("UPDATE song SET lyrics = ?", (lyrics,))
+    _upgrade(target)
+    with pytest.raises(RehearsalError, match="category=unmapped_content table=song column=lyrics count=1"):
+        run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT count(*) FROM song").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("table,column", [
+    ("media", "processing_attempts"), ("media", "transcoding_status"),
+    ("personal_log", "processing_attempts"), ("personal_log", "transcoding_status"),
+])
+def test_exact_fly_legacy_variant_rejects_null_required_mapped_fields(tmp_path, table, column):
+    source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
+    _exact_fly_legacy_fixture(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute(f'UPDATE "{table}" SET "{column}" = NULL')
+    _upgrade(target)
+    with pytest.raises(RehearsalError, match=rf"category=required_nonnull table={table} column={column} count=1"):
+        run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
+
+
+def test_exact_fly_legacy_variant_refuses_any_additional_schema_drift(tmp_path):
+    source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
+    _exact_fly_legacy_fixture(source)
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE INDEX unexpected_legacy_song_title ON song(title)")
+    _upgrade(target)
+    with pytest.raises(RehearsalError, match="category=schema_contract_drift"):
+        run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
 
 
 def test_rehearsal_preserves_fixture_relationships_and_refuses_repeat(tmp_path):
