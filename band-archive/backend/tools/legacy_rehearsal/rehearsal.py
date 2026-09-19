@@ -229,11 +229,16 @@ def _sqlite_schema_contract(path: Path) -> dict[str, Any]:
         for table in tables:
             quoted = _quote_sqlite_identifier(table)
             columns = []
-            for cid, name, declared_type, notnull, default, pk in conn.execute(f"PRAGMA table_info({quoted})"):
+            # table_info omits hidden/generated columns.  Those must be part
+            # of the contract so an unexpected generated field cannot hide in
+            # an otherwise matching legacy table.
+            for cid, name, declared_type, notnull, default, pk, hidden in conn.execute(
+                    f"PRAGMA table_xinfo({quoted})"):
                 columns.append({
                     "cid": cid, "name": name,
                     "type": re.sub(r"\s+", " ", (declared_type or "").strip()).upper(),
                     "notnull": bool(notnull), "default": _canonical_sqlite_sql(default), "pk": pk,
+                    "hidden": hidden,
                 })
             indexes = []
             for _, name, unique, origin, partial in conn.execute(f"PRAGMA index_list({quoted})"):
@@ -245,7 +250,11 @@ def _sqlite_schema_contract(path: Path) -> dict[str, Any]:
                 index_sql = next((row[3] for row in records if row[0] == 'index' and row[1] == name), None)
                 indexes.append({"name": name, "unique": bool(unique), "origin": origin,
                                 "partial": bool(partial), "columns": index_columns,
-                                "sql": _canonical_sqlite_sql(index_sql)})
+                                "sql": _canonical_sqlite_sql(index_sql),
+                                # Preserve every token in the authoritative
+                                # sqlite_master DDL.  The structured fields
+                                # above are diagnostics, not a lossy parser.
+                                "ddl_sha256": _ddl_digest(index_sql)})
             foreign_keys = [
                 {"id": item[0], "seq": item[1], "table": item[2], "from": item[3], "to": item[4],
                  "on_update": item[5], "on_delete": item[6], "match": item[7]}
@@ -255,17 +264,20 @@ def _sqlite_schema_contract(path: Path) -> dict[str, Any]:
                 "columns": columns, "indexes": sorted(indexes, key=lambda value: value["name"]),
                 "foreign_keys": sorted(foreign_keys, key=lambda value: (value["id"], value["seq"])),
                 "checks": _sqlite_check_contract(table_sql[table]),
+                "ddl_sha256": _ddl_digest(table_sql[table]),
             }
-        triggers = {name: _canonical_sqlite_trigger_sql(sql)
+        triggers = {name: {"canonical": _canonical_sqlite_trigger_sql(sql), "ddl_sha256": _ddl_digest(sql)}
                     for kind, name, _, sql in records if kind == 'trigger'}
     finally:
         conn.close()
     return {"tables": table_contracts, "triggers": dict(sorted(triggers.items()))}
 
 
-def _contract_checksum(contract: dict[str, Any]) -> str:
-    encoded = json.dumps(contract, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode()).hexdigest()
+def _ddl_digest(value: str | None) -> str | None:
+    """Digest parser-verified canonical SQLite DDL without losing semantics."""
+    if value is None:
+        return None
+    return hashlib.sha256(_canonical_sqlite_ddl_tokens(value).encode("utf-8")).hexdigest()
 
 
 def _source_schema_fingerprint(path: Path) -> dict[str, Any]:
@@ -274,8 +286,7 @@ def _source_schema_fingerprint(path: Path) -> dict[str, Any]:
     tables = sorted(contract["tables"])
     return {"tables": tables,
             "columns": {name: [column["name"] for column in contract["tables"][name]["columns"]]
-                        for name in tables},
-            "checksum": _contract_checksum(contract)}
+                        for name in tables}}
 
 
 def _create_baseline_sqlite(path: Path) -> None:
@@ -307,13 +318,103 @@ def _baseline_sqlite_contract() -> dict[str, Any]:
 
 _PRODUCTION_LEGACY_VARIANT = "fly_production_legacy_20260919"
 
+# Schema-only signature captured through a read-only Fly connection.  These
+# values are deliberately internal: reports/errors never reveal this digest or
+# source DDL.  A match is stronger than a hand-maintained list of the six
+# reviewed deltas and fails closed for every other SQLite DDL token.
+_APPROVED_FLY_SCHEMA_AGGREGATE = "de1d95e36d9e0738fc145054e6dc7825a13b9839d2aaac42d3ac445b427744b1"
+_APPROVED_FLY_SCHEMA_OBJECTS = (
+    ("index", "ix_media_vote_media_id", "media_vote", "e46035768cdd53d406dbeb306c2ee36b1592c1c6f9dc286d44697c7b59910c47"),
+    ("index", "ix_song_vote_song_id", "song_vote", "85414418d8807f87bc33929b8d79ef824aed54fa29434a837cfe14b46c7456c3"),
+    ("table", "announcement", "announcement", "8448ba5f368a9cba4967744a4b266682c52764e9bc67cc13d961bc940e70dd01"),
+    ("table", "comment", "comment", "dcf94650c6c7d7e33486782fc85007a3327ba981e847bae0a8f60c5ec9542002"),
+    ("table", "gallery_image", "gallery_image", "7b29a527158fca58fee425aa6e35a80361b605a00ce9bcdd2c5516e49bab51ac"),
+    ("table", "media", "media", "59798d77dd8066ed55ed4cb9472fb101c8c6c61f13b5d8783d6e452f3e0c6d0b"),
+    ("table", "media_vote", "media_vote", "c318b0e107f1d0b3a4d7d094e82e2ed1cd5f81cf1e21d146c10699ef502919a3"),
+    ("table", "member", "member", "619b36f6eba39d4d170a157252d1ce7ecf0d6e3f510db1388c9cd9d5e9da9820"),
+    ("table", "multipart_upload_part", "multipart_upload_part", "d12f5746468e7c0319689d6d5d55d30763bff613aa9167ebe14c45511897a2e7"),
+    ("table", "multipart_upload_session", "multipart_upload_session", "f97aebba3303e79d0992a902d3a4cd37e9146c25315652c8555935c37b15f223"),
+    ("table", "personal_log", "personal_log", "ea7b97bcb0cf0f176db40328466b469bd12bd5cfe632a0529260db94c367afbd"),
+    ("table", "personal_log_multipart_upload_part", "personal_log_multipart_upload_part", "dfe98cb7c0eef16087c5d380a8e72f728eef84463eb64c665b36ac1556e4ba5f"),
+    ("table", "personal_log_multipart_upload_session", "personal_log_multipart_upload_session", "5f4c51b9bd69e876dac6a6cbc70519a230a95f19b7327045ede336964e145a07"),
+    ("table", "rehearsal", "rehearsal", "a1773973938ed83dfc1d067df93c9fc5074c3ae21c35b9640cd54e0282f5826e"),
+    ("table", "rehearsal_songs", "rehearsal_songs", "9d8d8bf3be06fed04f80cba3326f48f1edcc2972da3ddc9edeba805458f2d31c"),
+    ("table", "song", "song", "634704a2f90645a258d83d263916239b43ab68cc83004918cbee2c4ca057bc65"),
+    ("table", "song_suggestion", "song_suggestion", "e0535c288ac72ab8bd08b8fbc9ef0e5caf3775de3ef6b658d442a0ef787da534"),
+    ("table", "song_vote", "song_vote", "0a81457fdfbcecdbc7e38cf9ff84fd4de1522697188787aa6ba1a0c492cc5d7c"),
+)
+_SQLITE_DDL_TOKEN = re.compile(
+    r"(?xs)(?P<comment>--[^\r\n]*|/\*.*?\*/)|"
+    r"(?P<quoted>\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`|\[(?:\]\]|[^\]])*\]|'(?:''|[^'])*')|"
+    r"(?P<number>(?:\d+(?:\.\d*)?|\.\d+))|"
+    r"(?P<word>[A-Za-z_][A-Za-z_0-9$]*)|"
+    r"(?P<op><>|!=|==|<=|>=|<<|>>|\|\||[-+*/%<>=(),.;])"
+)
+
+
+def _canonical_sqlite_ddl_tokens(ddl: str) -> str:
+    """Canonicalize only lexical presentation; reject unscanned DDL bytes."""
+    tokens, position = [], 0
+    for match in _SQLITE_DDL_TOKEN.finditer(ddl):
+        if ddl[position:match.start()].strip():
+            raise RehearsalError("legacy normalizer failed category=unreadable_schema_ddl")
+        position = match.end()
+        kind = match.lastgroup
+        if kind == "comment":
+            continue
+        token = match.group(kind)
+        tokens.append(token.lower() if kind == "word" else token)
+    if ddl[position:].strip():
+        raise RehearsalError("legacy normalizer failed category=unreadable_schema_ddl")
+    return " ".join(tokens)
+
+
+def _sqlite_schema_signature(path: Path) -> tuple[tuple[tuple[str, str, str, str], ...], str]:
+    """Compute the audited v1 SQLite schema-only signature, read-only."""
+    uri = f"file:{path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema "
+            "WHERE type IN ('table', 'index', 'trigger') AND name NOT LIKE 'sqlite_%' "
+            "AND sql IS NOT NULL ORDER BY type, name"
+        ).fetchall()
+        objects = []
+        for kind, name, table, ddl in rows:
+            facts: dict[str, Any] = {"type": kind, "name": name, "table": table,
+                                     "ddl_tokens": _canonical_sqlite_ddl_tokens(ddl)}
+            quoted = _quote_sqlite_identifier(name)
+            if kind == "table":
+                facts["table_xinfo"] = [list(item) for item in conn.execute(f"PRAGMA table_xinfo({quoted})")]
+                facts["foreign_key_list"] = [list(item) for item in conn.execute(f"PRAGMA foreign_key_list({quoted})")]
+            elif kind == "index":
+                facts["index_xinfo"] = [list(item) for item in conn.execute(f"PRAGMA index_xinfo({quoted})")]
+            digest = hashlib.sha256(json.dumps(
+                facts, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")).hexdigest()
+            objects.append((kind, name, table, digest))
+        aggregate_objects = [{"type": kind, "name": name, "table": table, "sha256": digest}
+                             for kind, name, table, digest in objects]
+        aggregate = hashlib.sha256(json.dumps(
+            aggregate_objects, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")).hexdigest()
+        return tuple(objects), aggregate
+    finally:
+        conn.close()
+
+
+def _is_approved_fly_production_schema(path: Path) -> bool:
+    """Match the reviewed Fly signature without reporting its raw/hash form."""
+    objects, aggregate = _sqlite_schema_signature(path)
+    return objects == _APPROVED_FLY_SCHEMA_OBJECTS and aggregate == _APPROVED_FLY_SCHEMA_AGGREGATE
+
 
 def _production_legacy_contract() -> dict[str, Any]:
     """The only historical Fly layout this normalizer is authorized to map."""
     contract = deepcopy(_baseline_sqlite_contract())
     song_columns = contract["tables"]["song"]["columns"]
     song_columns.append({"cid": len(song_columns), "name": "lyrics", "type": "TEXT",
-                         "notnull": False, "default": None, "pk": 0})
+                         "notnull": False, "default": None, "pk": 0, "hidden": 0})
     changes = {
         ("media", "is_featured"): {"default": "0"},
         ("media", "processing_attempts"): {"notnull": False, "default": "0"},
@@ -325,6 +426,19 @@ def _production_legacy_contract() -> dict[str, Any]:
         item = next(value for value in contract["tables"][table]["columns"] if value["name"] == column)
         item.update(values)
     return contract
+
+
+def _contract_without_full_ddl_digests(contract: dict[str, Any]) -> dict[str, Any]:
+    """Keep structured deltas readable while full signatures remain exact."""
+    value = deepcopy(contract)
+    for definition in value["tables"].values():
+        definition.pop("ddl_sha256", None)
+        for index in definition["indexes"]:
+            index.pop("ddl_sha256", None)
+    for trigger in value["triggers"].values():
+        if isinstance(trigger, dict):
+            trigger.pop("ddl_sha256", None)
+    return value
 
 
 def _canonical_sqlite_trigger_sql(value: str | None) -> str:
@@ -356,20 +470,24 @@ def _assert_supported_source_schema(path: Path) -> tuple[str | None, str | None]
             versions = sorted(row[0] for row in conn.execute("SELECT version_num FROM alembic_version"))
         if len(versions) != 1 or versions[0] not in _known_revisions():
             raise RehearsalError(
-                "unsupported Alembic source revision; schema fingerprint " + fingerprint["checksum"][:16]
-                + ". Do not stamp or import it; restore a known snapshot or review an explicit normalizer."
+                "unsupported Alembic source revision; category=unknown_recorded_revision. "
+                "Do not stamp or import it; restore a known snapshot or review an explicit normalizer."
             )
         return versions[0], None
     actual = _sqlite_schema_contract(path)
     if actual == _baseline_sqlite_contract():
         return None, None
-    if actual == _production_legacy_contract():
+    # The approved schema-only Fly signature includes the six reviewed legacy
+    # field differences and every remaining DDL/PRAGMA fact.  Do not accept a
+    # merely similar local reconstruction here.
+    if (_contract_without_full_ddl_digests(actual)
+            == _contract_without_full_ddl_digests(_production_legacy_contract())
+            and _is_approved_fly_production_schema(path)):
         return None, _PRODUCTION_LEGACY_VARIANT
     # Keep the fingerprint actionable but do not expose table names or rows
     # from an unsupported operator snapshot.
     raise RehearsalError(
-        "unsupported pre-Alembic SQLite schema fingerprint " + fingerprint["checksum"][:16]
-        + "; category=schema_contract_drift. Do not stamp or import it. "
+        "unsupported pre-Alembic SQLite schema fingerprint; category=schema_contract_drift. Do not stamp or import it. "
         "Build and review an explicit variant normalizer first."
     )
 

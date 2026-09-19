@@ -96,9 +96,60 @@ def _exact_fly_legacy_fixture(path):
         connection.execute("PRAGMA foreign_keys = ON")
 
 
-def test_exact_fly_legacy_variant_normalizes_only_a_work_copy(tmp_path):
+def _approve_test_fly_signature(monkeypatch, path):
+    """Test only: make this locally built structural fixture the reviewed one."""
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    objects, aggregate = rehearsal._sqlite_schema_signature(path)
+    monkeypatch.setattr(rehearsal, "_APPROVED_FLY_SCHEMA_OBJECTS", objects)
+    monkeypatch.setattr(rehearsal, "_APPROVED_FLY_SCHEMA_AGGREGATE", aggregate)
+
+
+def _replace_master_ddl(path, table, old, new):
+    """Use valid replacement tokens only; reopen verifies SQLite can parse it."""
+    with sqlite3.connect(path) as connection:
+        ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()[0]
+        assert old in ddl
+        connection.execute("PRAGMA writable_schema = ON")
+        connection.execute("UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = ?",
+                           (ddl.replace(old, new, 1), table))
+        connection.execute("PRAGMA writable_schema = OFF")
+
+
+def _append_master_ddl(path, table, suffix):
+    with sqlite3.connect(path) as connection:
+        ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()[0]
+        connection.execute("PRAGMA writable_schema = ON")
+        connection.execute("UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = ?",
+                           (ddl + suffix, table))
+        connection.execute("PRAGMA writable_schema = OFF")
+
+
+def _replace_song_with_autoincrement_pk(path):
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        ddl = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'song'"
+        ).fetchone()[0]
+        ddl = ddl.replace("id INTEGER NOT NULL,", "id INTEGER PRIMARY KEY AUTOINCREMENT,", 1)
+        ddl = ddl.replace(", \n\tPRIMARY KEY (id)\n)", "\n)", 1)
+        assert "AUTOINCREMENT" in ddl and "PRIMARY KEY (id)" not in ddl
+        connection.execute(ddl.replace("CREATE TABLE song", "CREATE TABLE song_autoincrement", 1))
+        columns = [row[1] for row in connection.execute('PRAGMA table_info("song")')]
+        quoted = ", ".join(f'"{column}"' for column in columns)
+        connection.execute(f'INSERT INTO "song_autoincrement" ({quoted}) SELECT {quoted} FROM "song"')
+        connection.execute('DROP TABLE "song"')
+        connection.execute('ALTER TABLE "song_autoincrement" RENAME TO "song"')
+        connection.execute("PRAGMA foreign_keys = ON")
+
+
+def test_exact_fly_legacy_variant_normalizes_only_a_work_copy(tmp_path, monkeypatch):
     source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
     _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
     _upgrade(target)
     before = source.read_bytes()
     report = run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
@@ -126,9 +177,10 @@ def test_exact_fly_legacy_normalizer_builds_exact_rev01_and_writes_digest_only_e
 
 
 @pytest.mark.parametrize("lyrics", ["not empty", "   "])
-def test_exact_fly_legacy_variant_rejects_unmapped_lyrics_without_touching_target(tmp_path, lyrics):
+def test_exact_fly_legacy_variant_rejects_unmapped_lyrics_without_touching_target(tmp_path, lyrics, monkeypatch):
     source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
     _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
     with sqlite3.connect(source) as connection:
         connection.execute("UPDATE song SET lyrics = ?", (lyrics,))
     _upgrade(target)
@@ -143,9 +195,10 @@ def test_exact_fly_legacy_variant_rejects_unmapped_lyrics_without_touching_targe
     ("media", "processing_attempts"), ("media", "transcoding_status"),
     ("personal_log", "processing_attempts"), ("personal_log", "transcoding_status"),
 ])
-def test_exact_fly_legacy_variant_rejects_null_required_mapped_fields(tmp_path, table, column):
+def test_exact_fly_legacy_variant_rejects_null_required_mapped_fields(tmp_path, table, column, monkeypatch):
     source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
     _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
     with sqlite3.connect(source) as connection:
         connection.execute(f'UPDATE "{table}" SET "{column}" = NULL')
     _upgrade(target)
@@ -154,15 +207,53 @@ def test_exact_fly_legacy_variant_rejects_null_required_mapped_fields(tmp_path, 
                       sqlite_test_target_path=str(target))
 
 
-def test_exact_fly_legacy_variant_refuses_any_additional_schema_drift(tmp_path):
+def test_exact_fly_legacy_variant_refuses_any_additional_schema_drift(tmp_path, monkeypatch):
     source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
     _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
     with sqlite3.connect(source) as connection:
         connection.execute("CREATE INDEX unexpected_legacy_song_title ON song(title)")
     _upgrade(target)
     with pytest.raises(RehearsalError, match="category=schema_contract_drift"):
         run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
                       sqlite_test_target_path=str(target))
+
+
+@pytest.mark.parametrize("mutation", [
+    "generated", "autoincrement", "collation", "deferrable", "check", "strict",
+    "expression_index", "trigger",
+])
+def test_approved_fly_signature_rejects_semantic_ddl_drift_before_normalization(tmp_path, monkeypatch, mutation):
+    source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
+    _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
+    if mutation == "generated":
+        with sqlite3.connect(source) as connection:
+            connection.execute('ALTER TABLE song ADD COLUMN rogue TEXT GENERATED ALWAYS AS (title) VIRTUAL')
+    elif mutation == "autoincrement":
+        _replace_song_with_autoincrement_pk(source)
+    elif mutation == "collation":
+        _replace_master_ddl(source, "song", "title VARCHAR(100) NOT NULL", "title VARCHAR(100) COLLATE NOCASE NOT NULL")
+    elif mutation == "deferrable":
+        _replace_master_ddl(source, "media", "FOREIGN KEY(song_id) REFERENCES song (id)",
+                            "FOREIGN KEY(song_id) REFERENCES song (id) DEFERRABLE INITIALLY DEFERRED")
+    elif mutation == "check":
+        _replace_master_ddl(source, "song_vote", "CHECK (value IN (-1, 1))",
+                            "CHECK (value IN (-1, 2))")
+    elif mutation == "strict":
+        _append_master_ddl(source, "rehearsal_songs", " STRICT")
+    elif mutation == "expression_index":
+        with sqlite3.connect(source) as connection:
+            connection.execute("CREATE INDEX unexpected_expression_song_title ON song(lower(title))")
+    else:
+        with sqlite3.connect(source) as connection:
+            connection.execute("CREATE TRIGGER unexpected_legacy_trigger AFTER UPDATE ON song BEGIN SELECT 1; END")
+    _upgrade(target)
+    with pytest.raises(RehearsalError, match="category=schema_contract_drift"):
+        run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT count(*) FROM song").fetchone()[0] == 0
 
 
 def test_rehearsal_preserves_fixture_relationships_and_refuses_repeat(tmp_path):

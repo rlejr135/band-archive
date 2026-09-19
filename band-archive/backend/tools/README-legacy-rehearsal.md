@@ -75,6 +75,16 @@ every table/column position, declared type, nullability, default, index,
 foreign key, CHECK clause, and trigger. Any other structural difference is
 rejected before stamping or importing.
 
+For this Fly variant, the tool additionally requires the audited, schema-only
+SQLite signature captured from the approved read-only snapshot procedure. It
+uses a fail-closed token scanner over every `sqlite_schema` CREATE TABLE,
+CREATE INDEX, and CREATE TRIGGER statement, then incorporates `table_xinfo`,
+foreign-key facts, and `index_xinfo`. This catches generated/hidden columns,
+AUTOINCREMENT, collations, deferrability, conflict behavior, STRICT/WITHOUT
+ROWID table options, expression/partial indexes, and trigger changes that a
+small set of PRAGMAs can miss. The signature and DDL are internal verification
+material and are never emitted in reports or operator errors.
+
 That named variant has only the historically observed differences: an optional
 `song.lyrics` field and the six reviewed media/personal-log default/nullability
 differences. The tool never alters or drops anything on the supplied source or
