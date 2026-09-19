@@ -1,6 +1,7 @@
 """Offline-only coverage for the Phase 5 legacy rehearsal boundary."""
 
 import json
+import re
 import sqlite3
 import shutil
 
@@ -14,9 +15,11 @@ from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
 from click.testing import CliRunner
 
 from tools.legacy_rehearsal.rehearsal import (
-    RehearsalError, _baseline_sqlite_contract, _file_fingerprint,
+    RehearsalError, _assert_supported_source_schema, _baseline_sqlite_contract,
+    _contract_without_full_ddl_digests, _file_fingerprint,
     _mapped_sqlite_digests, _normalize_production_legacy_copy,
-    _sqlite_schema_contract, _validate_target_url, cli, reconcile, run_rehearsal,
+    _production_legacy_contract, _sqlite_schema_contract, _validate_target_url,
+    cli, reconcile, run_rehearsal,
     safe_target_identity,
 )
 
@@ -63,28 +66,177 @@ def _legacy_fixture(path):
 
 
 def _exact_fly_legacy_fixture(path):
-    """Construct only the reviewed production-layout difference from rev01."""
+    """Construct the reviewed production layout, including historical order."""
     _legacy_fixture(path)
+    production_tables = {
+        "comment": """CREATE TABLE comment (
+            id INTEGER NOT NULL,
+            media_id INTEGER,
+            personal_log_id INTEGER,
+            parent_id INTEGER,
+            author VARCHAR(50) NOT NULL,
+            password_hash VARCHAR(200) NOT NULL,
+            content TEXT NOT NULL,
+            created_at DATETIME,
+            timestamp_seconds FLOAT,
+            PRIMARY KEY (id),
+            FOREIGN KEY(media_id) REFERENCES media (id),
+            FOREIGN KEY(personal_log_id) REFERENCES personal_log (id),
+            FOREIGN KEY(parent_id) REFERENCES comment (id)
+        )""",
+        "media": """CREATE TABLE media (
+            id INTEGER NOT NULL,
+            song_id INTEGER NOT NULL,
+            filename VARCHAR(200) NOT NULL,
+            file_type VARCHAR(20),
+            file_size INTEGER,
+            created_at DATETIME,
+            original_filename VARCHAR(200),
+            rehearsal_id INTEGER REFERENCES rehearsal(id),
+            is_featured BOOLEAN DEFAULT 0,
+            transcoding_status VARCHAR(20) DEFAULT 'pending',
+            audio_filename VARCHAR(200),
+            processing_error VARCHAR(500),
+            processing_started_at DATETIME,
+            processing_completed_at DATETIME,
+            processing_attempts INTEGER DEFAULT 0,
+            processing_heartbeat_at DATETIME,
+            video_720_filename VARCHAR(300),
+            video_720_source_etag VARCHAR(200),
+            video_720_profile VARCHAR(100),
+            video_720_completed_at DATETIME,
+            upvote_count INTEGER NOT NULL DEFAULT 0,
+            downvote_count INTEGER NOT NULL DEFAULT 0,
+            vote_score INTEGER NOT NULL DEFAULT 0,
+            original_pruned_at DATETIME,
+            PRIMARY KEY (id),
+            FOREIGN KEY(song_id) REFERENCES song (id)
+        )""",
+        "multipart_upload_part": """CREATE TABLE multipart_upload_part (
+            id INTEGER NOT NULL,
+            session_id VARCHAR(36) NOT NULL,
+            part_number INTEGER NOT NULL,
+            created_at DATETIME NOT NULL,
+            etag VARCHAR(500),
+            uploaded_bytes BIGINT,
+            checksum VARCHAR(200),
+            acknowledged_at DATETIME,
+            PRIMARY KEY (id),
+            CONSTRAINT uq_multipart_session_part UNIQUE (session_id, part_number),
+            FOREIGN KEY(session_id) REFERENCES multipart_upload_session (id)
+        )""",
+        "multipart_upload_session": """CREATE TABLE multipart_upload_session (
+            id VARCHAR(36) NOT NULL,
+            r2_upload_id VARCHAR(200) NOT NULL,
+            object_key VARCHAR(300) NOT NULL,
+            original_filename VARCHAR(200) NOT NULL,
+            content_type VARCHAR(100) NOT NULL,
+            declared_bytes BIGINT NOT NULL,
+            song_id INTEGER NOT NULL,
+            rehearsal_id INTEGER,
+            status VARCHAR(20) NOT NULL,
+            media_id INTEGER,
+            created_at DATETIME NOT NULL,
+            expires_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            capability_token_hash VARCHAR(255),
+            completion_started_at DATETIME,
+            PRIMARY KEY (id),
+            FOREIGN KEY(song_id) REFERENCES song (id),
+            FOREIGN KEY(rehearsal_id) REFERENCES rehearsal (id),
+            FOREIGN KEY(media_id) REFERENCES media (id)
+        )""",
+        "personal_log": """CREATE TABLE personal_log (
+            id INTEGER NOT NULL,
+            member_id INTEGER NOT NULL,
+            title VARCHAR(200) NOT NULL,
+            filename VARCHAR(200) NOT NULL,
+            original_filename VARCHAR(200),
+            file_type VARCHAR(20) NOT NULL,
+            created_at DATETIME,
+            file_size INTEGER,
+            transcoding_status VARCHAR(20) DEFAULT 'not_required',
+            audio_filename VARCHAR(200),
+            processing_error VARCHAR(500),
+            processing_started_at DATETIME,
+            processing_completed_at DATETIME,
+            processing_attempts INTEGER DEFAULT 0,
+            processing_heartbeat_at DATETIME,
+            PRIMARY KEY (id),
+            FOREIGN KEY(member_id) REFERENCES member (id)
+        )""",
+        "personal_log_multipart_upload_part": """CREATE TABLE personal_log_multipart_upload_part (
+            id INTEGER NOT NULL,
+            session_id VARCHAR(36) NOT NULL,
+            part_number INTEGER NOT NULL,
+            created_at DATETIME NOT NULL,
+            etag VARCHAR(500),
+            uploaded_bytes BIGINT,
+            checksum VARCHAR(200),
+            acknowledged_at DATETIME,
+            PRIMARY KEY (id),
+            CONSTRAINT uq_personal_log_multipart_session_part UNIQUE (session_id, part_number),
+            FOREIGN KEY(session_id) REFERENCES personal_log_multipart_upload_session (id)
+        )""",
+        "personal_log_multipart_upload_session": """CREATE TABLE personal_log_multipart_upload_session (
+            id VARCHAR(36) NOT NULL,
+            r2_upload_id VARCHAR(200) NOT NULL,
+            object_key VARCHAR(300) NOT NULL,
+            original_filename VARCHAR(200) NOT NULL,
+            title VARCHAR(200) NOT NULL,
+            content_type VARCHAR(100) NOT NULL,
+            declared_bytes BIGINT NOT NULL,
+            member_id INTEGER NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            personal_log_id INTEGER,
+            created_at DATETIME NOT NULL,
+            expires_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            capability_token_hash VARCHAR(255),
+            completion_started_at DATETIME,
+            PRIMARY KEY (id),
+            FOREIGN KEY(member_id) REFERENCES member (id),
+            FOREIGN KEY(personal_log_id) REFERENCES personal_log (id)
+        )""",
+        "rehearsal": """CREATE TABLE rehearsal (
+            id INTEGER NOT NULL,
+            title VARCHAR(200) NOT NULL,
+            date DATE NOT NULL,
+            start_date DATE,
+            end_date DATE,
+            time VARCHAR(20),
+            memo TEXT,
+            color VARCHAR(7),
+            created_at DATETIME,
+            updated_at DATETIME,
+            location VARCHAR(200),
+            latitude FLOAT,
+            longitude FLOAT,
+            PRIMARY KEY (id)
+        )""",
+        "song": """CREATE TABLE song (
+            id INTEGER NOT NULL,
+            title VARCHAR(100) NOT NULL,
+            artist VARCHAR(100) NOT NULL,
+            status VARCHAR(20),
+            lyrics TEXT,
+            chords TEXT,
+            link VARCHAR(200),
+            memo TEXT,
+            genre VARCHAR(50),
+            difficulty INTEGER,
+            sheet_music VARCHAR(200),
+            created_at DATETIME,
+            updated_at DATETIME,
+            upvote_count INTEGER NOT NULL DEFAULT 0,
+            downvote_count INTEGER NOT NULL DEFAULT 0,
+            vote_score INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (id)
+        )""",
+    }
     with sqlite3.connect(path) as connection:
         connection.execute("PRAGMA foreign_keys = OFF")
-        connection.execute("ALTER TABLE song ADD COLUMN lyrics TEXT")
-        for table, replacements in {
-            "media": {
-                "transcoding_status VARCHAR(20) NOT NULL": "transcoding_status VARCHAR(20) DEFAULT 'pending'",
-                "processing_attempts INTEGER NOT NULL": "processing_attempts INTEGER DEFAULT 0",
-                "is_featured BOOLEAN,": "is_featured BOOLEAN DEFAULT 0,",
-            },
-            "personal_log": {
-                "transcoding_status VARCHAR(20) NOT NULL": "transcoding_status VARCHAR(20) DEFAULT 'not_required'",
-                "processing_attempts INTEGER NOT NULL": "processing_attempts INTEGER DEFAULT 0",
-            },
-        }.items():
-            ddl = connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-            ).fetchone()[0]
-            for old, new in replacements.items():
-                assert old in ddl
-                ddl = ddl.replace(old, new)
+        for table, ddl in production_tables.items():
             legacy_table = table + "_legacy_shape"
             connection.execute(ddl.replace(f"CREATE TABLE {table}", f"CREATE TABLE {legacy_table}", 1))
             columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')]
@@ -135,9 +287,13 @@ def _replace_song_with_autoincrement_pk(path):
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'song'"
         ).fetchone()[0]
         ddl = ddl.replace("id INTEGER NOT NULL,", "id INTEGER PRIMARY KEY AUTOINCREMENT,", 1)
-        ddl = ddl.replace(", \n\tPRIMARY KEY (id)\n)", "\n)", 1)
+        ddl = re.sub(r",\s*PRIMARY KEY \(id\)\s*\)$", "\n)", ddl, count=1)
         assert "AUTOINCREMENT" in ddl and "PRIMARY KEY (id)" not in ddl
-        connection.execute(ddl.replace("CREATE TABLE song", "CREATE TABLE song_autoincrement", 1))
+        ddl = re.sub(
+            r'^CREATE TABLE (?:"song"|song)', "CREATE TABLE song_autoincrement",
+            ddl, count=1,
+        )
+        connection.execute(ddl)
         columns = [row[1] for row in connection.execute('PRAGMA table_info("song")')]
         quoted = ", ".join(f'"{column}"' for column in columns)
         connection.execute(f'INSERT INTO "song_autoincrement" ({quoted}) SELECT {quoted} FROM "song"')
@@ -160,6 +316,16 @@ def test_exact_fly_legacy_variant_normalizes_only_a_work_copy(tmp_path, monkeypa
     assert normalization["excluded_columns"]["song.lyrics"]["count"] == 1
     assert normalization["sidecar_mode"] == "0600"
     assert "lyrics" not in report["before"]["content_digests"]["song"]["column_sha256"]
+
+
+def test_exact_fly_legacy_fixture_matches_reviewed_structured_contract(tmp_path, monkeypatch):
+    source = tmp_path / "fly.sqlite"
+    _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
+    actual = _contract_without_full_ddl_digests(_sqlite_schema_contract(source))
+    expected = _contract_without_full_ddl_digests(_production_legacy_contract())
+    assert actual == expected
+    assert _assert_supported_source_schema(source) == (None, "fly_production_legacy_20260919")
 
 
 def test_exact_fly_legacy_normalizer_builds_exact_rev01_and_writes_digest_only_evidence(tmp_path):
@@ -252,6 +418,38 @@ def test_approved_fly_signature_rejects_semantic_ddl_drift_before_normalization(
     with pytest.raises(RehearsalError, match="category=schema_contract_drift"):
         run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
                       sqlite_test_target_path=str(target))
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("SELECT count(*) FROM song").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mutation", ["column_order", "default", "foreign_key"])
+def test_exact_fly_legacy_variant_rejects_near_miss_structural_drift(
+        tmp_path, monkeypatch, mutation):
+    source, target = tmp_path / "fly.sqlite", tmp_path / "target.sqlite"
+    _exact_fly_legacy_fixture(source)
+    _approve_test_fly_signature(monkeypatch, source)
+    if mutation == "column_order":
+        _replace_master_ddl(
+            source, "comment",
+            "created_at DATETIME,\n            timestamp_seconds FLOAT",
+            "timestamp_seconds FLOAT,\n            created_at DATETIME",
+        )
+    elif mutation == "default":
+        _replace_master_ddl(
+            source, "media", "is_featured BOOLEAN DEFAULT 0",
+            "is_featured BOOLEAN DEFAULT 1",
+        )
+    else:
+        _replace_master_ddl(
+            source, "media", "FOREIGN KEY(song_id) REFERENCES song (id)",
+            "FOREIGN KEY(song_id) REFERENCES song (id) ON DELETE CASCADE",
+        )
+    _upgrade(target)
+    with pytest.raises(RehearsalError, match="category=schema_contract_drift"):
+        run_rehearsal(
+            str(source), _url(target), dry_run=True, allow_sqlite_target=True,
+            sqlite_test_target_path=str(target),
+        )
     with sqlite3.connect(target) as connection:
         assert connection.execute("SELECT count(*) FROM song").fetchone()[0] == 0
 

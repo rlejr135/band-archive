@@ -425,6 +425,93 @@ def _production_legacy_contract() -> dict[str, Any]:
     for (table, column), values in changes.items():
         item = next(value for value in contract["tables"][table]["columns"] if value["name"] == column)
         item.update(values)
+
+    # The live database accumulated columns through historical ALTER TABLE
+    # operations.  Its physical order is therefore different from a fresh
+    # rev01 build even though the mapped fields have the same meaning.  Keep
+    # that exact reviewed order here: the full schema signature above remains
+    # the authoritative identity check, while this structured contract makes
+    # the independently reviewed deltas explicit.
+    column_order = {
+        "comment": (
+            "id", "media_id", "personal_log_id", "parent_id", "author",
+            "password_hash", "content", "created_at", "timestamp_seconds",
+        ),
+        "media": (
+            "id", "song_id", "filename", "file_type", "file_size", "created_at",
+            "original_filename", "rehearsal_id", "is_featured", "transcoding_status",
+            "audio_filename", "processing_error", "processing_started_at",
+            "processing_completed_at", "processing_attempts", "processing_heartbeat_at",
+            "video_720_filename", "video_720_source_etag", "video_720_profile",
+            "video_720_completed_at", "upvote_count", "downvote_count", "vote_score",
+            "original_pruned_at",
+        ),
+        "multipart_upload_part": (
+            "id", "session_id", "part_number", "created_at", "etag",
+            "uploaded_bytes", "checksum", "acknowledged_at",
+        ),
+        "multipart_upload_session": (
+            "id", "r2_upload_id", "object_key", "original_filename", "content_type",
+            "declared_bytes", "song_id", "rehearsal_id", "status", "media_id",
+            "created_at", "expires_at", "completed_at", "capability_token_hash",
+            "completion_started_at",
+        ),
+        "personal_log": (
+            "id", "member_id", "title", "filename", "original_filename", "file_type",
+            "created_at", "file_size", "transcoding_status", "audio_filename",
+            "processing_error", "processing_started_at", "processing_completed_at",
+            "processing_attempts", "processing_heartbeat_at",
+        ),
+        "personal_log_multipart_upload_part": (
+            "id", "session_id", "part_number", "created_at", "etag",
+            "uploaded_bytes", "checksum", "acknowledged_at",
+        ),
+        "personal_log_multipart_upload_session": (
+            "id", "r2_upload_id", "object_key", "original_filename", "title",
+            "content_type", "declared_bytes", "member_id", "status", "personal_log_id",
+            "created_at", "expires_at", "completed_at", "capability_token_hash",
+            "completion_started_at",
+        ),
+        "rehearsal": (
+            "id", "title", "date", "start_date", "end_date", "time", "memo", "color",
+            "created_at", "updated_at", "location", "latitude", "longitude",
+        ),
+        "song": (
+            "id", "title", "artist", "status", "lyrics", "chords", "link", "memo",
+            "genre", "difficulty", "sheet_music", "created_at", "updated_at",
+            "upvote_count", "downvote_count", "vote_score",
+        ),
+    }
+    for table, names in column_order.items():
+        columns_by_name = {
+            item["name"]: item for item in contract["tables"][table]["columns"]
+        }
+        contract["tables"][table]["columns"] = [
+            {**columns_by_name[name], "cid": cid}
+            for cid, name in enumerate(names)
+        ]
+
+    foreign_key_order = {
+        "comment": ("parent_id", "personal_log_id", "media_id"),
+        "multipart_upload_session": ("media_id", "rehearsal_id", "song_id"),
+        "personal_log_multipart_upload_session": ("personal_log_id", "member_id"),
+    }
+    for table, sources in foreign_key_order.items():
+        foreign_keys_by_source = {
+            item["from"]: item for item in contract["tables"][table]["foreign_keys"]
+        }
+        contract["tables"][table]["foreign_keys"] = [
+            {**foreign_keys_by_source[source], "id": identifier}
+            for identifier, source in enumerate(sources)
+        ]
+
+    for table in ("media", "song"):
+        for column in ("upvote_count", "downvote_count", "vote_score"):
+            item = next(
+                value for value in contract["tables"][table]["columns"]
+                if value["name"] == column
+            )
+            item["default"] = "0"
     return contract
 
 
