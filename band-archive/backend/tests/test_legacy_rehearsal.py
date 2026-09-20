@@ -27,6 +27,28 @@ from tools.legacy_rehearsal.rehearsal import (
 )
 
 
+def _insert_lifecycle_media(path, *, pruned=False):
+    engine = create_engine(_url(path))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO song (id,title,artist,upvote_count,downvote_count,vote_score) "
+                "VALUES (70,'Lifecycle','Artist',0,0,0)"
+            ))
+            connection.execute(text(
+                "INSERT INTO media ("
+                "id,song_id,filename,object_key,file_type,file_size,transcoding_status,audio_filename,"
+                "audio_object_key,processing_attempts,video_720_filename,video_720_object_key,"
+                "video_720_completed_at,original_pruned_at,upvote_count,downvote_count,vote_score"
+                ") VALUES ("
+                "71,70,'한글 원본.mp4','media/한글 원본.mp4','video',999,'completed',"
+                "'한글 음원.m4a','media/한글 음원.m4a',0,'media/한글 720.mp4',"
+                "'media/한글 720.mp4','2026-09-01',:pruned,0,0,0)"
+            ), {'pruned': '2026-09-02' if pruned else None})
+    finally:
+        engine.dispose()
+
+
 def _url(path):
     return f"sqlite:///{path.as_posix()}"
 
@@ -580,6 +602,89 @@ def test_reconcile_optional_actual_listing_is_compare_only(tmp_path):
         assert report["object_comparison"]["orphan_objects"] == ["unexpected"]
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ('pruned', 'actual_keys', 'missing_required', 'retired_absent', 'retired_present'),
+    [
+        (False, {'media/한글 원본.mp4', 'media/한글 음원.m4a'}, ['media/한글 720.mp4'], [], []),
+        (True, {'media/한글 음원.m4a', 'media/한글 720.mp4'}, [], ['media/한글 원본.mp4'], []),
+        (True, {'media/한글 원본.mp4', 'media/한글 음원.m4a', 'media/한글 720.mp4'}, [], [], ['media/한글 원본.mp4']),
+    ],
+)
+def test_media_object_manifest_tracks_lifecycle_expectations(
+        tmp_path, pruned, actual_keys, missing_required, retired_absent, retired_present):
+    path = tmp_path / 'lifecycle.sqlite'
+    _upgrade(path)
+    _insert_lifecycle_media(path, pruned=pruned)
+    actual = [{'key': key, 'size': 123} for key in actual_keys]
+    engine = create_engine(_url(path))
+    try:
+        with engine.connect() as connection:
+            report = reconcile(connection, actual_objects=actual)
+    finally:
+        engine.dispose()
+
+    entries = {row['role']: row for row in report['object_manifest'] if row['owner']['type'] == 'media'}
+    assert entries['original']['expectation'] == ('retired_absent' if pruned else 'required_present')
+    assert entries['video_720']['expectation'] == 'required_present'
+    assert entries['audio']['expectation'] == 'required_present'
+    assert entries['original']['expected_size'] == 999
+    assert entries['video_720']['expected_size'] is None
+    assert entries['audio']['expected_size'] is None
+    comparison = report['object_comparison']
+    assert comparison['missing_required'] == missing_required
+    assert comparison['retired_absent_confirmed'] == retired_absent
+    assert comparison['retired_still_present'] == retired_present
+    # Derivative sizes are deliberately incomparable to the original's file_size.
+    assert comparison['size_mismatches'] == (
+        [] if pruned or 'media/한글 원본.mp4' not in actual_keys else ['media/한글 원본.mp4']
+    )
+
+
+def test_non_media_manifest_entries_remain_required_present(tmp_path):
+    path = tmp_path / 'gallery.sqlite'
+    _legacy_fixture(path)
+    _upgrade(path)
+    engine = create_engine(_url(path))
+    try:
+        with engine.connect() as connection:
+            report = reconcile(connection, actual_objects=[])
+    finally:
+        engine.dispose()
+    non_media = [row for row in report['object_manifest'] if row['owner']['type'] != 'media']
+    assert non_media
+    assert {row['expectation'] for row in non_media} == {'required_present'}
+    assert set(report['object_comparison']['missing_required']) >= {row['key'] for row in non_media}
+
+
+def test_lifecycle_manifest_is_canonical_and_deterministic_across_legacy_fallback(tmp_path):
+    canonical, legacy = tmp_path / 'canonical.sqlite', tmp_path / 'legacy.sqlite'
+    for path in (canonical, legacy):
+        _upgrade(path)
+        _insert_lifecycle_media(path, pruned=True)
+    engine = create_engine(_url(legacy))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                'UPDATE media SET object_key=NULL, audio_object_key=NULL, video_720_object_key=NULL WHERE id=71'
+            ))
+    finally:
+        engine.dispose()
+
+    manifests = []
+    for path in (canonical, legacy):
+        engine = create_engine(_url(path))
+        try:
+            with engine.connect() as connection:
+                first = reconcile(connection)['object_manifest']
+                second = reconcile(connection)['object_manifest']
+                assert first == second
+                manifests.append(first)
+        finally:
+            engine.dispose()
+    assert manifests[0] == manifests[1]
+    assert '한글 원본.mp4' in json.dumps(manifests[0], ensure_ascii=False, sort_keys=True)
 
 
 def test_content_digest_detects_non_primary_key_tampering_and_rolls_back(tmp_path, monkeypatch):

@@ -17,6 +17,7 @@ from media_processing import (
     process_claimed_media,
     _run_command,
     stop_worker,
+    select_media_source_keys,
     utcnow,
 )
 from models import Media
@@ -155,6 +156,75 @@ def test_pruned_original_keeps_720p_and_radio_urls_without_exposing_original(app
         '720p': 'https://storage.test/media/transcoded/720/1/etag.mp4',
         'audio': 'https://storage.test/media/clip_audio.m4a',
     }
+
+
+def test_source_selector_prefers_canonical_keys_and_is_pure(app, monkeypatch):
+    with app.app_context():
+        media = create_media(song_id=1, filename='legacy.mp4', file_type='video')
+        media.object_key = 'bands/7/media/canonical.mp4'
+        media.video_720_filename = 'media/transcoded/720/legacy.mp4'
+        media.video_720_object_key = 'bands/7/media/720/canonical.mp4'
+        media.transcoding_status = 'completed'
+        media.audio_filename = 'legacy_audio.m4a'
+        media.audio_object_key = 'bands/7/media/audio/canonical.m4a'
+
+        monkeypatch.setattr(storage, 'generate_url', lambda *args, **kwargs: pytest.fail('pure selector signed a URL'))
+        assert select_media_source_keys(media, 'media') == {
+            'original': 'bands/7/media/canonical.mp4',
+            'video_720': 'bands/7/media/720/canonical.mp4',
+            'audio': 'bands/7/media/audio/canonical.m4a',
+        }
+
+
+def test_source_selector_uses_legacy_fallback_but_never_returns_pruned_original(app):
+    with app.app_context():
+        media = create_media(song_id=1, filename='한글 영상.mp4', file_type='video')
+        media.video_720_filename = 'media/transcoded/720/한글 영상.mp4'
+        media.transcoding_status = 'completed'
+        media.audio_filename = '한글 영상_audio.m4a'
+        assert select_media_source_keys(media, 'media') == {
+            'original': 'media/한글 영상.mp4',
+            'video_720': 'media/transcoded/720/한글 영상.mp4',
+            'audio': 'media/한글 영상_audio.m4a',
+        }
+
+        media.original_pruned_at = datetime.now(timezone.utc)
+        assert select_media_source_keys(media, 'media') == {
+            'original': None,
+            'video_720': 'media/transcoded/720/한글 영상.mp4',
+            'audio': 'media/한글 영상_audio.m4a',
+        }
+
+
+def test_source_selector_requires_completed_audio_and_v1_shape_hides_object_keys(app):
+    with app.app_context():
+        media = create_media(song_id=1, filename='clip.mp4', file_type='video')
+        media.object_key = 'bands/3/media/clip.mp4'
+        media.audio_filename = 'clip_audio.m4a'
+        media.audio_object_key = 'bands/3/media/clip_audio.m4a'
+        assert select_media_source_keys(media, 'media')['audio'] is None
+
+        media.transcoding_status = 'completed'
+        payload = media.to_dict()
+
+    assert payload['url'] == 'https://storage.test/bands/3/media/clip.mp4'
+    assert payload['original_url'] == payload['url']
+    assert payload['audio_url'] == 'https://storage.test/bands/3/media/clip_audio.m4a'
+    assert payload['qualities'] == {
+        'original': payload['original_url'],
+        'audio': payload['audio_url'],
+    }
+    assert not {'object_key', 'audio_object_key', 'video_720_object_key'} & payload.keys()
+    assert {
+        'id', 'song_id', 'rehearsal_id', 'rehearsal_title', 'rehearsal_date',
+        'song_title', 'song_artist', 'filename', 'file_type', 'file_size', 'url',
+        'original_url', 'original_pruned', 'video_720_url', 'video_720_filename',
+        'video_720_source_etag', 'video_720_profile', 'video_720_completed_at',
+        'audio_url', 'transcoding_status', 'audio_filename', 'processing_error',
+        'processing_started_at', 'processing_completed_at', 'processing_attempts',
+        'processing_heartbeat_at', 'qualities', 'is_featured', 'upvote_count',
+        'downvote_count', 'vote_score', 'viewer_vote', 'comment_count', 'created_at',
+    } == payload.keys()
 
 
 def test_processing_status_and_retry_api(client, app, monkeypatch):
