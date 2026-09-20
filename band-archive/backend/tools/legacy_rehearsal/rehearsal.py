@@ -1192,10 +1192,16 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
             'FROM "media" ORDER BY "id"'
         )).mappings()
         for row in media_rows:
-            if row["file_type"] != "video":
-                continue
             roles = required_roles[row["id"]]
             pruned = row["original_pruned_at"] is not None
+            if row["file_type"] != "video":
+                if pruned:
+                    defects.append({"kind": "invalid_pruned_lifecycle", "table": "media",
+                                    "id": row["id"], "role": "original"})
+                    if not ({"original", "video_720", "audio"} & roles):
+                        defects.append({"kind": "no_playable_derivative", "table": "media",
+                                        "id": row["id"], "role": "playback"})
+                continue
             completed = row["transcoding_status"] == "completed"
 
             # A completed extraction is an availability assertion. Missing

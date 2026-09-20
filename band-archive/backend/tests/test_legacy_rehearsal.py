@@ -779,7 +779,45 @@ def test_manifest_does_not_require_audio_derivative_outside_completed_video_life
     assert not [row for row in report['object_defects'] if row.get('table') == 'media' and row.get('id') == 71]
 
 
-def test_broken_pruned_lifecycle_blocks_real_rehearsal_import(tmp_path):
+@pytest.mark.parametrize('file_type', ['audio', 'image', None])
+def test_pruned_non_video_media_is_a_deterministic_redacted_lifecycle_defect(tmp_path, file_type):
+    path = tmp_path / f'pruned-non-video-{file_type}.sqlite'
+    _upgrade(path)
+    _insert_lifecycle_media(path, pruned=True)
+    engine = create_engine(_url(path))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                'UPDATE media SET file_type=:file_type, transcoding_status=\'not_required\', '
+                'audio_filename=NULL, audio_object_key=NULL, video_720_filename=NULL, '
+                'video_720_object_key=NULL, video_720_completed_at=NULL WHERE id=71'
+            ), {'file_type': file_type})
+        with engine.connect() as connection:
+            first = reconcile(connection)
+            second = reconcile(connection)
+    finally:
+        engine.dispose()
+
+    assert first == second
+    defects = {
+        (row['kind'], row.get('role'))
+        for row in first['object_defects']
+        if row.get('table') == 'media' and row.get('id') == 71
+    }
+    assert defects == {
+        ('invalid_pruned_lifecycle', 'original'),
+        ('no_playable_derivative', 'playback'),
+    }
+    rendered = json.dumps(first['object_defects'], ensure_ascii=False, sort_keys=True)
+    assert '한글 원본.mp4' not in rendered
+    assert 'media/한글 원본.mp4' not in rendered
+
+
+@pytest.mark.parametrize(
+    ('file_type', 'status'),
+    [('video', 'failed'), ('audio', 'not_required')],
+)
+def test_broken_pruned_lifecycle_blocks_real_rehearsal_import(tmp_path, file_type, status):
     source, target = tmp_path / 'broken-source.sqlite', tmp_path / 'empty-target.sqlite'
     _upgrade(source)
     _insert_lifecycle_media(source, pruned=True)
@@ -787,9 +825,10 @@ def test_broken_pruned_lifecycle_blocks_real_rehearsal_import(tmp_path):
     try:
         with source_engine.begin() as connection:
             connection.execute(text(
-                "UPDATE media SET transcoding_status='failed', audio_filename=NULL, audio_object_key=NULL, "
+                'UPDATE media SET file_type=:file_type, transcoding_status=:status, '
+                'audio_filename=NULL, audio_object_key=NULL, '
                 'video_720_filename=NULL, video_720_object_key=NULL WHERE id=71'
-            ))
+            ), {'file_type': file_type, 'status': status})
     finally:
         source_engine.dispose()
     _upgrade(target)
