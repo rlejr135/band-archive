@@ -10,7 +10,8 @@ from errors import ValidationError, NotFoundError
 from route_helpers import get_or_404
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
-                              delete_original_and_audio, processing_status_response)
+                              delete_original_and_audio, processing_status_response,
+                              select_media_source_keys)
 from voting import voter_hash, media_viewer_votes, parse_vote_payload
 from vote_service import apply_vote
 from upload_helpers import prepare_upload
@@ -428,5 +429,11 @@ def retry_media_audio(media_id):
 @songs_bp.route('/uploads/<filename>')
 def uploaded_file(filename):
     """하위 호환: presigned URL로 리다이렉트"""
-    url = storage.generate_url(f'media/{filename}')
+    requested_key = f'media/{filename}'
+    matching_records = Media.query.filter_by(filename=filename).all()
+    if matching_records and not any(
+            select_media_source_keys(media, 'media')['original'] == requested_key
+            for media in matching_records):
+        raise NotFoundError("Media source not found")
+    url = storage.generate_url(requested_key)
     return redirect(url)

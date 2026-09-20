@@ -227,6 +227,19 @@ def test_source_selector_requires_completed_audio_and_v1_shape_hides_object_keys
     } == payload.keys()
 
 
+def test_legacy_media_redirect_never_signs_a_pruned_original(client, app, monkeypatch):
+    with app.app_context():
+        media = create_media(song_id=_song(client), filename='retired.mp4', file_type='video')
+        media.original_pruned_at = datetime.now(timezone.utc)
+        db.session.add(media)
+        db.session.commit()
+    signed = []
+    monkeypatch.setattr(storage, 'generate_url', lambda key, **kwargs: signed.append(key) or 'https://storage.test')
+    response = client.get('/uploads/retired.mp4')
+    assert response.status_code == 404
+    assert signed == []
+
+
 def test_processing_status_and_retry_api(client, app, monkeypatch):
     with app.app_context():
         media = create_media(song_id=_song(client), filename='clip.mp4', file_type='video')

@@ -94,19 +94,48 @@ def audio_filename_for(filename):
     return f"{filename.rsplit('.', 1)[0]}_audio.m4a"
 
 
+def _canonical_or_legacy_key(record, canonical_field, legacy_field, key_prefix=None):
+    canonical = getattr(record, canonical_field, None)
+    if canonical:
+        return canonical
+    legacy = getattr(record, legacy_field, None)
+    if not legacy:
+        return None
+    return f'{key_prefix}/{legacy}' if key_prefix else legacy
+
+
+def select_media_source_keys(record, key_prefix):
+    """Select active object keys without storage access or URL signing.
+
+    Canonical tenant-aware keys take precedence over legacy filename fields.
+    Historical original metadata remains available for audit and deletion, but
+    a pruned original can never become a playback/signing source again.
+    """
+    original_key = None
+    if not getattr(record, 'original_pruned_at', None):
+        original_key = _canonical_or_legacy_key(record, 'object_key', 'filename', key_prefix)
+
+    video_720_key = None
+    if key_prefix == 'media' and record.file_type == 'video':
+        video_720_key = _canonical_or_legacy_key(
+            record, 'video_720_object_key', 'video_720_filename',
+        )
+
+    audio_key = None
+    if record.file_type == 'video' and record.transcoding_status == 'completed':
+        audio_key = _canonical_or_legacy_key(record, 'audio_object_key', 'audio_filename', key_prefix)
+
+    return {'original': original_key, 'video_720': video_720_key, 'audio': audio_key}
+
+
 def processing_fields(record, key_prefix):
     """Shared JSON fields; callers retain their established endpoint names."""
     original_pruned = bool(getattr(record, 'original_pruned_at', None))
-    original_url = None if original_pruned else storage.generate_url(f'{key_prefix}/{record.filename}')
+    source_keys = select_media_source_keys(record, key_prefix)
+    original_url = storage.generate_url(source_keys['original']) if source_keys['original'] else None
     video_720_filename = getattr(record, 'video_720_filename', None)
-    video_720_url = None
-    if key_prefix == 'media' and record.file_type == 'video' and video_720_filename:
-        # This is a fully-qualified immutable R2 key, unlike normal media
-        # filenames that live below the ``media/`` prefix.
-        video_720_url = storage.generate_url(video_720_filename)
-    audio_url = None
-    if record.file_type == 'video' and record.transcoding_status == 'completed' and record.audio_filename:
-        audio_url = storage.generate_url(f'{key_prefix}/{record.audio_filename}')
+    video_720_url = storage.generate_url(source_keys['video_720']) if source_keys['video_720'] else None
+    audio_url = storage.generate_url(source_keys['audio']) if source_keys['audio'] else None
     return {
         # Once a finalize has atomically linked a verified derivative, the
         # regular video URL prefers it. The original remains explicit below.

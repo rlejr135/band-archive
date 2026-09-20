@@ -59,15 +59,15 @@ _AUDIT_TRIGGER_SQL = {
 }
 _AUDIT_TRIGGER_REVISIONS = {"20260916_04", "20260916_05"}
 _OBJECT_FIELDS = (
-    ("song", "id", "band_id", "sheet_music_object_key", "sheet_music", "media", None),
-    ("media", "id", "band_id", "object_key", "filename", "media", "file_size"),
-    ("media", "id", "band_id", "audio_object_key", "audio_filename", "media", None),
-    ("media", "id", "band_id", "video_720_object_key", "video_720_filename", "media", None),
-    ("personal_log", "id", "band_id", "object_key", "filename", "personal_logs", "file_size"),
-    ("personal_log", "id", "band_id", "audio_object_key", "audio_filename", "personal_logs", None),
-    ("gallery_image", "id", "band_id", "object_key", "filename", "gallery", "file_size"),
-    ("multipart_upload_session", "id", "band_id", "object_key", None, "", "declared_bytes"),
-    ("personal_log_multipart_upload_session", "id", "band_id", "object_key", None, "", "declared_bytes"),
+    ("song", "id", "band_id", "sheet_music_object_key", "sheet_music", "media", None, "sheet_music"),
+    ("media", "id", "band_id", "object_key", "filename", "media", "file_size", "original"),
+    ("media", "id", "band_id", "audio_object_key", "audio_filename", "media", None, "audio"),
+    ("media", "id", "band_id", "video_720_object_key", "video_720_filename", "media", None, "video_720"),
+    ("personal_log", "id", "band_id", "object_key", "filename", "personal_logs", "file_size", "original"),
+    ("personal_log", "id", "band_id", "audio_object_key", "audio_filename", "personal_logs", None, "audio"),
+    ("gallery_image", "id", "band_id", "object_key", "filename", "gallery", "file_size", "gallery"),
+    ("multipart_upload_session", "id", "band_id", "object_key", None, "", "declared_bytes", "upload"),
+    ("personal_log_multipart_upload_session", "id", "band_id", "object_key", None, "", "declared_bytes", "upload"),
 )
 
 
@@ -1137,14 +1137,25 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
     tables = set(_table_names(connection))
     manifest, defects = [], []
     seen: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for table, pk, band, key_column, fallback, prefix, size in _OBJECT_FIELDS:
+    for table, pk, band, key_column, fallback, prefix, size, role in _OBJECT_FIELDS:
         if table in _QUARANTINED_TABLES:
             continue
         if table not in tables or not _has_columns(connection, table, (pk, band, key_column)):
             continue
         columns = [pk, band, key_column] + ([fallback] if fallback else []) + ([size] if size else [])
+        table_columns = {item["name"] for item in inspect(connection).get_columns(table)}
+        lifecycle_columns = [
+            column for column in ("file_type", "transcoding_status", "original_pruned_at")
+            if column in table_columns and column not in columns
+        ]
+        columns.extend(lifecycle_columns)
         query_columns = ", ".join(f'"{col}"' for col in columns)
         for row in connection.execute(text(f'SELECT {query_columns} FROM "{table}" ORDER BY "{pk}"')).mappings():
+            if role == "audio" and (
+                    row.get("file_type") != "video" or row.get("transcoding_status") != "completed"):
+                continue
+            if role == "video_720" and row.get("file_type") != "video":
+                continue
             key = row[key_column] or (row[fallback] if fallback else None)
             if not key:
                 continue
@@ -1153,8 +1164,20 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
             if unresolved or canonical is None:
                 defects.append({"kind": "invalid_or_cross_prefix_key", "table": table, "id": row[pk]})
                 continue
-            entry = {"key": canonical, "owner": {"type": table, "id": row[pk], "band_id": row[band]},
-                     "expected_size": row[size] if size else None}
+            expectation = (
+                "retired_absent"
+                if table == "media" and role == "original" and row.get("original_pruned_at") is not None
+                else "required_present"
+            )
+            entry = {
+                "key": canonical,
+                "owner": {"type": table, "id": row[pk], "band_id": row[band]},
+                "role": role,
+                "expectation": expectation,
+                # Derivatives have no trustworthy size column. In particular,
+                # media.file_size describes only the historical original.
+                "expected_size": row[size] if size and role not in {"audio", "video_720"} else None,
+            }
             manifest.append(entry)
             seen[canonical].append(entry)
     for key, entries in sorted(seen.items()):
@@ -1163,7 +1186,9 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
             bands = {entry["owner"]["band_id"] for entry in entries}
             if len(bands) > 1:
                 defects.append({"kind": "cross_band_key", "key": key, "bands": len(bands)})
-    manifest.sort(key=lambda row: (row["key"], row["owner"]["type"], str(row["owner"]["id"])))
+    manifest.sort(key=lambda row: (
+        row["key"], row["owner"]["type"], str(row["owner"]["id"]), row["role"], row["expectation"],
+    ))
     return manifest, defects
 
 
@@ -1228,12 +1253,31 @@ def reconcile(connection: Connection, actual_objects: Iterable[dict[str, Any]] |
     if actual_objects is not None:
         expected = {row["key"]: row for row in object_manifest}
         actual = {str(row.get("key")): redact(row) for row in actual_objects if row.get("key")}
+        required = {row["key"] for row in object_manifest if row["expectation"] == "required_present"}
+        retired = {row["key"] for row in object_manifest if row["expectation"] == "retired_absent"}
+        missing_required = sorted(required - actual.keys())
+        retired_absent_confirmed = sorted(retired - actual.keys())
+        retired_still_present = sorted(retired & actual.keys())
+        size_mismatches = sorted(
+            key for key, row in expected.items()
+            if row["expectation"] == "required_present" and row["expected_size"] is not None
+            and key in actual and actual[key].get("size") not in (None, row["expected_size"])
+        )
         report["object_comparison"] = {
-            "db_missing_objects": sorted(key for key in expected if key not in actual),
+            # Keep the v1 report name as an alias while exposing lifecycle-safe
+            # classifications to operators.
+            "db_missing_objects": missing_required,
+            "missing_required": missing_required,
+            "retired_absent_confirmed": retired_absent_confirmed,
+            "retired_still_present": retired_still_present,
             "orphan_objects": sorted(key for key in actual if key not in expected),
-            "size_mismatches": sorted(key for key, row in expected.items()
-                                      if row["expected_size"] is not None and key in actual
-                                      and actual[key].get("size") not in (None, row["expected_size"])),
+            "size_mismatches": size_mismatches,
+            "counts": {
+                "missing_required": len(missing_required),
+                "retired_absent_confirmed": len(retired_absent_confirmed),
+                "retired_still_present": len(retired_still_present),
+                "size_mismatches": len(size_mismatches),
+            },
         }
     stable = json.dumps(redact(report), default=str, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     report["checksum"] = hashlib.sha256(stable.encode()).hexdigest()
