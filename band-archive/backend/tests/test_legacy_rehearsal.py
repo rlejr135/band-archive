@@ -19,7 +19,7 @@ from tools.legacy_rehearsal.rehearsal import (
     RehearsalError, _assert_supported_source_schema, _baseline_sqlite_contract,
     _contract_without_full_ddl_digests, _file_fingerprint,
     _mapped_sqlite_digests, _normalize_production_legacy_copy,
-    _production_legacy_contract, _sqlite_schema_contract, _validate_target_url,
+    _production_legacy_contract, _report_payload, _sqlite_schema_contract, _validate_target_url,
     cli, reconcile, run_rehearsal,
     safe_target_identity,
 )
@@ -740,6 +740,36 @@ def test_cli_report_output_writes_unicode_as_utf8_without_shell_round_trip(tmp_p
     assert "\ufffd" not in payload.decode("utf-8")
     assert key not in result.output
     assert f"sha256={hashlib.sha256(payload).hexdigest()}" in result.output
+
+
+def test_report_payload_is_deterministic_for_non_ascii_manifest_keys():
+    key = "media/한글 음원 🎵.m4a"
+    first = {
+        "before": {
+            "object_manifest": [
+                {"key": key, "owner": {"type": "media", "id": 7, "band_id": 1}},
+            ],
+            "table_counts": {"media": 1},
+        },
+        "dry_run": True,
+    }
+    second = {
+        "dry_run": True,
+        "before": {
+            "table_counts": {"media": 1},
+            "object_manifest": [
+                {"owner": {"band_id": 1, "id": 7, "type": "media"}, "key": key},
+            ],
+        },
+    }
+
+    first_payload = _report_payload(first)
+    second_payload = _report_payload(second)
+
+    assert first_payload == second_payload
+    assert hashlib.sha256(first_payload).digest() == hashlib.sha256(second_payload).digest()
+    assert json.loads(first_payload.decode("utf-8"))["before"]["object_manifest"][0]["key"] == key
+    assert "\ufffd" not in first_payload.decode("utf-8")
 
 
 def test_cli_report_output_refuses_to_overwrite_existing_evidence(tmp_path, monkeypatch):
