@@ -687,6 +687,126 @@ def test_lifecycle_manifest_is_canonical_and_deterministic_across_legacy_fallbac
     assert '한글 원본.mp4' in json.dumps(manifests[0], ensure_ascii=False, sort_keys=True)
 
 
+@pytest.mark.parametrize(
+    ('updates', 'expected_defects'),
+    [
+        (
+            {'audio_filename': None, 'audio_object_key': None},
+            {('missing_required_derivative', 'audio')},
+        ),
+        (
+            {
+                'original_pruned_at': '2026-09-02',
+                'video_720_filename': None,
+                'video_720_object_key': None,
+            },
+            {('missing_required_derivative', 'video_720')},
+        ),
+        (
+            {'original_pruned_at': '2026-09-02', 'transcoding_status': 'failed'},
+            {
+                ('invalid_pruned_lifecycle', 'audio'),
+                ('missing_required_derivative', 'audio'),
+            },
+        ),
+        (
+            {
+                'original_pruned_at': '2026-09-02',
+                'transcoding_status': 'failed',
+                'audio_filename': None,
+                'audio_object_key': None,
+                'video_720_filename': None,
+                'video_720_object_key': None,
+            },
+            {
+                ('invalid_pruned_lifecycle', 'audio'),
+                ('missing_required_derivative', 'audio'),
+                ('missing_required_derivative', 'video_720'),
+                ('no_playable_derivative', 'playback'),
+            },
+        ),
+    ],
+)
+def test_media_manifest_fails_closed_for_impossible_derivative_lifecycle(tmp_path, updates, expected_defects):
+    path = tmp_path / 'corrupt-lifecycle.sqlite'
+    _upgrade(path)
+    _insert_lifecycle_media(path)
+    assignments = ', '.join(f'"{column}" = :{column}' for column in sorted(updates))
+    engine = create_engine(_url(path))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f'UPDATE media SET {assignments} WHERE id=71'), updates)
+        with engine.connect() as connection:
+            first = reconcile(connection)
+            second = reconcile(connection)
+    finally:
+        engine.dispose()
+
+    assert first == second
+    defects = {
+        (row['kind'], row.get('role'))
+        for row in first['object_defects']
+        if row.get('table') == 'media' and row.get('id') == 71
+    }
+    assert expected_defects <= defects
+    rendered = json.dumps(first['object_defects'], ensure_ascii=False, sort_keys=True)
+    assert '한글 원본.mp4' not in rendered
+    assert '한글 음원.m4a' not in rendered
+    assert '한글 720.mp4' not in rendered
+
+
+@pytest.mark.parametrize(
+    ('file_type', 'status'),
+    [('audio', 'not_required'), ('image', 'not_required'), ('video', 'queued'), ('video', 'failed')],
+)
+def test_manifest_does_not_require_audio_derivative_outside_completed_video_lifecycle(
+        tmp_path, file_type, status):
+    path = tmp_path / f'legitimate-{file_type}-{status}.sqlite'
+    _upgrade(path)
+    _insert_lifecycle_media(path)
+    engine = create_engine(_url(path))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                'UPDATE media SET file_type=:file_type, transcoding_status=:status, '
+                'audio_filename=NULL, audio_object_key=NULL, video_720_filename=NULL, '
+                'video_720_object_key=NULL, video_720_completed_at=NULL WHERE id=71'
+            ), {'file_type': file_type, 'status': status})
+        with engine.connect() as connection:
+            report = reconcile(connection)
+    finally:
+        engine.dispose()
+    assert not [row for row in report['object_defects'] if row.get('table') == 'media' and row.get('id') == 71]
+
+
+def test_broken_pruned_lifecycle_blocks_real_rehearsal_import(tmp_path):
+    source, target = tmp_path / 'broken-source.sqlite', tmp_path / 'empty-target.sqlite'
+    _upgrade(source)
+    _insert_lifecycle_media(source, pruned=True)
+    source_engine = create_engine(_url(source))
+    try:
+        with source_engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE media SET transcoding_status='failed', audio_filename=NULL, audio_object_key=NULL, "
+                'video_720_filename=NULL, video_720_object_key=NULL WHERE id=71'
+            ))
+    finally:
+        source_engine.dispose()
+    _upgrade(target)
+
+    with pytest.raises(RehearsalError, match='relationship/object defects'):
+        run_rehearsal(
+            str(source), _url(target), allow_sqlite_target=True,
+            sqlite_test_target_path=str(target),
+        )
+    target_engine = create_engine(_url(target))
+    try:
+        with target_engine.connect() as connection:
+            assert connection.execute(text('SELECT count(*) FROM media')).scalar_one() == 0
+    finally:
+        target_engine.dispose()
+
+
 def test_content_digest_detects_non_primary_key_tampering_and_rolls_back(tmp_path, monkeypatch):
     source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
     _legacy_fixture(source)

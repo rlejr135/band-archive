@@ -1180,6 +1180,46 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
             }
             manifest.append(entry)
             seen[canonical].append(entry)
+
+    if "media" in tables and _has_columns(
+            connection, "media", ("id", "file_type", "transcoding_status", "original_pruned_at")):
+        required_roles: dict[Any, set[str]] = defaultdict(set)
+        for entry in manifest:
+            if entry["owner"]["type"] == "media" and entry["expectation"] == "required_present":
+                required_roles[entry["owner"]["id"]].add(entry["role"])
+        media_rows = connection.execute(text(
+            'SELECT "id", "file_type", "transcoding_status", "original_pruned_at" '
+            'FROM "media" ORDER BY "id"'
+        )).mappings()
+        for row in media_rows:
+            if row["file_type"] != "video":
+                continue
+            roles = required_roles[row["id"]]
+            pruned = row["original_pruned_at"] is not None
+            completed = row["transcoding_status"] == "completed"
+
+            # A completed extraction is an availability assertion. Missing
+            # key metadata must be a blocking defect rather than disappearing
+            # from the manifest and looking optional.
+            if completed and "audio" not in roles:
+                defects.append({"kind": "missing_required_derivative", "table": "media",
+                                "id": row["id"], "role": "audio"})
+
+            if pruned:
+                if "video_720" not in roles:
+                    defects.append({"kind": "missing_required_derivative", "table": "media",
+                                    "id": row["id"], "role": "video_720"})
+                if not completed:
+                    defects.append({"kind": "invalid_pruned_lifecycle", "table": "media",
+                                    "id": row["id"], "role": "audio"})
+                if "audio" not in roles and not completed:
+                    defects.append({"kind": "missing_required_derivative", "table": "media",
+                                    "id": row["id"], "role": "audio"})
+
+            if not ({"original", "video_720", "audio"} & roles):
+                defects.append({"kind": "no_playable_derivative", "table": "media",
+                                "id": row["id"], "role": "playback"})
+
     for key, entries in sorted(seen.items()):
         if len(entries) > 1:
             defects.append({"kind": "duplicate_key", "key": key, "owners": len(entries)})
@@ -1189,6 +1229,7 @@ def _object_manifest(connection: Connection) -> tuple[list[dict[str, Any]], list
     manifest.sort(key=lambda row: (
         row["key"], row["owner"]["type"], str(row["owner"]["id"]), row["role"], row["expectation"],
     ))
+    defects.sort(key=lambda row: json.dumps(row, default=str, ensure_ascii=False, sort_keys=True))
     return manifest, defects
 
 
