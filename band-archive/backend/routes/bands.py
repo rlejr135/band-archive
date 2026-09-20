@@ -3,6 +3,7 @@
 from flask import Blueprint, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
+from band_access import current_audience, optional_auth, read_scope_for_slug
 from band_service import (
     ACTIVE, MANAGER_ROLES, approve_membership, band_dict, close_band, create_invite,
     create_request, creation_request_dict, invite_dict, join_invite, join_request,
@@ -67,13 +68,12 @@ def public_bands():
 
 
 @bands_bp.get('/bands/by-slug/<string:band_slug>')
+@optional_auth
 def get_band_by_slug(band_slug):
-    band = Band.query.filter_by(slug=band_slug.strip().casefold(), deleted_at=None).one_or_none()
-    if band is None or band.default_visibility != 'PUBLIC':
-        raise NotFoundError('Band not found')
-    # This route is deliberately anonymous; authenticated callers use /bands
-    # for their private memberships and receive explicit permission booleans.
-    return jsonify({'band': band_dict(band, include_roster=True)})
+    scope = read_scope_for_slug(band_slug, current_audience())
+    # ``current_app_user`` is populated only after supplied credentials have
+    # passed the shared optional-auth verifier. Visitors remain ``None``.
+    return jsonify({'band': band_dict(db.session.get(Band, scope.band_id), current_app_user(), include_roster=True)})
 
 
 @bands_bp.post('/band-creation-requests')
