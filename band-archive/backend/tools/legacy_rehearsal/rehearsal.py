@@ -24,7 +24,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import click
 from alembic.config import Config
@@ -118,31 +118,99 @@ def _report_destination(path: Path) -> Path:
     return destination
 
 
-def _write_report_exclusive(path: Path, report: dict[str, Any]) -> str:
-    """Write a UTF-8 report once, atomically, and return its byte digest."""
-    destination = _report_destination(path)
+class _ReservedReportOutput:
+    """Probe report publication before migration and publish before commit."""
 
-    payload = _report_payload(report)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
-    )
-    temporary = Path(temporary_name)
-    try:
-        os.chmod(temporary, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            descriptor = -1
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # A same-directory hard link is an exclusive publish: it cannot
-        # replace an existing report and never exposes the temporary name.
-        os.link(temporary, destination)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        temporary.unlink(missing_ok=True)
-    return hashlib.sha256(payload).hexdigest()
+    def __init__(self, path: Path):
+        self.destination = _report_destination(path)
+        self.descriptor = -1
+        self.temporary: Path | None = None
+        self.published = False
+        self.retained = False
+        self.sha256: str | None = None
+        self._published_identity: tuple[int, int] | None = None
+        self._destination_linked = False
+        probe: Path | None = None
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=self.destination.parent,
+                prefix=f".{self.destination.name}.", suffix=".tmp",
+            )
+            self.descriptor = descriptor
+            self.temporary = Path(temporary_name)
+            os.chmod(self.temporary, 0o600)
+            os.fsync(self.descriptor)
 
+            # Exercise the same-directory exclusive hard-link publication
+            # before any target transaction can start. The real destination
+            # remains absent; a later race is rejected by the final os.link.
+            probe = self.destination.parent / f".{self.destination.name}.{uuid.uuid4().hex}.probe"
+            os.link(self.temporary, probe)
+            if not os.path.samefile(self.temporary, probe):
+                raise RehearsalError("report output publication probe changed identity")
+            probe.unlink()
+            probe = None
+        except Exception:
+            if probe is not None:
+                try:
+                    probe.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.abort()
+            raise
+
+    def publish(self, report: dict[str, Any]) -> str:
+        """Durably publish once; callers invoke this before DB commit."""
+        if self.published or self.descriptor < 0 or self.temporary is None:
+            raise RehearsalError("report output reservation is no longer writable")
+        payload = _report_payload(report)
+        try:
+            with os.fdopen(self.descriptor, "wb") as stream:
+                self.descriptor = -1
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Hard links are exclusive and atomic: an existing/racing
+            # destination is never replaced.
+            temporary_stat = os.stat(self.temporary, follow_symlinks=False)
+            self._published_identity = (temporary_stat.st_dev, temporary_stat.st_ino)
+            os.link(self.temporary, self.destination)
+            self._destination_linked = True
+            published_stat = os.stat(self.destination, follow_symlinks=False)
+            if (published_stat.st_dev, published_stat.st_ino) != self._published_identity:
+                raise RehearsalError("published report identity changed")
+            self.published = True
+            self.sha256 = hashlib.sha256(payload).hexdigest()
+            self.temporary.unlink()
+            self.temporary = None
+            return self.sha256
+        except Exception:
+            self.abort()
+            raise
+
+    def retain(self) -> str:
+        if not self.published or self.sha256 is None:
+            raise RehearsalError("report output was not published before target commit")
+        self.retained = True
+        return self.sha256
+
+    def abort(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+        if self._destination_linked and self._published_identity is not None and os.path.lexists(self.destination):
+            try:
+                destination_stat = os.stat(self.destination, follow_symlinks=False)
+                if (destination_stat.st_dev, destination_stat.st_ino) == self._published_identity:
+                    self.destination.unlink()
+            except OSError:
+                pass
+        if self.temporary is not None:
+            try:
+                self.temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.temporary = None
 
 def _file_fingerprint(path: Path) -> dict[str, Any]:
     """Stable evidence that does not reveal a local path or any DB content."""
@@ -1205,7 +1273,8 @@ def _reset_postgres_sequences(connection: Connection, metadata: MetaData) -> Non
 def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: str | None = None,
                   expected_target_database: str | None = None, expected_target_schema: str | None = None,
                   dry_run: bool = False, allow_sqlite_target: bool = False,
-                  sqlite_test_target_path: str | None = None) -> dict[str, Any]:
+                  sqlite_test_target_path: str | None = None,
+                  report_publisher: Callable[[dict[str, Any]], str] | None = None) -> dict[str, Any]:
     """Copy/migrate/backfill an SQLite copy and optionally import it once.
 
     The target is always checked *before* the source work, is never upgraded by
@@ -1234,6 +1303,8 @@ def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: 
                         result["source_files"]["source_after"] = _file_fingerprint(source_path)
                         if result["source_files"]["source_before"] != result["source_files"]["source_after"]:
                             raise RehearsalError("source SQLite snapshot changed during rehearsal")
+                        if report_publisher is not None:
+                            report_publisher(result)
                         return result
                     with engine.begin() as target_connection:
                         inserted = _copy_rows(source_connection, target_connection)
@@ -1261,6 +1332,10 @@ def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: 
                         if result["source_files"]["source_before"] != result["source_files"]["source_after"]:
                             raise RehearsalError("source SQLite snapshot changed during rehearsal")
                         result.update({"inserted": inserted, "after": after})
+                        # Publication is part of the target transaction: a
+                        # write/fsync/hard-link failure rolls all inserts back.
+                        if report_publisher is not None:
+                            report_publisher(result)
                         return result
             finally:
                 source_engine.dispose()
@@ -1304,18 +1379,22 @@ def cli(source_sqlite: Path, target_url: str, expected_target_host: str | None,
         dry_run: bool, allow_sqlite_target: bool, sqlite_test_target_path: Path | None,
         report_output: Path | None) -> None:
     """Run one offline, non-repeatable legacy-migration rehearsal."""
+    reservation: _ReservedReportOutput | None = None
     try:
         if report_output is not None:
-            _report_destination(report_output)
+            reservation = _ReservedReportOutput(report_output)
         report = run_rehearsal(
             str(source_sqlite), target_url, expected_target_host=expected_target_host,
             expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
             dry_run=dry_run, allow_sqlite_target=allow_sqlite_target,
             sqlite_test_target_path=str(sqlite_test_target_path) if sqlite_test_target_path else None,
+            report_publisher=reservation.publish if reservation is not None else None,
         )
-        if report_output is not None:
-            report_sha256 = _write_report_exclusive(report_output, report)
+        if reservation is not None:
+            report_sha256 = reservation.retain()
     except Exception as error:
+        if reservation is not None:
+            reservation.abort()
         correlation_id = uuid.uuid4().hex
         # Do not expose driver SQL, parameter values, paths, or credentials.
         raise click.ClickException(f"rehearsal_failed correlation_id={correlation_id}") from error

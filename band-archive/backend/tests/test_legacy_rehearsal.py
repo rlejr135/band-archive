@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 from flask_migrate import upgrade
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import dialect as postgresql_dialect
 
 from extensions import db
@@ -16,7 +16,7 @@ from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
 from click.testing import CliRunner
 
 from tools.legacy_rehearsal.rehearsal import (
-    RehearsalError, _assert_supported_source_schema, _baseline_sqlite_contract,
+    RehearsalError, _ReservedReportOutput, _assert_supported_source_schema, _baseline_sqlite_contract,
     _contract_without_full_ddl_digests, _file_fingerprint,
     _mapped_sqlite_digests, _normalize_production_legacy_copy,
     _production_legacy_contract, _report_payload, _sqlite_schema_contract, _validate_target_url,
@@ -724,7 +724,12 @@ def test_cli_report_output_writes_unicode_as_utf8_without_shell_round_trip(tmp_p
     key = "gallery/한글 사진 🎵.png"
     report = {"before": {"object_manifest": [{"key": key}]}}
     import tools.legacy_rehearsal.rehearsal as rehearsal
-    monkeypatch.setattr(rehearsal, "run_rehearsal", lambda *args, **kwargs: report)
+
+    def publish_report(*args, **kwargs):
+        kwargs["report_publisher"](report)
+        return report
+
+    monkeypatch.setattr(rehearsal, "run_rehearsal", publish_report)
 
     result = CliRunner().invoke(cli, [
         "--source-sqlite", str(source), "--target-url", "postgresql://user:value@host/db",
@@ -740,6 +745,98 @@ def test_cli_report_output_writes_unicode_as_utf8_without_shell_round_trip(tmp_p
     assert "\ufffd" not in payload.decode("utf-8")
     assert key not in result.output
     assert f"sha256={hashlib.sha256(payload).hexdigest()}" in result.output
+    assert list(tmp_path.glob(f".{output.name}.*")) == []
+
+
+def test_cli_report_output_is_retained_for_successful_import(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    output = tmp_path / "retained-report.json"
+    _legacy_fixture(source)
+    _upgrade(target)
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", _url(target),
+        "--allow-sqlite-target", "--sqlite-test-target-path", str(target),
+        "--report-output", str(output),
+    ])
+
+    assert result.exit_code == 0
+    payload = output.read_bytes()
+    report = json.loads(payload.decode("utf-8"))
+    assert report["after"]["table_counts"]["song"] == 1
+    assert f"sha256={hashlib.sha256(payload).hexdigest()}" in result.output
+    assert list(tmp_path.glob(f".{output.name}.*")) == []
+
+
+def test_cli_report_output_probes_publication_before_rehearsal(tmp_path, monkeypatch):
+    source = tmp_path / "source.sqlite"
+    source.touch()
+    output = tmp_path / "retained-report.json"
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    called = []
+    monkeypatch.setattr(rehearsal, "run_rehearsal", lambda *args, **kwargs: called.append(True))
+    monkeypatch.setattr(rehearsal.os, "link", lambda *args, **kwargs: (_ for _ in ()).throw(
+        OSError("hard links unavailable")))
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", "postgresql://user:value@host/db",
+        "--expected-target-host", "host", "--expected-target-database", "db",
+        "--expected-target-schema", "public", "--report-output", str(output),
+    ])
+
+    assert result.exit_code != 0
+    assert "rehearsal_failed correlation_id=" in result.output
+    assert "hard links unavailable" not in result.output
+    assert called == []
+    assert not output.exists()
+    assert list(tmp_path.glob(f".{output.name}.*")) == []
+
+
+def test_cli_report_output_cleans_reservation_when_rehearsal_fails(tmp_path, monkeypatch):
+    source = tmp_path / "source.sqlite"
+    source.touch()
+    output = tmp_path / "retained-report.json"
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    monkeypatch.setattr(rehearsal, "run_rehearsal", lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("database failure")))
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", "postgresql://user:value@host/db",
+        "--expected-target-host", "host", "--expected-target-database", "db",
+        "--expected-target-schema", "public", "--report-output", str(output),
+    ])
+
+    assert result.exit_code != 0
+    assert "database failure" not in result.output
+    assert not output.exists()
+    assert list(tmp_path.glob(f".{output.name}.*")) == []
+
+
+def test_report_destination_race_does_not_overwrite_and_rolls_back_import(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    output = tmp_path / "retained-report.json"
+    _legacy_fixture(source)
+    _upgrade(target)
+    reservation = _ReservedReportOutput(output)
+    output.write_bytes(b"racer")
+
+    with pytest.raises(RehearsalError, match="rehearsal failed"):
+        run_rehearsal(
+            str(source), _url(target), allow_sqlite_target=True,
+            sqlite_test_target_path=str(target), report_publisher=reservation.publish,
+        )
+    reservation.abort()
+
+    assert output.read_bytes() == b"racer"
+    assert list(tmp_path.glob(f".{output.name}.*")) == []
+    engine = create_engine(_url(target))
+    try:
+        with engine.connect() as connection:
+            tables = [name for name in inspect(connection).get_table_names() if name != "alembic_version"]
+            assert all(connection.execute(text(f'SELECT count(*) FROM "{name}"')).scalar_one() == 0
+                       for name in tables)
+    finally:
+        engine.dispose()
 
 
 def test_report_payload_is_deterministic_for_non_ascii_manifest_keys():

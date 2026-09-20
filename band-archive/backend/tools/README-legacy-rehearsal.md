@@ -36,7 +36,10 @@ content digests (not just counts/PKs), and rolls back on any mismatch.
 
 Always retain operator evidence with `--report-output`. The tool writes the
 JSON bytes directly as UTF-8, publishes the file atomically, and refuses to
-overwrite an existing report. Do not capture the JSON through PowerShell or
+overwrite an existing report. It probes a same-directory durable hard-link
+publication before starting and publishes the final report before the import
+transaction commits, so a write, sync, or destination race rolls the import
+back. Do not capture the JSON through PowerShell or
 another shell's stdout redirection: a console encoding conversion can replace
 valid non-ASCII object-key characters even though the database import itself
 is exact. When `--report-output` is used, stdout contains only the SHA-256 of
