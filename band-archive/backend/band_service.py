@@ -146,9 +146,11 @@ def membership_dict(membership, audience='member'):
 
 def band_dict(band, viewer=None, include_roster=False, membership=_UNRESOLVED_MEMBERSHIP):
     if membership is _UNRESOLVED_MEMBERSHIP:
-        membership = None
-    if membership is None and viewer is not None:
-        membership = BandMembership.query.filter_by(band_id=band.id, user_id=viewer.id).one_or_none()
+        # Legacy callers may omit the explicit Phase 6 scope snapshot. Even
+        # then, an inactive lifecycle row is never a band audience.
+        membership = BandMembership.query.filter_by(
+            band_id=band.id, user_id=viewer.id, status=ACTIVE,
+        ).one_or_none() if viewer is not None else None
     active_member = membership is not None and membership.status == ACTIVE
     response = {
         'id': band.id,

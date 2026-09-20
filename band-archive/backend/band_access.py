@@ -10,10 +10,10 @@ id into cross-band access.
 from dataclasses import dataclass
 from functools import wraps
 
-from flask import after_this_request, g, request
+from flask import after_this_request, request
 from sqlalchemy import false
 
-from auth_service import current_app_user
+from auth_service import authenticate_request
 from band_service import ACTIVE, MANAGER_ROLES
 from errors import NotFoundError, ValidationError
 from models import Band, BandMembership
@@ -81,17 +81,19 @@ def current_audience():
     verifier and AppUser synchronization path; it raises its normal 401/403
     errors for malformed, expired, or otherwise invalid credentials.
     """
-    request_id = id(request._get_current_object())
-    cached = getattr(g, 'band_request_audience', None)
-    if cached is not None and getattr(g, 'band_request_audience_request_id', None) == request_id:
+    request_object = request._get_current_object()
+    cached = getattr(request_object, '_band_access_audience', None)
+    if cached is not None:
         return cached
     if not _has_authorization_header():
         audience = RequestAudience(user_id=None, subject=None)
     else:
-        user = current_app_user(required=True)
+        # This is intentionally one authentication per Flask request object,
+        # rather than a g-only cache.  It prevents a manually nested or
+        # sequential request context from inheriting a prior request's user.
+        user = authenticate_request()
         audience = RequestAudience(user_id=user.id, subject=user.supabase_user_id)
-    g.band_request_audience = audience
-    g.band_request_audience_request_id = request_id
+    setattr(request_object, '_band_access_audience', audience)
     return audience
 
 

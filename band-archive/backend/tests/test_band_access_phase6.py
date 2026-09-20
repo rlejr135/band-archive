@@ -7,6 +7,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app import create_app
+from band_service import band_dict
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, Band, BandMembership, Song
@@ -146,6 +147,47 @@ def test_public_band_never_serializes_nonactive_memberships(access_app, signer):
         assert band['can_edit'] is False
         assert band['can_delete'] is False
         assert band['permissions']['can_manage_members'] is False
+
+
+def test_band_dict_explicit_none_never_looks_up_inactive_membership(access_app):
+    with access_app.app_context():
+        band = Band.query.filter_by(slug='band-b').one()
+        active = AppUser.query.filter_by(email='outsider@example.com').one()
+        for email in ('pending@example.com', 'rejected@example.com', 'left@example.com'):
+            user = AppUser.query.filter_by(email=email).one()
+            explicit_none = band_dict(band, viewer=user, membership=None)
+            omitted = band_dict(band, viewer=user)
+            assert explicit_none['membership'] is None
+            assert omitted['membership'] is None
+            assert explicit_none['can_manage'] is False
+        # Omitted legacy calls retain their active-member response shape.
+        assert band_dict(band, viewer=active)['membership']['role'] == 'owner'
+
+
+def test_audience_cache_is_bound_to_request_object_not_reused_id(access_app, signer, monkeypatch):
+    import band_access
+    from flask import g
+
+    _install_jwks(access_app, [[_jwk(signer, 'key-1')]])
+    member_headers = _headers(_token(signer))
+    # This forces the precise cache-key collision the old implementation used
+    # to treat as the same request. The current code never consults this name.
+    monkeypatch.setattr(band_access, 'id', lambda _: 1, raising=False)
+
+    with access_app.app_context():
+        with access_app.test_request_context(headers=member_headers):
+            assert band_access.current_audience().authenticated is True
+        with access_app.test_request_context():
+            assert band_access.current_audience().authenticated is False
+
+        # Reset only the old g-based cache attributes to independently verify
+        # the inverse order inside the same outer application context.
+        g.__dict__.pop('band_request_audience', None)
+        g.__dict__.pop('band_request_audience_request_id', None)
+        with access_app.test_request_context():
+            assert band_access.current_audience().authenticated is False
+        with access_app.test_request_context(headers=member_headers):
+            assert band_access.current_audience().authenticated is True
 
 
 def test_authenticated_audience_and_active_membership_roles(access_app, signer):
