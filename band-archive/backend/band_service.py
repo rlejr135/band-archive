@@ -17,6 +17,7 @@ OWNER_ROLES = {'owner'}
 MANAGER_ROLES = {'owner', 'admin'}
 ACTIVE = 'active'
 _SLUG = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+_UNRESOLVED_MEMBERSHIP = object()
 
 
 def now():
@@ -115,10 +116,18 @@ def membership_dict(membership, audience='member'):
     receive global platform-admin or email-verification attributes.
     """
     user = None
-    if membership.user:
-        user = {'id': membership.user.supabase_user_id, 'display_name': membership.user.display_name}
+    member_user = getattr(membership, 'user', None)
+    if member_user:
+        user = {'id': member_user.supabase_user_id, 'display_name': member_user.display_name}
         if audience == 'management':
-            user['email'] = membership.user.email
+            user['email'] = member_user.email
+    elif getattr(membership, 'user_subject', None):
+        # Phase 6 read scopes carry an immutable active-membership snapshot.
+        # It avoids a second, unconstrained membership lookup during response
+        # serialization while retaining the established wire format.
+        user = {'id': membership.user_subject, 'display_name': membership.user_display_name}
+        if audience == 'management':
+            user['email'] = membership.user_email
     result = {
         'id': membership.id,
         'band_id': membership.band_id,
@@ -135,9 +144,10 @@ def membership_dict(membership, audience='member'):
     return result
 
 
-def band_dict(band, viewer=None, include_roster=False):
-    membership = None
-    if viewer is not None:
+def band_dict(band, viewer=None, include_roster=False, membership=_UNRESOLVED_MEMBERSHIP):
+    if membership is _UNRESOLVED_MEMBERSHIP:
+        membership = None
+    if membership is None and viewer is not None:
         membership = BandMembership.query.filter_by(band_id=band.id, user_id=viewer.id).one_or_none()
     active_member = membership is not None and membership.status == ACTIVE
     response = {

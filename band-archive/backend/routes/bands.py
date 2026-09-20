@@ -71,9 +71,11 @@ def public_bands():
 @optional_auth
 def get_band_by_slug(band_slug):
     scope = read_scope_for_slug(band_slug, current_audience())
-    # ``current_app_user`` is populated only after supplied credentials have
-    # passed the shared optional-auth verifier. Visitors remain ``None``.
-    return jsonify({'band': band_dict(db.session.get(Band, scope.band_id), current_app_user(), include_roster=True)})
+    # Only the active membership embedded in the central scope is eligible
+    # for serialization. Pending/rejected/left rows must remain nonmember
+    # audiences even when this public route is authenticated.
+    return jsonify({'band': band_dict(db.session.get(Band, scope.band_id), include_roster=True,
+                                      membership=scope.membership)})
 
 
 @bands_bp.post('/band-creation-requests')

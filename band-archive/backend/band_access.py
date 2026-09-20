@@ -41,7 +41,12 @@ class MembershipAudience:
     """Immutable active membership snapshot attached to a band read scope."""
 
     id: int
+    band_id: int
     role: str
+    status: str
+    user_subject: str
+    user_display_name: str | None
+    user_email: str
 
 
 @dataclass(frozen=True)
@@ -133,7 +138,15 @@ def _membership_for(band, audience):
     ).one_or_none()
     if membership is None:
         return None
-    return MembershipAudience(id=membership.id, role=membership.role)
+    return MembershipAudience(
+        id=membership.id,
+        band_id=membership.band_id,
+        role=membership.role,
+        status=membership.status,
+        user_subject=membership.user.supabase_user_id,
+        user_display_name=membership.user.display_name,
+        user_email=membership.user.email,
+    )
 
 
 def read_scope_for_band(band, audience=None):

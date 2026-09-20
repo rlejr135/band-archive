@@ -54,6 +54,9 @@ def access_app():
             BandMembership(band_id=private.id, user_id=users[4].id, role='member', status='rejected'),
             BandMembership(band_id=private.id, user_id=users[5].id, role='member', status='left'),
             BandMembership(band_id=public.id, user_id=users[6].id, role='owner', status='active'),
+            BandMembership(band_id=public.id, user_id=users[3].id, role='member', status='pending'),
+            BandMembership(band_id=public.id, user_id=users[4].id, role='member', status='rejected'),
+            BandMembership(band_id=public.id, user_id=users[5].id, role='member', status='left'),
         ))
         db.session.flush()
         owner_membership = BandMembership.query.filter_by(band_id=private.id, user_id=users[0].id).one()
@@ -95,7 +98,10 @@ def test_optional_auth_treats_missing_header_as_visitor_but_never_downgrades_inv
     assert visitor.status_code == 200
     assert visitor.headers['Cache-Control'] == 'private, no-store'
     assert 'Authorization' in visitor.headers['Vary']
-    assert client.get('/api/v2/bands/by-slug/band-a').status_code == 404
+    concealed = client.get('/api/v2/bands/by-slug/band-a')
+    assert concealed.status_code == 404
+    assert concealed.headers['Cache-Control'] == 'private, no-store'
+    assert 'Authorization' in concealed.headers['Vary']
 
     valid = _token(signer)
     authenticated = client.get('/api/v2/bands/by-slug/band-a', headers=_headers(valid))
@@ -106,14 +112,40 @@ def test_optional_auth_treats_missing_header_as_visitor_but_never_downgrades_inv
 
     invalid_headers = (
         {'Authorization': 'Basic abc'},
+        {'Authorization': 'Bearer '},
         {'Authorization': 'Bearer not-a-jwt'},
         _headers(_token(signer, exp=datetime.now(timezone.utc) - timedelta(seconds=1))),
+    )
+    forged = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    invalid_headers += (
+        _headers(_token(forged)),
+        _headers(_token(signer, kid='unknown-kid')),
     )
     for headers in invalid_headers:
         response = client.get('/api/v2/bands/by-slug/band-b', headers=headers)
         assert response.status_code == 401
         assert response.headers['Cache-Control'] == 'private, no-store'
         assert 'Authorization' in response.headers['Vary']
+
+
+def test_public_band_never_serializes_nonactive_memberships(access_app, signer):
+    _install_jwks(access_app, [[_jwk(signer, 'key-1')]])
+    client = access_app.test_client()
+    for subject, email in (
+        ('44444444-4444-4444-4444-444444444444', 'pending@example.com'),
+        ('55555555-5555-5555-5555-555555555555', 'rejected@example.com'),
+        ('66666666-6666-6666-6666-666666666666', 'left@example.com'),
+    ):
+        response = client.get('/api/v2/bands/by-slug/band-b', headers=_headers(_token(
+            signer, sub=subject, email=email,
+        )))
+        assert response.status_code == 200
+        band = response.get_json()['band']
+        assert band['membership'] is None
+        assert band['can_manage'] is False
+        assert band['can_edit'] is False
+        assert band['can_delete'] is False
+        assert band['permissions']['can_manage_members'] is False
 
 
 def test_authenticated_audience_and_active_membership_roles(access_app, signer):
@@ -157,6 +189,11 @@ def test_visible_query_and_scoped_lookup_are_tenant_bound_and_hide_cross_band_ob
             visitor_scope = read_scope_for_slug('band-b', current_audience())
             titles = [item.title for item in visible_query(Song.query, Song, visitor_scope).all()]
             assert titles == ['B public']
+            # A public child cannot make a private parent visible to visitors.
+            assert visible_query(Song.query, Song, visitor_scope, parent_visibility='MEMBERS').count() == 0
+            with pytest.raises(NotFoundError):
+                visible_object_or_404(Song, Song.query.filter_by(title='B public').one().id,
+                                      visitor_scope, parent_visibility='MEMBERS')
 
         member_token = _token(signer, sub='33333333-3333-3333-3333-333333333333', email='member@example.com')
         with access_app.test_request_context(headers=_headers(member_token)):
@@ -199,6 +236,9 @@ def test_content_capabilities_and_effective_visibility_are_server_computed(acces
     assert content_capabilities(member_scope, SimpleNamespace(created_by_membership_id=None)) == {
         'can_edit': False, 'can_delete': False, 'can_manage': False,
     }
+    assert content_capabilities(member_scope, SimpleNamespace(
+        band_id=member_scope.band_id + 1000, created_by_membership_id=member_creator,
+    )) == {'can_edit': False, 'can_delete': False, 'can_manage': False}
 
     assert effective_visibility('PUBLIC', None, 'PUBLIC') == 'PUBLIC'
     assert effective_visibility('PUBLIC', 'MEMBERS') == 'MEMBERS'
@@ -206,3 +246,5 @@ def test_content_capabilities_and_effective_visibility_are_server_computed(acces
     with pytest.raises(ValidationError) as denied:
         require_operation_role(member_scope, {'owner', 'admin'})
     assert denied.value.status_code == 403
+    with pytest.raises(NotFoundError):
+        require_operation_role(_scope(access_app, slug='band-b'), {'owner', 'admin'})
