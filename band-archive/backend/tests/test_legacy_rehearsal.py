@@ -5,6 +5,8 @@ import json
 import re
 import sqlite3
 import shutil
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from flask_migrate import upgrade
@@ -790,6 +792,63 @@ def test_cli_report_output_probes_publication_before_rehearsal(tmp_path, monkeyp
     assert called == []
     assert not output.exists()
     assert list(tmp_path.glob(f".{output.name}.*")) == []
+
+
+def test_report_probe_collision_is_not_deleted(tmp_path, monkeypatch):
+    output = tmp_path / "retained-report.json"
+    probe = tmp_path / f".{output.name}.fixed.probe"
+    probe.write_bytes(b"other-process")
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    monkeypatch.setattr(rehearsal.uuid, "uuid4", lambda: SimpleNamespace(hex="fixed"))
+
+    with pytest.raises(FileExistsError):
+        _ReservedReportOutput(output)
+
+    assert probe.read_bytes() == b"other-process"
+    assert list(tmp_path.glob(f".{output.name}.*.tmp")) == []
+
+
+def test_report_probe_replacement_is_not_deleted(tmp_path, monkeypatch):
+    output = tmp_path / "retained-report.json"
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    real_link = rehearsal.os.link
+    replaced = []
+
+    def replace_probe(source, destination):
+        real_link(source, destination)
+        if str(destination).endswith(".probe"):
+            destination = Path(destination)
+            destination.unlink()
+            destination.write_bytes(b"other-process")
+            replaced.append(destination)
+
+    monkeypatch.setattr(rehearsal.os, "link", replace_probe)
+
+    with pytest.raises(RehearsalError, match="probe changed identity"):
+        _ReservedReportOutput(output)
+
+    assert len(replaced) == 1
+    assert replaced[0].read_bytes() == b"other-process"
+    assert list(tmp_path.glob(f".{output.name}.*.tmp")) == []
+
+
+def test_report_temp_path_replacement_is_not_deleted(tmp_path):
+    output = tmp_path / "retained-report.json"
+    reservation = _ReservedReportOutput(output)
+    visible_temp = reservation.temporary
+    assert visible_temp is not None
+    # Windows prevents pathname replacement while the mkstemp handle is open;
+    # close only that handle to model replacement immediately before cleanup.
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    rehearsal.os.close(reservation.descriptor)
+    reservation.descriptor = -1
+    visible_temp.unlink()
+    visible_temp.write_bytes(b"other-process")
+
+    reservation.abort()
+
+    assert visible_temp.read_bytes() == b"other-process"
+    assert not output.exists()
 
 
 def test_cli_report_output_cleans_reservation_when_rehearsal_fails(tmp_path, monkeypatch):

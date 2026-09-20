@@ -118,6 +118,29 @@ def _report_destination(path: Path) -> Path:
     return destination
 
 
+def _file_identity(stat_result: os.stat_result) -> tuple[int, int]:
+    """Return the cross-platform identity fields used by os.path.samefile."""
+    return stat_result.st_dev, stat_result.st_ino
+
+
+def _path_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        return _file_identity(os.stat(path, follow_symlinks=False))
+    except FileNotFoundError:
+        return None
+
+
+def _unlink_owned_path(path: Path, identity: tuple[int, int]) -> bool:
+    """Unlink only the exact inode/file-id created by this process."""
+    current = _path_identity(path)
+    if current is None:
+        return True
+    if current != identity:
+        return False
+    path.unlink()
+    return True
+
+
 class _ReservedReportOutput:
     """Probe report publication before migration and publish before commit."""
 
@@ -125,6 +148,7 @@ class _ReservedReportOutput:
         self.destination = _report_destination(path)
         self.descriptor = -1
         self.temporary: Path | None = None
+        self._temporary_identity: tuple[int, int] | None = None
         self.published = False
         self.retained = False
         self.sha256: str | None = None
@@ -138,7 +162,11 @@ class _ReservedReportOutput:
             )
             self.descriptor = descriptor
             self.temporary = Path(temporary_name)
-            os.chmod(self.temporary, 0o600)
+            self._temporary_identity = _file_identity(os.fstat(self.descriptor))
+            if _path_identity(self.temporary) != self._temporary_identity:
+                raise RehearsalError("report output temporary identity changed")
+            if hasattr(os, "fchmod"):
+                os.fchmod(self.descriptor, 0o600)
             os.fsync(self.descriptor)
 
             # Exercise the same-directory exclusive hard-link publication
@@ -146,14 +174,15 @@ class _ReservedReportOutput:
             # remains absent; a later race is rejected by the final os.link.
             probe = self.destination.parent / f".{self.destination.name}.{uuid.uuid4().hex}.probe"
             os.link(self.temporary, probe)
-            if not os.path.samefile(self.temporary, probe):
+            if _path_identity(probe) != self._temporary_identity:
                 raise RehearsalError("report output publication probe changed identity")
-            probe.unlink()
+            if not _unlink_owned_path(probe, self._temporary_identity):
+                raise RehearsalError("report output publication probe was replaced")
             probe = None
         except Exception:
-            if probe is not None:
+            if probe is not None and self._temporary_identity is not None:
                 try:
-                    probe.unlink(missing_ok=True)
+                    _unlink_owned_path(probe, self._temporary_identity)
                 except OSError:
                     pass
             self.abort()
@@ -161,27 +190,31 @@ class _ReservedReportOutput:
 
     def publish(self, report: dict[str, Any]) -> str:
         """Durably publish once; callers invoke this before DB commit."""
-        if self.published or self.descriptor < 0 or self.temporary is None:
+        if (self.published or self.descriptor < 0 or self.temporary is None
+                or self._temporary_identity is None):
             raise RehearsalError("report output reservation is no longer writable")
         payload = _report_payload(report)
         try:
+            if _path_identity(self.temporary) != self._temporary_identity:
+                raise RehearsalError("report output temporary identity changed")
             with os.fdopen(self.descriptor, "wb") as stream:
                 self.descriptor = -1
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
+            if _path_identity(self.temporary) != self._temporary_identity:
+                raise RehearsalError("report output temporary identity changed")
             # Hard links are exclusive and atomic: an existing/racing
             # destination is never replaced.
-            temporary_stat = os.stat(self.temporary, follow_symlinks=False)
-            self._published_identity = (temporary_stat.st_dev, temporary_stat.st_ino)
+            self._published_identity = self._temporary_identity
             os.link(self.temporary, self.destination)
             self._destination_linked = True
-            published_stat = os.stat(self.destination, follow_symlinks=False)
-            if (published_stat.st_dev, published_stat.st_ino) != self._published_identity:
+            if _path_identity(self.destination) != self._published_identity:
                 raise RehearsalError("published report identity changed")
             self.published = True
             self.sha256 = hashlib.sha256(payload).hexdigest()
-            self.temporary.unlink()
+            if not _unlink_owned_path(self.temporary, self._temporary_identity):
+                raise RehearsalError("report output temporary was replaced")
             self.temporary = None
             return self.sha256
         except Exception:
@@ -200,14 +233,12 @@ class _ReservedReportOutput:
             self.descriptor = -1
         if self._destination_linked and self._published_identity is not None and os.path.lexists(self.destination):
             try:
-                destination_stat = os.stat(self.destination, follow_symlinks=False)
-                if (destination_stat.st_dev, destination_stat.st_ino) == self._published_identity:
-                    self.destination.unlink()
+                _unlink_owned_path(self.destination, self._published_identity)
             except OSError:
                 pass
-        if self.temporary is not None:
+        if self.temporary is not None and self._temporary_identity is not None:
             try:
-                self.temporary.unlink(missing_ok=True)
+                _unlink_owned_path(self.temporary, self._temporary_identity)
             except OSError:
                 pass
             self.temporary = None
