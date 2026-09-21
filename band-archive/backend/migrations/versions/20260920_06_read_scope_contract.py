@@ -7,6 +7,8 @@ Revises: 20260916_05
 from alembic import context, op
 import sqlalchemy as sa
 
+from tenant_backfill import TenantBackfillError, validate_relationships
+
 
 revision = '20260920_06'
 down_revision = '20260916_05'
@@ -67,27 +69,18 @@ def _contract_defects(connection):
         if row_id is not None:
             defects.append(f'{table}.visibility is NULL or invalid (id={row_id})')
 
-    relationships = (
-        ('media/song', 'SELECT m.id FROM media m JOIN song s ON s.id = m.song_id '
-         'WHERE m.band_id != s.band_id LIMIT 1'),
-        ('media/rehearsal', 'SELECT m.id FROM media m JOIN rehearsal r ON r.id = m.rehearsal_id '
-         'WHERE m.rehearsal_id IS NOT NULL AND m.band_id != r.band_id LIMIT 1'),
-        ('personal_log/member', 'SELECT p.id FROM personal_log p JOIN member m ON m.id = p.member_id '
-         'WHERE p.band_id != m.band_id LIMIT 1'),
-        ('rehearsal/song', 'SELECT rs.rehearsal_id FROM rehearsal_songs rs '
-         'JOIN rehearsal r ON r.id = rs.rehearsal_id JOIN song s ON s.id = rs.song_id '
-         'WHERE r.band_id != s.band_id LIMIT 1'),
-        ('comment/media', 'SELECT c.id FROM comment c JOIN media m ON m.id = c.media_id '
-         'WHERE c.media_id IS NOT NULL AND c.band_id != m.band_id LIMIT 1'),
-        ('comment/personal_log', 'SELECT c.id FROM comment c JOIN personal_log p ON p.id = c.personal_log_id '
-         'WHERE c.personal_log_id IS NOT NULL AND c.band_id != p.band_id LIMIT 1'),
-        ('comment/parent', 'SELECT c.id FROM comment c JOIN comment p ON p.id = c.parent_id '
-         'WHERE c.parent_id IS NOT NULL AND c.band_id != p.band_id LIMIT 1'),
-    )
-    for label, statement in relationships:
-        row_id = connection.execute(sa.text(statement)).scalar_one_or_none()
-        if row_id is not None:
-            defects.append(f'{label} crosses tenant scope (id={row_id})')
+    # Phase 6 deliberately reuses the Phase 4 relationship contract.  This
+    # keeps every denormalized tenant scope (including creator memberships and
+    # recursive comment scope) governed by one fail-closed definition.
+    try:
+        relationship_defects, _ = validate_relationships(connection, -1)
+    except TenantBackfillError as error:
+        defects.append(f'comment scope is invalid ({error})')
+    else:
+        for defect in relationship_defects:
+            defects.append(
+                f"{defect['relationship']} crosses tenant scope (ids={defect['ids']})"
+            )
 
     duplicate = connection.execute(sa.text(
         'SELECT band_id FROM announcement GROUP BY band_id HAVING count(*) > 1 LIMIT 1'

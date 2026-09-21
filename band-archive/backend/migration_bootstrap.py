@@ -836,12 +836,13 @@ def _partial_index_differences(connection, metadata):
         actual = {(row[0], row[1]): _canonical_postgres_partial_predicate(row[2]) for row in rows}
         return [f'{table}.{name} partial predicate is missing or invalid'
                 for table, name, predicate in expected
-                if _canonical_postgres_partial_predicate(predicate) != actual.get((table, name))]
+                if (_canonical_postgres_partial_predicate(predicate) is None
+                    or _canonical_postgres_partial_predicate(predicate) != actual.get((table, name)))]
     return ['partial index predicates cannot be verified for this database dialect']
 
 
 def _canonical_postgres_partial_predicate(value):
-    """Parse the deliberately tiny predicate language used by revision 04.
+    """Parse the deliberately tiny predicate language used by revisions 04/06.
 
     PostgreSQL's ``pg_get_expr`` adds parentheses and ``::text`` casts, whose
     formatting changes by server version.  Do not use a loose substring test:
@@ -851,7 +852,14 @@ def _canonical_postgres_partial_predicate(value):
     """
     if not isinstance(value, str):
         return None
-    expression = value.strip().casefold()
+    expression = _strip_sql_parentheses(value.strip().casefold())
+    # The featured-gallery uniqueness contract intentionally uses ``IS TRUE``
+    # rather than bare boolean truthiness.  PostgreSQL preserves this shape in
+    # pg_get_expr (modulo outer parentheses), so accept exactly that form and
+    # reject equivalent-looking but weaker predicates such as ``is_featured``
+    # or ``IS NOT FALSE``.
+    if re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?is_featured\s+is\s+true', expression):
+        return ('is_featured', 'is_true')
     atoms = _split_postgres_predicate_and(expression)
     if not atoms:
         return None

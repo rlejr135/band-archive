@@ -678,12 +678,16 @@ def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_functio
         ("(((role))::text = (('owner')::text)) AND (((status)::text) = ('active'::text))",
          frozenset({('role', 'owner'), ('status', 'active')})),
         ("((status)::text='pending'::text)", frozenset({('status', 'pending')})),
+        ("(((gallery_image.is_featured IS TRUE)))", ('is_featured', 'is_true')),
         ("(role = 'owner')", None),
         ("(role = 'owner') OR (status = 'active')", None),
         ("(role = 'owner') AND (status = 'rejected')", None),
         ("(role)::varchar = 'owner'::varchar", None),
         ("(role)::text = 'owner'::text AND (status)::text = 'pending'::text", None),
         ("(status = CURRENT_SETTING('role'))", None),
+        ("is_featured", None),
+        ("is_featured IS NOT FALSE", None),
+        ("is_featured = TRUE", None),
     ],
 )
 def test_postgres_partial_predicate_parser_is_semantic_and_fail_closed(expression, expected):
@@ -695,10 +699,11 @@ class _PostgresIndexesConnection:
 
     dialect = type('Dialect', (), {'name': 'postgresql'})()
 
-    def __init__(self, owner_predicate, request_predicate):
+    def __init__(self, owner_predicate, request_predicate, gallery_predicate='(is_featured IS TRUE)'):
         self.rows = [
             ('band_membership', 'uq_band_membership_active_owner', owner_predicate),
             ('band_creation_request', 'uq_band_creation_request_pending_user_slug', request_predicate),
+            ('gallery_image', 'uq_gallery_image_featured_band', gallery_predicate),
         ]
 
     def execute(self, statement):
@@ -728,6 +733,33 @@ def test_postgres_pg_indexes_predicates_are_verified_semantically(
                 _PostgresIndexesConnection(owner_predicate, request_predicate), db.metadata,
             )
         assert bool(differences) is not valid
+    finally:
+        _dispose(app)
+
+
+@pytest.mark.parametrize(
+    ('gallery_predicate', 'valid'),
+    [
+        ('((is_featured IS TRUE))', True),
+        (None, False),
+        ('is_featured', False),
+        ('is_featured IS NOT FALSE', False),
+        ('is_featured = TRUE', False),
+    ],
+)
+def test_postgres_featured_gallery_partial_index_predicate_is_exact(
+        tmp_path, gallery_predicate, valid):
+    app = _migration_app(tmp_path / 'postgres-gallery-predicate.db')
+    try:
+        with app.app_context():
+            connection = _PostgresIndexesConnection(
+                "((role)::text = 'owner'::text) AND ((status)::text = 'active'::text)",
+                "((status)::text = 'pending'::text)",
+                gallery_predicate,
+            )
+            differences = _partial_index_differences(connection, db.metadata)
+        gallery_differences = [item for item in differences if item.startswith('gallery_image.')]
+        assert bool(gallery_differences) is not valid
     finally:
         _dispose(app)
 

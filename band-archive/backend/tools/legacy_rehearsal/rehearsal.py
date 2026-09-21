@@ -1351,12 +1351,14 @@ def _assert_target_ready(engine: Engine, identity: dict[str, str]) -> None:
         # ownerless import band and its validated marker; neither is imported
         # user data and both are required for the target schema itself.
         if set(nonempty) == {'band', 'tenant_backfill_state'}:
-            state = connection.execute(text(
-                "SELECT status FROM tenant_backfill_state WHERE key = 'phase4_tenant_scope'"
-            )).scalar_one_or_none()
-            legacy_bands = _scalar(connection,
+            marker_rows = connection.execute(text(
+                'SELECT key, status FROM tenant_backfill_state'
+            )).all()
+            approved_bands = _scalar(connection,
                 'SELECT count(*) FROM band WHERE is_legacy_import = 1 AND created_by_user_id IS NULL')
-            if state == 'validated' and legacy_bands == 1:
+            if (nonempty['band'] == 1 and nonempty['tenant_backfill_state'] == 1
+                    and approved_bands == 1
+                    and marker_rows == [('phase4_tenant_scope', 'validated')]):
                 return
         if nonempty:
             raise RehearsalError("target must be empty; this tool refuses repeats/nonempty databases")
@@ -1371,8 +1373,15 @@ def _copy_rows(source: Connection, target: Connection) -> dict[str, int]:
     # import-band bootstrap.  Replace those control rows inside this import
     # transaction so source/target reconciliation remains byte-for-byte about
     # the imported archive, while a later failure rolls them back as well.
-    target.execute(text('DELETE FROM tenant_backfill_state'))
-    target.execute(text('DELETE FROM band'))
+    deleted_marker = target.execute(text(
+        "DELETE FROM tenant_backfill_state "
+        "WHERE key = 'phase4_tenant_scope' AND status = 'validated'"
+    ))
+    deleted_band = target.execute(text(
+        'DELETE FROM band WHERE is_legacy_import = 1 AND created_by_user_id IS NULL'
+    ))
+    if deleted_marker.rowcount != 1 or deleted_band.rowcount != 1:
+        raise RehearsalError('target bootstrap rows changed before copy')
     inserted = {}
     for source_table in _ordered_tables(source_metadata):
         name = source_table.name

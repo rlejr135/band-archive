@@ -513,6 +513,46 @@ def test_rehearsal_preserves_fixture_relationships_and_refuses_repeat(tmp_path):
                       sqlite_test_target_path=str(target))
 
 
+def test_rehearsal_refuses_extra_nonlegacy_band_without_mutating_bootstrap_rows(tmp_path):
+    source, target = tmp_path / 'source.sqlite', tmp_path / 'target.sqlite'
+    _legacy_fixture(source)
+    _upgrade(target)
+    engine = create_engine(_url(target))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO band (name, slug, default_visibility, member_roster_public, storage_quota_bytes, "
+                "is_legacy_import, created_at, updated_at) "
+                "VALUES ('nonlegacy', 'nonlegacy-bootstrap-check', 'PUBLIC', 1, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+        with engine.connect() as connection:
+            before_bands = connection.execute(text(
+                'SELECT id, slug, is_legacy_import, created_by_user_id FROM band ORDER BY id'
+            )).all()
+            before_marker = connection.execute(text(
+                'SELECT key, status FROM tenant_backfill_state ORDER BY key'
+            )).all()
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RehearsalError, match='target must be empty'):
+        run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
+
+    engine = create_engine(_url(target))
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text(
+                'SELECT id, slug, is_legacy_import, created_by_user_id FROM band ORDER BY id'
+            )).all() == before_bands
+            assert connection.execute(text(
+                'SELECT key, status FROM tenant_backfill_state ORDER BY key'
+            )).all() == before_marker
+            assert connection.execute(text('SELECT count(*) FROM song')).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
 def test_rehearsal_rolls_back_a_post_import_reconciliation_failure(tmp_path, monkeypatch):
     source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
     _legacy_fixture(source)

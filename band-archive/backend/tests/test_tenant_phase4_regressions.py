@@ -299,6 +299,7 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
         ('song vote', 'UPDATE song_vote SET band_id = :other WHERE id = :id', 'song_vote/song'),
         ('media vote', 'UPDATE media_vote SET band_id = :other WHERE id = :id', 'media_vote/media'),
         ('upload target', 'UPDATE multipart_upload_session SET band_id = :other WHERE id = :id', 'session/song'),
+        ('upload rehearsal', 'UPDATE multipart_upload_session SET band_id = :other WHERE id = :id', 'session/rehearsal'),
     ],
 )
 def test_relationship_validator_rejects_cross_band_targets(tmp_path, label, statement, expected):
@@ -319,7 +320,7 @@ def test_relationship_validator_rejects_cross_band_targets(tmp_path, label, stat
             media_vote = MediaVote(media_id=media.id, voter_hash='media-voter', value=1)
             session = MultipartUploadSession(
                 r2_upload_id='upload', object_key='media/clip.mp4', original_filename='clip.mp4',
-                content_type='video/mp4', declared_bytes=1, song_id=song.id,
+                content_type='video/mp4', declared_bytes=1, song_id=song.id, rehearsal_id=rehearsal.id,
             )
             db.session.add_all((vote, media_vote, session))
             db.session.commit()
@@ -329,6 +330,7 @@ def test_relationship_validator_rejects_cross_band_targets(tmp_path, label, stat
             target_id = {
                 'media/song': media.id, 'log/member': log.id, 'rehearsal/song': rehearsal.id,
                 'song vote': vote.id, 'media vote': media_vote.id, 'upload target': session.id,
+                'upload rehearsal': session.id,
             }[label]
             db.session.execute(text(statement), {'other': other.id, 'id': target_id})
             db.session.commit()

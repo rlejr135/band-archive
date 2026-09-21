@@ -153,31 +153,35 @@ def _object_manifest(connection):
     return updates, unresolved
 
 
+SCOPE_RELATIONSHIP_CHECKS = (
+    ('media/song', 'SELECT m.id FROM media m JOIN song s ON s.id=m.song_id '
+     'WHERE m.band_id != s.band_id'),
+    ('media/rehearsal', 'SELECT m.id FROM media m JOIN rehearsal r ON r.id=m.rehearsal_id '
+     'WHERE m.rehearsal_id IS NOT NULL AND m.band_id != r.band_id'),
+    ('personal_log/member', 'SELECT p.id FROM personal_log p JOIN member m ON m.id=p.member_id '
+     'WHERE p.band_id != m.band_id'),
+    ('session/song', 'SELECT x.id FROM multipart_upload_session x JOIN song s ON s.id=x.song_id '
+     'WHERE x.band_id != s.band_id'),
+    ('session/rehearsal', 'SELECT x.id FROM multipart_upload_session x JOIN rehearsal r ON r.id=x.rehearsal_id '
+     'WHERE x.rehearsal_id IS NOT NULL AND x.band_id != r.band_id'),
+    ('session/member', 'SELECT x.id FROM personal_log_multipart_upload_session x JOIN member m ON m.id=x.member_id '
+     'WHERE x.band_id != m.band_id'),
+    ('rehearsal/song', 'SELECT rs.rehearsal_id FROM rehearsal_songs rs JOIN rehearsal r ON r.id=rs.rehearsal_id '
+     'JOIN song s ON s.id=rs.song_id WHERE r.band_id != s.band_id'),
+    ('song_vote/song', 'SELECT v.id FROM song_vote v JOIN song s ON s.id=v.song_id '
+     'WHERE v.band_id != s.band_id'),
+    ('media_vote/media', 'SELECT v.id FROM media_vote v JOIN media m ON m.id=v.media_id '
+     'WHERE v.band_id != m.band_id'),
+    ('upload/media', 'SELECT x.id FROM multipart_upload_session x JOIN media m ON m.id=x.media_id '
+     'WHERE x.media_id IS NOT NULL AND x.band_id != m.band_id'),
+    ('upload/log', 'SELECT x.id FROM personal_log_multipart_upload_session x JOIN personal_log p ON p.id=x.personal_log_id '
+     'WHERE x.personal_log_id IS NOT NULL AND x.band_id != p.band_id'),
+)
+
+
 def _validate_relationships(connection, band_id):
     defects = []
-    checks = (
-        ('media/song', 'SELECT m.id FROM media m JOIN song s ON s.id=m.song_id '
-         'WHERE m.band_id != s.band_id'),
-        ('media/rehearsal', 'SELECT m.id FROM media m JOIN rehearsal r ON r.id=m.rehearsal_id '
-         'WHERE m.rehearsal_id IS NOT NULL AND m.band_id != r.band_id'),
-        ('personal_log/member', 'SELECT p.id FROM personal_log p JOIN member m ON m.id=p.member_id '
-         'WHERE p.band_id != m.band_id'),
-        ('session/song', 'SELECT x.id FROM multipart_upload_session x JOIN song s ON s.id=x.song_id '
-         'WHERE x.band_id != s.band_id'),
-        ('session/member', 'SELECT x.id FROM personal_log_multipart_upload_session x JOIN member m ON m.id=x.member_id '
-         'WHERE x.band_id != m.band_id'),
-        ('rehearsal/song', 'SELECT rs.rehearsal_id FROM rehearsal_songs rs JOIN rehearsal r ON r.id=rs.rehearsal_id '
-         'JOIN song s ON s.id=rs.song_id WHERE r.band_id != s.band_id'),
-        ('song_vote/song', 'SELECT v.id FROM song_vote v JOIN song s ON s.id=v.song_id '
-         'WHERE v.band_id != s.band_id'),
-        ('media_vote/media', 'SELECT v.id FROM media_vote v JOIN media m ON m.id=v.media_id '
-         'WHERE v.band_id != m.band_id'),
-        ('upload/media', 'SELECT x.id FROM multipart_upload_session x JOIN media m ON m.id=x.media_id '
-         'WHERE x.media_id IS NOT NULL AND x.band_id != m.band_id'),
-        ('upload/log', 'SELECT x.id FROM personal_log_multipart_upload_session x JOIN personal_log p ON p.id=x.personal_log_id '
-         'WHERE x.personal_log_id IS NOT NULL AND x.band_id != p.band_id'),
-    )
-    for label, statement in checks:
+    for label, statement in SCOPE_RELATIONSHIP_CHECKS:
         ids = connection.execute(text(statement)).scalars().all()
         if ids:
             defects.append({'relationship': label, 'ids': ids[:20]})
@@ -223,6 +227,11 @@ def _validate_relationships(connection, band_id):
     for comment_id in comments:
         scope(comment_id)
     return defects, resolved
+
+
+def validate_relationships(connection, band_id):
+    """Public Phase 4/6 tenant-scope relationship contract."""
+    return _validate_relationships(connection, band_id)
 
 
 def plan(connection):
