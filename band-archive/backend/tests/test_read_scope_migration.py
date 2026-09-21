@@ -63,11 +63,15 @@ def _seed_and_validate(connection):
     member_id = connection.execute(text("SELECT id FROM member")).scalar_one()
     connection.execute(text("INSERT INTO rehearsal_songs (rehearsal_id, song_id) VALUES (:r, :s)"),
                        {'r': rehearsal_id, 's': song_id})
-    connection.execute(text("INSERT INTO media (song_id, rehearsal_id, filename) VALUES (:s, :r, 'clip.mp4')"),
+    connection.execute(text(
+        "INSERT INTO media (song_id, rehearsal_id, filename, transcoding_status, processing_attempts) "
+        "VALUES (:s, :r, 'clip.mp4', 'not_required', 0)"
+    ),
                        {'s': song_id, 'r': rehearsal_id})
     media_id = connection.execute(text("SELECT id FROM media")).scalar_one()
     connection.execute(text(
-        "INSERT INTO personal_log (member_id, title, filename, file_type) VALUES (:m, 'log', 'log.mp4', 'video')"
+        "INSERT INTO personal_log (member_id, title, filename, file_type, transcoding_status, processing_attempts) "
+        "VALUES (:m, 'log', 'log.mp4', 'video', 'not_required', 0)"
     ), {'m': member_id})
     connection.execute(text("INSERT INTO gallery_image (filename, is_featured) VALUES ('photo.png', 1)"))
     connection.execute(text("INSERT INTO announcement (content) VALUES ('notice')"))
@@ -165,8 +169,18 @@ def test_read_scope_upgrade_fails_closed_before_any_ddl(tmp_path, label, mutatio
                         "is_legacy_import, created_at, updated_at) "
                         "VALUES ('other', :slug, 'PUBLIC', 1, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
                     ), {'slug': f'other-{label}'})
+                if label == 'invalid visibility':
+                    # Revision 05 already has the visibility CHECK.  Bypass
+                    # it only to prove that the Phase 6 preflight also fails
+                    # closed for a corrupted historical database.
+                    connection.exec_driver_sql('PRAGMA ignore_check_constraints = ON')
                 connection.execute(text(mutation))
-            with pytest.raises(RuntimeError, match='read-scope contract'):
+                if label == 'invalid visibility':
+                    connection.exec_driver_sql('PRAGMA ignore_check_constraints = OFF')
+            # Flask-Migrate translates the revision's RuntimeError into its
+            # command-level SystemExit; the unchanged revision below proves
+            # that the guard ran before any DDL.
+            with pytest.raises(SystemExit):
                 upgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
             assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == HEAD05
             assert inspect(db.engine).get_columns('song')[

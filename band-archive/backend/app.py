@@ -10,7 +10,8 @@ from extensions import db
 from errors import register_error_handlers
 from storage import storage
 from migration_bootstrap import (
-    MIGRATIONS_DIRECTORY, baseline_metadata, migration_head_revision, schema_contract_differences,
+    MIGRATIONS_DIRECTORY, PHASE4_REVISION, baseline_metadata, migration_head_revision, phase4_metadata,
+    schema_contract_differences,
 )
 from routes.songs import songs_bp
 from routes.dashboard import dashboard_bp
@@ -75,6 +76,12 @@ def _phase4_orm_schema_ready(app):
         if 'alembic_version' not in tables or 'tenant_backfill_state' not in tables:
             return False
         versions = connection.execute(text('SELECT version_num FROM alembic_version')).scalars().all()
+        # v05 deliberately leaves scope columns nullable while its offline
+        # backfill is pending.  Legacy GETs remain available at that exact
+        # schema, while writes and all v2 tenant endpoints stay gated until
+        # the Phase 6 head contract has been applied.
+        if versions == [PHASE4_REVISION]:
+            return not schema_contract_differences(connection, metadata=phase4_metadata())
         return versions == [migration_head_revision()] and not schema_contract_differences(connection)
 
 

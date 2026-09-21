@@ -199,9 +199,9 @@ def _audit_events_are_append_only(mapper, connection, target):
 
 class Song(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     title = db.Column(db.String(100), nullable=False)
     artist = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(20), default='Practice')  # Practice, Completed, OnHold
@@ -221,7 +221,10 @@ class Song(db.Model):
 
     votes = db.relationship('SongVote', backref='song', lazy=True,
                             cascade='all, delete-orphan')
-    __table_args__ = (db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_song_visibility'),)
+    __table_args__ = (
+        db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_song_visibility'),
+        db.Index('ix_song_band_visibility_id', 'band_id', 'visibility', 'id'),
+    )
 
     def to_dict(self, media_viewer_votes=None):
         media_viewer_votes = media_viewer_votes or {}
@@ -250,7 +253,7 @@ class Song(db.Model):
 class SongVote(db.Model):
     """One privacy-preserving vote per song and browser/device identity."""
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
     is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     song_id = db.Column(db.Integer, db.ForeignKey('song.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -268,9 +271,9 @@ class SongVote(db.Model):
 
 class Media(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)
     rehearsal_id = db.Column(db.Integer, db.ForeignKey('rehearsal.id'), nullable=True)
     filename = db.Column(db.String(200), nullable=False)
@@ -311,7 +314,11 @@ class Media(db.Model):
                                foreign_keys='Comment.media_id')
     votes = db.relationship('MediaVote', backref='media', lazy=True,
                             cascade='all, delete-orphan')
-    __table_args__ = (db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_media_visibility'),)
+    __table_args__ = (
+        db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_media_visibility'),
+        db.Index('ix_media_band_song_visibility_score_id', 'band_id', 'song_id', 'visibility', 'vote_score', 'id'),
+        db.Index('ix_media_band_rehearsal_visibility_score_id', 'band_id', 'rehearsal_id', 'visibility', 'vote_score', 'id'),
+    )
 
     def to_dict(self, viewer_vote=0):
         from media_processing import processing_fields
@@ -350,7 +357,7 @@ class Media(db.Model):
 class MediaVote(db.Model):
     """One privacy-preserving vote per media item and browser/device identity."""
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
     is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     media_id = db.Column(db.Integer, db.ForeignKey('media.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -369,7 +376,7 @@ class MediaVote(db.Model):
 class MultipartUploadSession(db.Model):
     """Server-owned authorization boundary for one R2 multipart media upload."""
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
     # Existing multipart upload ids address legacy object keys and cannot be
     # safely resumed under a future tenant prefix without an R2-side copy.
@@ -410,9 +417,9 @@ class MultipartUploadPart(db.Model):
 
 class SongSuggestion(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     title = db.Column(db.String(100), nullable=False)
     artist = db.Column(db.String(100), nullable=False)
     link = db.Column(db.String(500), nullable=False)
@@ -437,7 +444,7 @@ class SongSuggestion(db.Model):
 
 class Member(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     linked_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True, index=True)
     name = db.Column(db.String(100), nullable=False)
     instrument = db.Column(db.String(100), nullable=False)
@@ -454,9 +461,9 @@ class Member(db.Model):
 
 class PersonalLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     filename = db.Column(db.String(200), nullable=False)
@@ -477,7 +484,11 @@ class PersonalLog(db.Model):
     member = db.relationship('Member', backref=db.backref('personal_logs', lazy=True, cascade='all, delete-orphan'))
     comments = db.relationship('Comment', backref='personal_log', lazy=True, cascade='all, delete-orphan',
                                foreign_keys='Comment.personal_log_id')
-    __table_args__ = (db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_personal_log_visibility'),)
+    __table_args__ = (
+        db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_personal_log_visibility'),
+        db.Index('ix_personal_log_band_member_visibility_created_id',
+                 'band_id', 'member_id', 'visibility', 'created_at', 'id'),
+    )
 
     def to_dict(self):
         from media_processing import processing_fields
@@ -499,7 +510,7 @@ class PersonalLog(db.Model):
 class PersonalLogMultipartUploadSession(db.Model):
     """Server-owned multipart session for a member's personal log."""
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True)
     is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     r2_upload_id = db.Column(db.String(200), nullable=False)
@@ -541,9 +552,9 @@ rehearsal_songs = db.Table('rehearsal_songs',
 
 class Rehearsal(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     title = db.Column(db.String(200), nullable=False)
     date = db.Column(db.Date, nullable=False)
     start_date = db.Column(db.Date, nullable=True)
@@ -559,7 +570,10 @@ class Rehearsal(db.Model):
                            onupdate=lambda: datetime.now(timezone.utc))
 
     songs = db.relationship('Song', secondary=rehearsal_songs, backref='rehearsals', lazy=True)
-    __table_args__ = (db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_rehearsal_visibility'),)
+    __table_args__ = (
+        db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_rehearsal_visibility'),
+        db.Index('ix_rehearsal_band_visibility_date_id', 'band_id', 'visibility', 'date', 'id'),
+    )
 
     def to_dict(self):
         return {
@@ -583,13 +597,16 @@ class Rehearsal(db.Model):
 
 class Announcement(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     content = db.Column(db.Text, nullable=False)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc))
-    __table_args__ = (db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_announcement_visibility'),)
+    __table_args__ = (
+        db.UniqueConstraint('band_id', name='uq_announcement_band'),
+        db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_announcement_visibility'),
+    )
 
     def to_dict(self):
         return {
@@ -601,16 +618,21 @@ class Announcement(db.Model):
 
 class GalleryImage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
-    visibility = db.Column(db.String(20), nullable=True, default='PUBLIC', server_default='PUBLIC')
+    visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     filename = db.Column(db.String(200), nullable=False)
     object_key = db.Column(db.String(500), nullable=True)
     original_filename = db.Column(db.String(200), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
     is_featured = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    __table_args__ = (db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_gallery_image_visibility'),)
+    __table_args__ = (
+        db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_gallery_image_visibility'),
+        db.Index('uq_gallery_image_featured_band', 'band_id', unique=True,
+                 sqlite_where=db.text('is_featured IS TRUE'), postgresql_where=db.text('is_featured IS TRUE')),
+        db.Index('ix_gallery_image_band_visibility_created_id', 'band_id', 'visibility', 'created_at', 'id'),
+    )
 
     def to_dict(self):
         from storage import storage
@@ -627,7 +649,7 @@ class GalleryImage(db.Model):
 class Comment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     # Denormalized scope is filled from media, personal log, or parent comment.
-    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=True, index=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
     is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)
@@ -644,6 +666,13 @@ class Comment(db.Model):
 
     replies = db.relationship('Comment', backref=db.backref('parent', remote_side='Comment.id'),
                               cascade='all, delete-orphan', lazy=True)
+
+    __table_args__ = (
+        db.Index('ix_comment_band_media_parent_created_id',
+                 'band_id', 'media_id', 'parent_id', 'created_at', 'id'),
+        db.Index('ix_comment_band_personal_log_parent_created_id',
+                 'band_id', 'personal_log_id', 'parent_id', 'created_at', 'id'),
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

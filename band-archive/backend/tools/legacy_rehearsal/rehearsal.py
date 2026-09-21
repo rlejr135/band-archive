@@ -57,7 +57,7 @@ _AUDIT_TRIGGER_SQL = {
     "audit_event_no_update": "create trigger audit_event_no_update before update on audit_event begin select raise(abort, 'audit_event is append-only'); end",
     "audit_event_no_delete": "create trigger audit_event_no_delete before delete on audit_event begin select raise(abort, 'audit_event is append-only'); end",
 }
-_AUDIT_TRIGGER_REVISIONS = {"20260916_04", "20260916_05"}
+_AUDIT_TRIGGER_REVISIONS = {"20260916_04", "20260916_05", "20260920_06"}
 _OBJECT_FIELDS = (
     ("song", "id", "band_id", "sheet_music_object_key", "sheet_music", "media", None, "sheet_music"),
     ("media", "id", "band_id", "object_key", "filename", "media", "file_size", "original"),
@@ -920,9 +920,12 @@ def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str
                 # constraints and revision-specific triggers before Alembic is
                 # allowed to touch a known stamped source.
                 assert_upgrade_preflight()
-            upgrade(directory=str(MIGRATIONS_DIRECTORY))
+            # The read-scope contract at v06 is intentionally blocked until
+            # this copied archive has a validated v05 tenant backfill.
+            upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
             with db.engine.begin() as connection:
                 report = apply_tenant_backfill(connection)
+            upgrade(directory=str(MIGRATIONS_DIRECTORY))
     except Exception as error:
         # Never include driver SQL, parameters, paths, or a DB URL.
         raise RehearsalError("source copy migration/backfill failed") from error
@@ -1343,6 +1346,18 @@ def _assert_target_ready(engine: Engine, identity: dict[str, str]) -> None:
             raise RehearsalError("target must already be at the current Alembic head")
         nonempty = {table: _scalar(connection, f'SELECT count(*) FROM "{table}"') for table in tables}
         nonempty = {table: count for table, count in nonempty.items() if count}
+        # Phase 6 can only be reached after its explicit tenant-backfill
+        # gate.  An otherwise fresh target consequently contains this one
+        # ownerless import band and its validated marker; neither is imported
+        # user data and both are required for the target schema itself.
+        if set(nonempty) == {'band', 'tenant_backfill_state'}:
+            state = connection.execute(text(
+                "SELECT status FROM tenant_backfill_state WHERE key = 'phase4_tenant_scope'"
+            )).scalar_one_or_none()
+            legacy_bands = _scalar(connection,
+                'SELECT count(*) FROM band WHERE is_legacy_import = 1 AND created_by_user_id IS NULL')
+            if state == 'validated' and legacy_bands == 1:
+                return
         if nonempty:
             raise RehearsalError("target must be empty; this tool refuses repeats/nonempty databases")
 
@@ -1352,6 +1367,12 @@ def _copy_rows(source: Connection, target: Connection) -> dict[str, int]:
     target_metadata = _read_metadata(target)
     if set(source_metadata.tables) != set(target_metadata.tables):
         raise RehearsalError("source copy and target managed table sets differ")
+    # A Phase 6-ready empty target contains only the migration's required
+    # import-band bootstrap.  Replace those control rows inside this import
+    # transaction so source/target reconciliation remains byte-for-byte about
+    # the imported archive, while a later failure rolls them back as well.
+    target.execute(text('DELETE FROM tenant_backfill_state'))
+    target.execute(text('DELETE FROM band'))
     inserted = {}
     for source_table in _ordered_tables(source_metadata):
         name = source_table.name

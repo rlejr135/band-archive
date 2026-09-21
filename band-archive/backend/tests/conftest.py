@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from extensions import db as _db
 from app import create_app
 from config import TestingConfig
+from models import Band, TenantBackfillState
 from storage import storage
 
 
@@ -55,6 +56,19 @@ def app(tmp_path):
         # current-schema database rather than trying to ALTER that snapshot.
         _db.drop_all()
         _db.create_all()
+        # Current metadata now carries the post-Phase 6 NOT NULL tenant
+        # contract.  Legacy v1 route fixtures still exercise the dual-write
+        # path, so give their ORM insert hook the same isolated import band
+        # that a validated production backfill provides.
+        _db.session.add(Band(
+            name='test legacy archive', slug='test-legacy-archive',
+            default_visibility='PUBLIC', storage_quota_bytes=1,
+            is_legacy_import=True,
+        ))
+        _db.session.add(TenantBackfillState(
+            key='phase4_tenant_scope', status='validated',
+        ))
+        _db.session.commit()
         yield test_app
         _db.session.remove()
         _db.drop_all()

@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import dialect as postgresql_dialect
 
 from extensions import db
 from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
+from tenant_backfill import apply as apply_tenant_backfill
 from click.testing import CliRunner
 
 from tools.legacy_rehearsal.rehearsal import (
@@ -31,20 +32,23 @@ def _insert_lifecycle_media(path, *, pruned=False):
     engine = create_engine(_url(path))
     try:
         with engine.begin() as connection:
+            band_id = connection.execute(text(
+                'SELECT id FROM band WHERE is_legacy_import = 1'
+            )).scalar_one()
             connection.execute(text(
-                "INSERT INTO song (id,title,artist,upvote_count,downvote_count,vote_score) "
-                "VALUES (70,'Lifecycle','Artist',0,0,0)"
-            ))
+                "INSERT INTO song (id,band_id,visibility,title,artist,upvote_count,downvote_count,vote_score) "
+                "VALUES (70,:band_id,'PUBLIC','Lifecycle','Artist',0,0,0)"
+            ), {'band_id': band_id})
             connection.execute(text(
                 "INSERT INTO media ("
-                "id,song_id,filename,object_key,file_type,file_size,transcoding_status,audio_filename,"
+                "id,band_id,visibility,song_id,filename,object_key,file_type,file_size,transcoding_status,audio_filename,"
                 "audio_object_key,processing_attempts,video_720_filename,video_720_object_key,"
                 "video_720_completed_at,original_pruned_at,upvote_count,downvote_count,vote_score"
                 ") VALUES ("
-                "71,70,'한글 원본.mp4','media/한글 원본.mp4','video',999,'completed',"
+                "71,:band_id,'PUBLIC',70,'한글 원본.mp4','media/한글 원본.mp4','video',999,'completed',"
                 "'한글 음원.m4a','media/한글 음원.m4a',0,'media/한글 720.mp4',"
                 "'media/한글 720.mp4','2026-09-01',:pruned,0,0,0)"
-            ), {'pruned': '2026-09-02' if pruned else None})
+            ), {'band_id': band_id, 'pruned': '2026-09-02' if pruned else None})
     finally:
         engine.dispose()
 
@@ -57,7 +61,16 @@ def _upgrade(path, revision="head"):
     app = create_migration_app(_url(path))
     try:
         with app.app_context():
-            upgrade(revision=revision, directory=str(MIGRATIONS_DIRECTORY))
+            if revision == 'head':
+                # v06 intentionally requires an explicit validated tenant
+                # backfill; rehearsal targets have no user data yet, so this
+                # establishes only their isolated legacy band.
+                upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
+                with db.engine.begin() as connection:
+                    apply_tenant_backfill(connection)
+                upgrade(revision='head', directory=str(MIGRATIONS_DIRECTORY))
+            else:
+                upgrade(revision=revision, directory=str(MIGRATIONS_DIRECTORY))
     finally:
         with app.app_context():
             db.session.remove()
@@ -1156,8 +1169,10 @@ def test_report_destination_race_does_not_overwrite_and_rolls_back_import(tmp_pa
     try:
         with engine.connect() as connection:
             tables = [name for name in inspect(connection).get_table_names() if name != "alembic_version"]
-            assert all(connection.execute(text(f'SELECT count(*) FROM "{name}"')).scalar_one() == 0
-                       for name in tables)
+            counts = {name: connection.execute(text(f'SELECT count(*) FROM "{name}"')).scalar_one()
+                      for name in tables}
+            nonempty = {name: count for name, count in counts.items() if count}
+            assert nonempty == {'band': 1, 'tenant_backfill_state': 1}
     finally:
         engine.dispose()
 

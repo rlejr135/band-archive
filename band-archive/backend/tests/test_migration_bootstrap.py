@@ -19,6 +19,7 @@ from migration_bootstrap import (
     baseline_metadata,
     create_migration_app,
     migration_head_revision,
+    phase4_metadata,
     _canonical_postgres_partial_predicate,
     _canonical_postgres_check_constraint,
     _constraints_are_equivalent,
@@ -63,6 +64,16 @@ def _dispose(app):
         db.engine.dispose()
 
 
+def _upgrade_through_read_scope_contract(database_path):
+    """Advance legacy fixtures through the explicit Phase 4 operator gate."""
+    staged = _runner_command(database_path, 'upgrade')
+    assert staged.exit_code != 0, staged.output
+    assert 'read-scope contract' in staged.output
+    backfilled = _runner_command(database_path, 'tenant-backfill --apply')
+    assert backfilled.exit_code == 0, backfilled.output
+    return _runner_command(database_path, 'upgrade')
+
+
 def _offline_postgres_revision_sql(operation):
     """Compile a revision directly, without a PostgreSQL driver or server."""
     output = StringIO()
@@ -96,6 +107,12 @@ def _runtime_config(database_path, auth_enabled=False):
 
 def test_fresh_database_upgrade_creates_current_baseline(tmp_path):
     database_path = tmp_path / 'fresh.db'
+    # The contract revision stops at v05 until the operator records a
+    # validated tenant backfill, even for an otherwise empty fresh database.
+    blocked = _runner_command(database_path, 'upgrade')
+    assert blocked.exit_code != 0
+    assert 'read-scope contract' in blocked.output
+    assert _runner_command(database_path, 'tenant-backfill --apply').exit_code == 0
     result = _runner_command(database_path, 'upgrade')
     assert result.exit_code == 0, result.output
 
@@ -144,16 +161,16 @@ def test_revision_five_sqlite_upgrade_downgrade_and_repeat_keep_exact_metadata(t
             upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
             assert _version(app) == '20260916_05'
             with db.engine.connect() as connection:
-                assert schema_differences(connection) == []
-                assert schema_contract_differences(connection) == []
+                assert schema_differences(connection, metadata=phase4_metadata()) == []
+                assert schema_contract_differences(connection, metadata=phase4_metadata()) == []
 
             downgrade(revision='20260916_04', directory=str(MIGRATIONS_DIRECTORY))
             assert _version(app) == '20260916_04'
             upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
             upgrade(revision='20260916_05', directory=str(MIGRATIONS_DIRECTORY))
             with db.engine.connect() as connection:
-                assert schema_differences(connection) == []
-                assert schema_contract_differences(connection) == []
+                assert schema_differences(connection, metadata=phase4_metadata()) == []
+                assert schema_contract_differences(connection, metadata=phase4_metadata()) == []
     finally:
         _dispose(app)
 
@@ -175,7 +192,7 @@ def test_existing_current_schema_can_stamp_then_upgrade_idempotently(tmp_path):
         assert 'already stamped' in second.output
         assert _version(app) == BASELINE_REVISION
 
-        upgraded = _runner_command(database_path, 'upgrade')
+        upgraded = _upgrade_through_read_scope_contract(database_path)
         assert upgraded.exit_code == 0, upgraded.output
         with app.app_context():
             assert _version(app) == migration_head_revision()
@@ -191,7 +208,7 @@ def test_revision_two_exact_snapshot_allows_only_compatible_phase_three_upgrade(
         with app.app_context():
             upgrade(revision='20260914_02', directory=str(MIGRATIONS_DIRECTORY))
             assert _version(app) == '20260914_02'
-        result = _runner_command(database_path, 'upgrade')
+        result = _upgrade_through_read_scope_contract(database_path)
         assert result.exit_code == 0, result.output
         with app.app_context():
             assert _version(app) == migration_head_revision()
@@ -224,11 +241,14 @@ def test_recorded_revision_three_requires_hardening_upgrade_before_v2_is_ready(t
 
     first = _runner_command(database_path, 'upgrade')
     second = _runner_command(database_path, 'upgrade')
-    assert first.exit_code == 0, first.output
-    assert second.exit_code == 0, second.output
+    assert first.exit_code != 0
+    assert second.exit_code != 0
+    assert 'read-scope contract' in first.output
+    assert 'read-scope contract' in second.output
     assert _runner_command(database_path, 'tenant-backfill --dry-run').exit_code == 0
     applied = _runner_command(database_path, 'tenant-backfill --apply')
     assert applied.exit_code == 0, applied.output
+    assert _runner_command(database_path, 'upgrade').exit_code == 0
     hardened = _migration_app(database_path)
     try:
         with hardened.app_context():
@@ -389,7 +409,7 @@ def test_preflight_rejects_weakened_partial_index_predicate(
     tmp_path, index_name, table_name, columns, weak_predicate,
 ):
     database_path = tmp_path / f'weak-{index_name}.db'
-    assert _runner_command(database_path, 'upgrade').exit_code == 0
+    assert _upgrade_through_read_scope_contract(database_path).exit_code == 0
     app = _migration_app(database_path)
     try:
         with app.app_context():
@@ -741,11 +761,10 @@ def test_runtime_boot_does_not_create_auth_tables_before_runner_upgrade(tmp_path
         _dispose(runtime)
     assert database_path.read_bytes() == before_runtime_boot
 
-    upgraded = _runner_command(database_path, 'upgrade')
+    upgraded = _upgrade_through_read_scope_contract(database_path)
     assert upgraded.exit_code == 0, upgraded.output
     repeated = _runner_command(database_path, 'upgrade')
     assert repeated.exit_code == 0, repeated.output
-    assert _runner_command(database_path, 'tenant-backfill --apply').exit_code == 0
     runtime_after_upgrade = create_app(_runtime_config(database_path), start_worker=False)
     try:
         with runtime_after_upgrade.app_context():
@@ -792,7 +811,7 @@ def test_stamped_revision_preflight_rejects_unexpected_or_tampered_auth_schema(t
     # Recreate a valid head, then prove missing v02 constraints are checked
     # before a repeated upgrade can claim it is safe.
     clean_path = tmp_path / 'head-contract.db'
-    assert _runner_command(clean_path, 'upgrade').exit_code == 0
+    assert _upgrade_through_read_scope_contract(clean_path).exit_code == 0
     head_app = _migration_app(clean_path)
     try:
         with head_app.app_context():

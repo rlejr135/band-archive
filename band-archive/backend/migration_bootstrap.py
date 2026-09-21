@@ -27,6 +27,7 @@ BASELINE_REVISION = '20260914_01'
 AUTH_REVISION = '20260914_02'
 PHASE3_REVISION = '20260915_03'
 PHASE3_HARDENED_REVISION = '20260916_04'
+PHASE4_REVISION = '20260916_05'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -139,6 +140,39 @@ def phase3_hardened_metadata():
     for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
         db.metadata.tables[table_name].to_metadata(metadata)
     _restore_pre_phase4_band(metadata)
+    return metadata
+
+
+def phase4_metadata():
+    """Exact revision-05 snapshot before Phase 6 contracts tenant reads."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    for table_name in (
+        'song', 'rehearsal', 'media', 'member', 'personal_log', 'gallery_image',
+        'announcement', 'song_suggestion', 'comment', 'song_vote', 'media_vote',
+        'multipart_upload_session', 'personal_log_multipart_upload_session',
+    ):
+        metadata.tables[table_name].c.band_id.nullable = True
+    for table_name in ('song', 'rehearsal', 'media', 'personal_log', 'gallery_image',
+                       'announcement', 'song_suggestion'):
+        metadata.tables[table_name].c.visibility.nullable = True
+    for table_name, constraint_name in (('announcement', 'uq_announcement_band'),):
+        table = metadata.tables[table_name]
+        constraint = next((item for item in table.constraints if item.name == constraint_name), None)
+        if constraint is not None:
+            table.constraints.remove(constraint)
+    read_indexes = {
+        'ix_song_band_visibility_id', 'ix_rehearsal_band_visibility_date_id',
+        'ix_media_band_song_visibility_score_id', 'ix_media_band_rehearsal_visibility_score_id',
+        'ix_personal_log_band_member_visibility_created_id', 'ix_gallery_image_band_visibility_created_id',
+        'ix_comment_band_media_parent_created_id', 'ix_comment_band_personal_log_parent_created_id',
+        'uq_gallery_image_featured_band',
+    }
+    for table in metadata.tables.values():
+        for index in list(table.indexes):
+            if index.name in read_indexes:
+                table.indexes.remove(index)
     return metadata
 
 
@@ -1088,6 +1122,8 @@ def metadata_for_recorded_revision(revision):
         return phase3_metadata()
     if revision == PHASE3_HARDENED_REVISION:
         return phase3_hardened_metadata()
+    if revision == PHASE4_REVISION:
+        return phase4_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

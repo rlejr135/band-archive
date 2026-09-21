@@ -8,7 +8,7 @@ import pytest
 from app import _run_migrations, create_app
 from config import TestingConfig
 from extensions import db
-from models import Media, MediaVote, Song, SongVote
+from models import Band, Media, MediaVote, Song, SongVote, TenantBackfillState
 
 
 VOTER_A = '123e4567-e89b-12d3-a456-426614174000'
@@ -28,6 +28,19 @@ def _media(app, song_id, filename, rehearsal_id=None):
         db.session.add(media)
         db.session.commit()
         return media.id
+
+
+def _reset_file_vote_schema(app):
+    """Match the validated legacy scope used by the shared app fixture."""
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        db.session.add_all((
+            Band(name='test legacy archive', slug='test-legacy-archive',
+                 default_visibility='PUBLIC', storage_quota_bytes=1, is_legacy_import=True),
+            TenantBackfillState(key='phase4_tenant_scope', status='validated'),
+        ))
+        db.session.commit()
 
 
 def _vote(client, media_id, value, voter=VOTER_A, expected=0):
@@ -249,9 +262,7 @@ def test_media_vote_file_sqlite_concurrency_keeps_one_row_and_consistent_counts(
         SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
 
     vote_app = create_app(FileTestingConfig)
-    with vote_app.app_context():
-        db.drop_all()
-        db.create_all()
+    _reset_file_vote_schema(vote_app)
     try:
         seed_client = vote_app.test_client()
         song_id = _song(seed_client, 'Concurrent')
@@ -287,9 +298,7 @@ def test_song_vote_file_sqlite_concurrency_keeps_one_row_and_consistent_counts(t
         SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
 
     vote_app = create_app(FileTestingConfig)
-    with vote_app.app_context():
-        db.drop_all()
-        db.create_all()
+    _reset_file_vote_schema(vote_app)
     try:
         seed_client = vote_app.test_client()
         song_id = _song(seed_client, 'Concurrent song')
@@ -324,9 +333,7 @@ def test_media_vote_conflict_snapshot_is_materialized_before_lock_release(tmp_pa
         SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path}'
 
     vote_app = create_app(FileTestingConfig)
-    with vote_app.app_context():
-        db.drop_all()
-        db.create_all()
+    _reset_file_vote_schema(vote_app)
     try:
         seed_client = vote_app.test_client()
         song_id = _song(seed_client, 'Conflict snapshot')
