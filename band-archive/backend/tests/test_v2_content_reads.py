@@ -37,6 +37,10 @@ def content_graph(access_app, signer):
                              visibility='PUBLIC', title='Playback song', artist='Band B')
         member_song = Song(band_id=public.id, visibility='MEMBERS',
                            title='Members song', artist='Band B')
+        corrupt_song = Song(band_id=public.id, visibility='PUBLIC',
+                            title='Corrupt song', artist='Band B')
+        foreign_song = Song(band_id=private.id, visibility='PUBLIC',
+                            title='Foreign song', artist='Band A')
         linked_private_rehearsal = Rehearsal(
             band_id=public.id, created_by_membership_id=public_author.id,
             visibility='MEMBERS', title='Private linked rehearsal', date=date(2026, 1, 3),
@@ -45,9 +49,19 @@ def content_graph(access_app, signer):
             band_id=public.id, created_by_membership_id=public_author.id,
             visibility='PUBLIC', title='Public rehearsal', date=date(2026, 1, 2),
         )
+        foreign_rehearsal = Rehearsal(
+            band_id=private.id, visibility='PUBLIC', title='Foreign rehearsal', date=date(2026, 1, 4),
+        )
+        corrupt_rehearsal = Rehearsal(
+            band_id=public.id, visibility='PUBLIC', title='Corrupt rehearsal', date=date(2026, 1, 5),
+        )
         public_song.rehearsals.append(linked_private_rehearsal)
         playback_song.rehearsals.append(public_rehearsal)
-        db.session.add_all((public_song, playback_song, member_song, linked_private_rehearsal, public_rehearsal))
+        corrupt_rehearsal.songs.append(foreign_song)
+        db.session.add_all((
+            public_song, playback_song, member_song, corrupt_song, foreign_song,
+            linked_private_rehearsal, public_rehearsal, foreign_rehearsal, corrupt_rehearsal,
+        ))
         db.session.flush()
         hidden_by_link = Media(
             band_id=public.id, created_by_membership_id=public_author.id,
@@ -67,7 +81,18 @@ def content_graph(access_app, signer):
             audio_object_key='bands/b/public/visible-audio.m4a',
             original_pruned_at=datetime.now(timezone.utc), vote_score=1,
         )
-        db.session.add_all((hidden_by_link, public_media))
+        corrupt_media = Media(
+            band_id=public.id, visibility='PUBLIC', song_id=corrupt_song.id,
+            rehearsal_id=foreign_rehearsal.id, filename='cross-band.mp4',
+            object_key='bands/a/private/cross-band.mp4', file_type='video',
+            transcoding_status='completed', video_720_object_key='bands/a/private/cross-720.mp4',
+        )
+        failed_media = Media(
+            band_id=public.id, visibility='MEMBERS', song_id=member_song.id,
+            filename='failed.mp4', object_key='bands/b/failed.mp4', file_type='video',
+            transcoding_status='failed', processing_error='Traceback /srv/secret AKIAexample provider token',
+        )
+        db.session.add_all((hidden_by_link, public_media, corrupt_media, failed_media))
         db.session.flush()
         root = Comment(band_id=public.id, media_id=public_media.id, author='visitor',
                        content='first', password_hash='not-used')
@@ -80,8 +105,10 @@ def content_graph(access_app, signer):
         return {
             'public_band': public.id, 'private_band': private.id, 'public_song': public_song.id,
             'playback_song': playback_song.id,
-            'member_song': member_song.id, 'public_media': public_media.id,
+            'member_song': member_song.id, 'foreign_song': foreign_song.id, 'public_media': public_media.id,
             'hidden_media': hidden_by_link.id, 'public_rehearsal': public_rehearsal.id,
+            'corrupt_song': corrupt_song.id, 'corrupt_media': corrupt_media.id,
+            'corrupt_rehearsal': corrupt_rehearsal.id, 'failed_media': failed_media.id,
             'owner_membership': owner.id, 'member_membership': member.id,
         }
 
@@ -116,6 +143,14 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
     assert item['playback']['audio_url'] == 'url:bands/b/public/visible-audio.m4a'
     assert all('pruned-original' not in key and 'opaque-' not in key for key, _ in calls)
     assert all(ttl == 3600 for _, ttl in calls)
+
+    # Collection serializers discard corrupt cross-band graph nodes before
+    # their visibility or playback fields can trigger a signer call.
+    assert content_graph['corrupt_song'] not in [item['id'] for item in songs.get_json()['songs']]
+    assert client.get(f"{base}/songs/{content_graph['corrupt_song']}").status_code == 404
+    assert client.get(f"{base}/rehearsals/{content_graph['corrupt_rehearsal']}").status_code == 404
+    assert client.get(f"{base}/media/{content_graph['corrupt_media']}/processing").status_code == 404
+    assert all('cross-' not in key for key, _ in calls)
 
     comments = client.get(f"{base}/media/{content_graph['public_media']}/comments")
     assert comments.status_code == 200
@@ -153,3 +188,28 @@ def test_member_owner_capabilities_cross_tenant_concealment_and_optional_auth_ca
     # Members get short-lived URLs even for a public resource only when the
     # effective visibility is MEMBERS; public remains public-TTL.
     assert all(ttl == 300 for _, ttl in calls)
+
+    processing = client.get(f"{public_base}/media/{content_graph['failed_media']}/processing", headers=_headers(b_owner))
+    assert processing.status_code == 200
+    payload = processing.get_json()['processing']
+    assert payload['error'] == 'processing_failed'
+    assert 'Traceback' not in str(payload) and 'AKIA' not in str(payload) and '/srv/' not in str(payload)
+
+
+def test_legacy_rehearsal_relation_writer_rejects_cross_band_song_ids_atomically(access_app, content_graph):
+    client = access_app.test_client()
+    with access_app.app_context():
+        rehearsal = db.session.get(Rehearsal, content_graph['public_rehearsal'])
+        original_ids = [song.id for song in rehearsal.songs]
+    response = client.put(f"/rehearsals/{content_graph['public_rehearsal']}", json={
+        'song_ids': [content_graph['member_song']],
+    })
+    # Same-band member song is accepted; the cross-band case is tested below.
+    assert response.status_code == 200
+    response = client.put(f"/rehearsals/{content_graph['public_rehearsal']}", json={
+        'song_ids': [content_graph['corrupt_song'], content_graph['foreign_song']],
+    })
+    assert response.status_code == 404
+    with access_app.app_context():
+        rehearsal = db.session.get(Rehearsal, content_graph['public_rehearsal'])
+        assert [song.id for song in rehearsal.songs] == [content_graph['member_song']]

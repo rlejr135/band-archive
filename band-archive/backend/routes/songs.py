@@ -276,7 +276,9 @@ def add_media(id):
 
     rehearsal_id = request.form.get('rehearsal_id', type=int)
     if rehearsal_id:
-        rehearsal = db.session.get(Rehearsal, rehearsal_id)
+        rehearsal = Rehearsal.query.filter(
+            Rehearsal.id == rehearsal_id, Rehearsal.band_id == song.band_id,
+        ).one_or_none()
         if not rehearsal:
             raise ValidationError("Rehearsal not found")
 
@@ -303,7 +305,9 @@ def link_media_rehearsal(media_id):
     rehearsal_id = data.get('rehearsal_id')
 
     if rehearsal_id is not None:
-        rehearsal = db.session.get(Rehearsal, rehearsal_id)
+        rehearsal = Rehearsal.query.filter(
+            Rehearsal.id == rehearsal_id, Rehearsal.band_id == media.band_id,
+        ).one_or_none()
         if not rehearsal:
             raise NotFoundError("Rehearsal not found")
 

@@ -31,6 +31,42 @@ def visible_to_scope(scope, visibility):
     return scope.is_member or visibility == PUBLIC
 
 
+def belongs_to_scope(scope, item):
+    """Return whether a loaded graph node belongs to the URL-resolved band.
+
+    This is intentionally a pure, fail-closed check: a missing ``band_id`` is
+    as unsafe as a different one.  Call it before visibility calculation or
+    URL signing; legacy/corrupt associations must never influence either.
+    """
+    return item is not None and getattr(item, 'band_id', None) == scope.band_id
+
+
+def graph_is_scoped(scope, item):
+    """Validate the loaded tenant graph required by a v2 serializer.
+
+    Relationship reads are deliberately limited to the graph that each
+    response serializes.  No database lookup is performed by this helper;
+    routes eager-load these relationships for collections.
+    """
+    if not belongs_to_scope(scope, item):
+        return False
+    from models import Media, Rehearsal, Song
+
+    if isinstance(item, Media):
+        if not belongs_to_scope(scope, item.song):
+            return False
+        if item.rehearsal is not None and not belongs_to_scope(scope, item.rehearsal):
+            return False
+        return all(belongs_to_scope(scope, rehearsal) for rehearsal in item.song.rehearsals)
+    if isinstance(item, Song):
+        return (all(graph_is_scoped(scope, media) for media in item.media_files)
+                and all(belongs_to_scope(scope, rehearsal) for rehearsal in item.rehearsals))
+    if isinstance(item, Rehearsal):
+        return (all(belongs_to_scope(scope, song) for song in item.songs)
+                and all(graph_is_scoped(scope, media) for media in item.media_files))
+    return True
+
+
 def song_visibility(scope, song):
     return effective_visibility(scope and _band_visibility(scope), song.visibility)
 
@@ -41,6 +77,8 @@ def rehearsal_visibility(scope, rehearsal):
 
 def media_visibility(scope, media):
     """Include every rehearsal relation that can constrain a media item."""
+    if not graph_is_scoped(scope, media):
+        raise ValueError('Media graph is outside the resolved band scope.')
     values = [_band_visibility(scope), media.visibility]
     song = media.song
     if song is not None:
@@ -111,6 +149,8 @@ def song_ref(scope, song):
 
 
 def serialize_media(scope, media):
+    if not graph_is_scoped(scope, media):
+        raise ValueError('Media graph is outside the resolved band scope.')
     visibility = media_visibility(scope, media)
     return {
         'id': media.id,
@@ -129,6 +169,8 @@ def serialize_media(scope, media):
 
 
 def serialize_song(scope, song, *, include_children=True):
+    if not belongs_to_scope(scope, song):
+        raise ValueError('Song is outside the resolved band scope.')
     visibility = song_visibility(scope, song)
     value = {
         'id': song.id, 'title': song.title, 'artist': song.artist, 'status': song.status,
@@ -140,15 +182,19 @@ def serialize_song(scope, song, *, include_children=True):
     }
     if include_children:
         rehearsals = [rehearsal_ref(scope, item) for item in song.rehearsals
-                      if visible_to_scope(scope, rehearsal_visibility(scope, item))]
+                      if belongs_to_scope(scope, item)
+                      and visible_to_scope(scope, rehearsal_visibility(scope, item))]
         media = [serialize_media(scope, item) for item in song.media_files
-                 if visible_to_scope(scope, media_visibility(scope, item))]
+                 if graph_is_scoped(scope, item)
+                 and visible_to_scope(scope, media_visibility(scope, item))]
         value['rehearsals'] = sorted(rehearsals, key=lambda item: (item['date'] or '', item['id']))
         value['media'] = sorted(media, key=lambda item: (-item['vote_score'], item['id']))
     return value
 
 
 def serialize_rehearsal(scope, rehearsal, *, include_children=True):
+    if not belongs_to_scope(scope, rehearsal):
+        raise ValueError('Rehearsal is outside the resolved band scope.')
     visibility = rehearsal_visibility(scope, rehearsal)
     value = {
         'id': rehearsal.id, 'title': rehearsal.title, 'date': _iso(rehearsal.date),
@@ -161,12 +207,14 @@ def serialize_rehearsal(scope, rehearsal, *, include_children=True):
     if include_children:
         value['songs'] = sorted(
             (song_ref(scope, song) for song in rehearsal.songs
-             if visible_to_scope(scope, song_visibility(scope, song))),
+             if belongs_to_scope(scope, song)
+             and visible_to_scope(scope, song_visibility(scope, song))),
             key=lambda item: item['id'],
         )
         value['media'] = sorted(
             (serialize_media(scope, media) for media in rehearsal.media_files
-             if visible_to_scope(scope, media_visibility(scope, media))),
+             if graph_is_scoped(scope, media)
+             and visible_to_scope(scope, media_visibility(scope, media))),
             key=lambda item: (-item['vote_score'], item['id']),
         )
     return value
@@ -176,7 +224,9 @@ def serialize_processing(scope, media):
     visibility = media_visibility(scope, media)
     return {
         'id': media.id, 'file_type': media.file_type, 'status': media.transcoding_status,
-        'error': media.processing_error, 'attempts': media.processing_attempts,
+        # Historic rows can retain exception messages and provider paths.
+        # The read API exposes only a stable code, never that raw text.
+        'error': 'processing_failed' if media.transcoding_status == 'failed' else None,
         'started_at': _iso(media.processing_started_at),
         'heartbeat_at': _iso(media.processing_heartbeat_at),
         'completed_at': _iso(media.processing_completed_at),
@@ -193,7 +243,7 @@ def serialize_comment(scope, comment, media_visibility_value):
         # declared/effective representation is explicitly inherited.
         **_flags(scope, comment, media_visibility_value),
     }
-    replies = [reply for reply in comment.replies if reply.band_id == scope.band_id
+    replies = [reply for reply in comment.replies if belongs_to_scope(scope, reply)
                and reply.media_id == comment.media_id]
     value['replies'] = [serialize_comment(scope, reply, media_visibility_value)
                         for reply in sorted(replies, key=lambda item: (_iso(item.created_at) or '', item.id))]

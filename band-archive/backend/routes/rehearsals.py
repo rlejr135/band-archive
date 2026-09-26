@@ -36,6 +36,18 @@ def _parse_date(value, field_name):
         raise ValidationError(f"{field_name} must be a valid date (YYYY-MM-DD)")
 
 
+def _songs_in_rehearsal_band_or_error(band_id, song_ids):
+    """Resolve all relation IDs inside the parent tenant or reject atomically."""
+    if not isinstance(song_ids, list) or any(not isinstance(song_id, int) for song_id in song_ids):
+        raise ValidationError('song_ids must be an array of integer IDs')
+    wanted = set(song_ids)
+    songs = Song.query.filter(Song.band_id == band_id, Song.id.in_(wanted)).all() if wanted else []
+    if len(songs) != len(wanted):
+        # Do not distinguish a nonexistent ID from a cross-band ID.
+        raise ValidationError('One or more songs are unavailable for this rehearsal', 404)
+    return songs
+
+
 @rehearsals_bp.route('/rehearsals', methods=['GET'])
 def get_rehearsals():
     query = Rehearsal.query
@@ -104,12 +116,14 @@ def create_rehearsal():
         color=data.get('color', '#ffd32a'),
     )
 
+    # Flush first so the legacy before-insert tenant guard has assigned the
+    # rehearsal's authoritative band before relationship IDs are resolved.
+    db.session.add(rehearsal)
+    db.session.flush()
     song_ids = data.get('song_ids', [])
     if song_ids:
-        songs = Song.query.filter(Song.id.in_(song_ids)).all()
-        rehearsal.songs = songs
+        rehearsal.songs = _songs_in_rehearsal_band_or_error(rehearsal.band_id, song_ids)
 
-    db.session.add(rehearsal)
     db.session.commit()
     return jsonify(rehearsal.to_dict()), 201
 
@@ -158,8 +172,7 @@ def update_rehearsal(id):
         rehearsal.color = data['color']
 
     if 'song_ids' in data:
-        songs = Song.query.filter(Song.id.in_(data['song_ids'])).all()
-        rehearsal.songs = songs
+        rehearsal.songs = _songs_in_rehearsal_band_or_error(rehearsal.band_id, data['song_ids'])
 
     db.session.commit()
     return jsonify(rehearsal.to_dict())
@@ -189,7 +202,7 @@ def upload_rehearsal_media(id):
     song_id = request.form.get('song_id', type=int)
     if not song_id:
         raise ValidationError("song_id is required")
-    song = db.session.get(Song, song_id)
+    song = Song.query.filter(Song.id == song_id, Song.band_id == rehearsal.band_id).one_or_none()
     if not song:
         raise NotFoundError("Song not found")
 

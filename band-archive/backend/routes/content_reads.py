@@ -11,7 +11,7 @@ from errors import NotFoundError
 from extensions import db
 from models import Band, Comment, Media, Rehearsal, Song
 from v2_content_serializers import (
-    media_visibility, rehearsal_visibility, scope_with_band_visibility,
+    graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
     serialize_song, song_visibility, visible_to_scope,
 )
@@ -39,7 +39,7 @@ def _scope(band_id):
 
 def _song_or_404(song_id, scope):
     song = visible_object_or_404(Song, song_id, scope, parent_visibility=scope.band_visibility)
-    if not visible_to_scope(scope, song_visibility(scope, song)):
+    if not graph_is_scoped(scope, song) or not visible_to_scope(scope, song_visibility(scope, song)):
         raise NotFoundError('Resource not found')
     return song
 
@@ -48,7 +48,7 @@ def _rehearsal_or_404(rehearsal_id, scope):
     rehearsal = visible_object_or_404(
         Rehearsal, rehearsal_id, scope, parent_visibility=scope.band_visibility,
     )
-    if not visible_to_scope(scope, rehearsal_visibility(scope, rehearsal)):
+    if not graph_is_scoped(scope, rehearsal) or not visible_to_scope(scope, rehearsal_visibility(scope, rehearsal)):
         raise NotFoundError('Resource not found')
     return rehearsal
 
@@ -57,9 +57,7 @@ def _media_or_404(media_id, scope):
     media = visible_object_or_404(Media, media_id, scope, parent_visibility=scope.band_visibility)
     # The schema contract prevents cross-band graph edges.  Preserve a
     # fail-closed response if a hand-modified database violates that contract.
-    if media.song is None or media.song.band_id != scope.band_id:
-        raise NotFoundError('Resource not found')
-    if media.rehearsal is not None and media.rehearsal.band_id != scope.band_id:
+    if not graph_is_scoped(scope, media):
         raise NotFoundError('Resource not found')
     if not visible_to_scope(scope, media_visibility(scope, media)):
         raise NotFoundError('Resource not found')
@@ -78,7 +76,8 @@ def list_songs(band_id):
     )
     songs = query.order_by(Song.id.asc()).all()
     return jsonify({'songs': [serialize_song(scope, song) for song in songs
-                              if visible_to_scope(scope, song_visibility(scope, song))]})
+                              if graph_is_scoped(scope, song)
+                              and visible_to_scope(scope, song_visibility(scope, song))]})
 
 
 @content_reads_bp.get('/songs/<int:song_id>')
@@ -99,7 +98,8 @@ def list_song_media(band_id, song_id):
     ).filter(Media.song_id == song.id)
     media = query.order_by(Media.vote_score.desc(), Media.id.asc()).all()
     return jsonify({'media': [serialize_media(scope, item) for item in media
-                              if visible_to_scope(scope, media_visibility(scope, item))]})
+                              if graph_is_scoped(scope, item)
+                              and visible_to_scope(scope, media_visibility(scope, item))]})
 
 
 @content_reads_bp.get('/rehearsals')
@@ -115,7 +115,8 @@ def list_rehearsals(band_id):
     )
     rehearsals = query.order_by(Rehearsal.date.asc(), Rehearsal.id.asc()).all()
     return jsonify({'rehearsals': [serialize_rehearsal(scope, item) for item in rehearsals
-                                   if visible_to_scope(scope, rehearsal_visibility(scope, item))]})
+                                   if graph_is_scoped(scope, item)
+                                   and visible_to_scope(scope, rehearsal_visibility(scope, item))]})
 
 
 @content_reads_bp.get('/rehearsals/<int:rehearsal_id>')
@@ -136,7 +137,8 @@ def list_rehearsal_media(band_id, rehearsal_id):
     ).filter(Media.rehearsal_id == rehearsal.id)
     media = query.order_by(Media.vote_score.desc(), Media.id.asc()).all()
     return jsonify({'media': [serialize_media(scope, item) for item in media
-                              if visible_to_scope(scope, media_visibility(scope, item))]})
+                              if graph_is_scoped(scope, item)
+                              and visible_to_scope(scope, media_visibility(scope, item))]})
 
 
 @content_reads_bp.get('/media/<int:media_id>/processing')
