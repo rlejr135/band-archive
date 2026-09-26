@@ -1,8 +1,10 @@
 """Contracts for the remaining tenant-scoped Phase 6 read domains."""
 
 from datetime import datetime, timezone
-
 import pytest
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.sql import text
 
 from extensions import db
 from models import (Announcement, Band, BandMembership, Comment, GalleryImage,
@@ -45,7 +47,12 @@ def remaining_graph(access_app, signer):
             band_id=public.id, member_id=foreign_member.id, visibility='PUBLIC', title='Corrupt log',
             filename='foreign.mov', object_key='bands/a/foreign.mov', file_type='video',
         )
-        db.session.add_all((public_log, private_log, corrupt_log))
+        foreign_log = PersonalLog(
+            band_id=private.id, member_id=foreign_member.id, created_by_membership_id=foreign_author.id,
+            visibility='PUBLIC', title='Foreign log', filename='foreign-band.mov',
+            object_key='bands/a/foreign-band.mov', file_type='video', transcoding_status='completed',
+        )
+        db.session.add_all((public_log, private_log, corrupt_log, foreign_log))
         db.session.flush()
         db.session.add_all((
             Comment(band_id=public.id, personal_log_id=public_log.id, author='a', content='first', password_hash='x'),
@@ -68,7 +75,8 @@ def remaining_graph(access_app, signer):
         db.session.commit()
         return {'public': public.id, 'private': private.id, 'member': member.id,
                 'foreign_member': foreign_member.id, 'public_log': public_log.id,
-                'private_log': private_log.id, 'corrupt_log': corrupt_log.id}
+                'private_log': private_log.id, 'corrupt_log': corrupt_log.id,
+                'foreign_log': foreign_log.id}
 
 
 def test_remaining_visitor_reads_are_scoped_paginated_and_storage_safe(access_app, remaining_graph, monkeypatch):
@@ -98,10 +106,17 @@ def test_remaining_visitor_reads_are_scoped_paginated_and_storage_safe(access_ap
     assert client.get(f"{base}/members/{remaining_graph['member']}/logs?limit=0").status_code == 400
     assert client.get(f"{base}/members/{remaining_graph['member']}/logs?limit=101").status_code == 400
     assert client.get(f"{base}/members/{remaining_graph['member']}/logs?offset=-1").status_code == 400
-    assert client.get(f"{base}/members/{remaining_graph['member']}/logs/{remaining_graph['corrupt_log']}").status_code == 404
-
+    signer_calls_before_denials = len(calls)
     processing = client.get(f"{base}/personal-logs/{remaining_graph['private_log']}/processing")
     assert processing.status_code == 404
+    assert client.get(f"{base}/personal-logs/{remaining_graph['foreign_log']}/processing").status_code == 404
+    assert client.get(f"{base}/personal-logs/{remaining_graph['corrupt_log']}/processing").status_code == 404
+    hidden_comments = client.get(f"{base}/personal-logs/{remaining_graph['private_log']}/comments")
+    foreign_comments = client.get(f"{base}/personal-logs/{remaining_graph['foreign_log']}/comments")
+    corrupt_comments = client.get(f"{base}/personal-logs/{remaining_graph['corrupt_log']}/comments")
+    assert all(response.status_code == 404 for response in (hidden_comments, foreign_comments, corrupt_comments))
+    assert len(calls) == signer_calls_before_denials
+    assert 'bands/a/' not in str((processing.get_json(), foreign_comments.get_json(), corrupt_comments.get_json()))
     comments = client.get(f"{base}/personal-logs/{remaining_graph['public_log']}/comments")
     assert comments.status_code == 200
     assert comments.get_json()['comments'][0]['personal_log_id'] == remaining_graph['public_log']
@@ -148,7 +163,7 @@ def test_remaining_member_access_roster_policy_and_error_redaction(access_app, r
     assert 'Traceback' not in str(processing.get_json()) and 'AKIA' not in str(processing.get_json())
 
     with access_app.app_context():
-        Band.query.get(remaining_graph['public']).member_roster_public = False
+        db.session.get(Band, remaining_graph['public']).member_roster_public = False
         db.session.commit()
     assert client.get(f'{base}/members').status_code == 404
     assert client.get(f'{base}/members', headers=headers).status_code == 200
@@ -156,3 +171,68 @@ def test_remaining_member_access_roster_policy_and_error_redaction(access_app, r
     assert invalid.status_code == 401
     assert invalid.headers['Cache-Control'] == 'private, no-store'
     assert 'Authorization' in invalid.headers['Vary']
+
+
+def test_featured_gallery_fails_closed_on_mixed_visibility_duplicates_before_signing(
+        access_app, remaining_graph, signer, monkeypatch):
+    """A partial index is a backstop, not the reader's only corruption guard."""
+    calls = []
+    from storage import storage
+    monkeypatch.setattr(storage, 'generate_url',
+                        lambda key, expires_in=None: calls.append((key, expires_in)) or f'url:{key}')
+    with access_app.app_context():
+        # Controlled corruption fixture: production retains the v06 partial
+        # unique index; this isolated in-memory test removes it only to prove
+        # the reader fails closed if an external/manual corruption exists.
+        db.session.execute(text('DROP INDEX uq_gallery_image_featured_band'))
+        db.session.add(GalleryImage(
+            band_id=remaining_graph['public'], visibility='MEMBERS', filename='duplicate.jpg',
+            object_key='bands/b/gallery/duplicate.jpg', is_featured=True,
+        ))
+        db.session.commit()
+    client = access_app.test_client()
+    endpoint = f"/api/v2/bands/{remaining_graph['public']}/gallery/featured"
+    visitor = client.get(endpoint)
+    member = client.get(endpoint, headers=_headers(_token(
+        signer, sub='77777777-7777-7777-7777-777777777777', email='outsider@example.com',
+    )))
+    assert visitor.status_code == member.status_code == 404
+    assert calls == []
+
+
+def test_postgres_contracts_keep_creator_comment_and_featured_queries_tenant_first(access_app):
+    """Compile policy predicates for PostgreSQL without requiring a live PG server."""
+    from band_access import BandReadScope, RequestAudience
+    from routes.content_reads import (
+        _creator_is_scoped_sql, _featured_gallery_rows_query, _gallery_query,
+        _personal_comment_graph_sql,
+    )
+
+    scope = BandReadScope(
+        band_id=71, band_slug='compiled', audience=RequestAudience(user_id=None, subject=None), membership=None,
+    )
+    object.__setattr__(scope, 'band_visibility', 'PUBLIC')
+    dialect = postgresql.dialect()
+    with access_app.app_context():
+        creator_sql = str(select(PersonalLog.id).where(
+            PersonalLog.band_id == scope.band_id,
+            _creator_is_scoped_sql(PersonalLog, scope),
+        ).compile(dialect=dialect, compile_kwargs={'literal_binds': True}))
+        comment_sql = str(select(Comment.id).where(
+            *_personal_comment_graph_sql(scope, 19),
+        ).compile(dialect=dialect, compile_kwargs={'literal_binds': True}))
+        featured_sql = str(_featured_gallery_rows_query(scope).statement.compile(
+            dialect=dialect, compile_kwargs={'literal_binds': True}))
+        audience_sql = str(_gallery_query(scope).statement.compile(
+            dialect=dialect, compile_kwargs={'literal_binds': True}))
+
+    assert 'band_membership.band_id = 71' in creator_sql
+    assert 'EXISTS' in creator_sql and 'personal_log.band_id = 71' in creator_sql
+    assert 'comment.band_id = 71' in comment_sql
+    assert 'comment_1.personal_log_id = 19' in comment_sql and 'EXISTS' in comment_sql
+    # The duplicate detector sees every same-band featured row before any
+    # audience predicate. The second audience query then applies PUBLIC.
+    assert 'gallery_image.band_id = 71' in featured_sql
+    assert 'gallery_image.visibility' not in featured_sql.split('WHERE', 1)[1]
+    assert 'gallery_image.band_id = 71' in audience_sql
+    assert "gallery_image.visibility = 'PUBLIC'" in audience_sql

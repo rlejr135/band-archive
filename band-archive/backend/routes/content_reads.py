@@ -414,6 +414,21 @@ def _gallery_query(scope):
                          )
 
 
+def _featured_gallery_rows_query(scope):
+    """Inspect the complete same-band featured set before audience filtering.
+
+    The uniqueness index normally guarantees one row.  If an operator or a
+    damaged restore bypasses it, a visitor must not get a misleading public
+    row while a member sees a different one.  This detector intentionally
+    has no visibility/creator predicates; it runs before any serialization or
+    signing and makes a corrupt singleton fail closed for every audience.
+    """
+    return GalleryImage.query.filter(
+        GalleryImage.band_id == scope.band_id,
+        GalleryImage.is_featured.is_(True),
+    ).order_by(GalleryImage.id.asc()).limit(2)
+
+
 @content_reads_bp.get('/gallery')
 @optional_auth
 def list_gallery(band_id):
@@ -428,13 +443,18 @@ def list_gallery(band_id):
 @optional_auth
 def get_featured_gallery(band_id):
     scope = _scope(band_id)
-    # v06 creates a per-band partial uniqueness constraint.  Do not choose an
-    # arbitrary row if a manually corrupted database contains multiple rows.
-    featured = _gallery_query(scope).filter(GalleryImage.is_featured.is_(True)).order_by(
-        GalleryImage.id.asc()).limit(2).all()
+    # v06 creates a per-band partial uniqueness constraint.  First inspect
+    # every same-band featured row, independent of this request's visibility,
+    # and never choose an arbitrary representation from a corrupt duplicate.
+    featured = _featured_gallery_rows_query(scope).all()
     if len(featured) != 1:
         raise NotFoundError('Resource not found')
-    return jsonify({'gallery': serialize_gallery_image(scope, featured[0])})
+    # Only after the invariant has passed may the audience-filtered query
+    # decide whether the one row is discoverable or may trigger URL signing.
+    image = _gallery_query(scope).filter(GalleryImage.id == featured[0].id).one_or_none()
+    if image is None:
+        raise NotFoundError('Resource not found')
+    return jsonify({'gallery': serialize_gallery_image(scope, image)})
 
 
 def _announcement_query(scope):
