@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Member
 from errors import NotFoundError, ValidationError
-from route_helpers import get_or_404
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, reject_foreign_children
 from storage import storage
 from media_processing import delete_original_and_audio
 from validators import validate_required_string, validate_string_length
@@ -12,12 +12,12 @@ members_bp = Blueprint('members', __name__)
 
 
 def _get_member_or_404(id):
-    return get_or_404(db.session, Member, id, "Member not found")
+    return legacy_get_or_404(Member, id, "Member not found")
 
 
 @members_bp.route('/members', methods=['GET'])
 def get_members():
-    members = Member.query.all()
+    members = legacy_query(Member).all()
     return jsonify([m.to_dict() for m in members])
 
 
@@ -33,6 +33,7 @@ def create_member():
     validate_string_length(data.get('instrument'), 'instrument', 100)
 
     member = Member(
+        band_id=legacy_band_id(),
         name=data['name'].strip(),
         instrument=data['instrument'].strip(),
     )
@@ -73,7 +74,9 @@ def update_member(id):
 def delete_member(id):
     member = _get_member_or_404(id)
 
-    for log in member.personal_logs:
+    from models import PersonalLog
+    reject_foreign_children(member, PersonalLog, 'member_id', 'Member not found')
+    for log in legacy_query(PersonalLog).filter(PersonalLog.member_id == member.id).all():
         delete_original_and_audio(log, 'personal_logs')
 
     db.session.delete(member)

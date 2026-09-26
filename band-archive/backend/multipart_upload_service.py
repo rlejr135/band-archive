@@ -88,11 +88,15 @@ def expire_session_if_needed(session):
     return True
 
 
-def get_session_or_404(session_id):
+def get_session_or_404(session_id, *, band_id=None, expire=True):
     for spec in MULTIPART_TARGETS:
-        session = db.session.get(spec.session_model, session_id)
+        query = spec.session_model.query.filter(spec.session_model.id == session_id)
+        if band_id is not None:
+            query = query.filter(spec.session_model.band_id == band_id)
+        session = query.one_or_none()
         if session:
-            expire_session_if_needed(session)
+            if expire:
+                expire_session_if_needed(session)
             return session
     raise NotFoundError('Upload session not found')
 
@@ -139,8 +143,8 @@ def create_session(spec, *, original_filename, content_type, declared_bytes, **t
     return session, capability_token
 
 
-def require_active_session(session_id, capability_token):
-    session = get_session_or_404(session_id)
+def require_active_session(session_id, capability_token, *, band_id=None):
+    session = get_session_or_404(session_id, band_id=band_id)
     require_capability(session, capability_token)
     if session.status != 'initiated':
         raise ValidationError(f'Upload session is {session.status}.', status_code=409)
@@ -214,12 +218,16 @@ def find_completed_item(session):
     spec = spec_for_session(session)
     item_id = getattr(session, spec.item_id_field)
     if item_id:
-        return db.session.get(spec.item_model, item_id)
+        query = spec.item_model.query.filter(spec.item_model.id == item_id)
+        if getattr(session, 'band_id', None) is not None:
+            query = query.filter(spec.item_model.band_id == session.band_id)
+        return query.one_or_none()
     filters = {
         field: getattr(session, field)
         for field in spec.target_fields
     }
     filters['filename'] = session.object_key.rsplit('/', 1)[1]
+    filters['band_id'] = session.band_id
     return spec.item_model.query.filter_by(**filters).order_by(spec.item_model.id.desc()).first()
 
 

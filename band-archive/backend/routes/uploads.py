@@ -2,9 +2,8 @@ from flask import Blueprint, jsonify, request, current_app
 from sqlalchemy import inspect
 
 from extensions import db
-from models import (Media, Song, Rehearsal, Member, PersonalLog, GalleryImage,
-                    validated_legacy_band_id,
-                    )
+from models import Media, Song, Rehearsal, Member, PersonalLog, GalleryImage
+from legacy_scope import legacy_band_id
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import (create_media, create_personal_log, save_media_and_start,
@@ -13,8 +12,9 @@ from upload_record_service import create_uploaded_record
 from multipart_upload_service import (
     MAX_MULTIPART_PARTS, MULTIPART_PART_SIZE, MEDIA_TARGET, PERSONAL_LOG_TARGET,
     abort_session, acknowledge_part, complete_session, completion_payload, create_session,
+    expire_session_if_needed,
     get_session_or_404, issue_part, part_payload, recover_sessions, require_capability,
-    require_active_session, session_payload, spec_for_session,
+    session_payload, spec_for_session,
 )
 from validators import (allowed_file, allowed_image_file, generate_secure_filename,
                         detect_file_type, guess_content_type)
@@ -37,7 +37,24 @@ def _require_int(value, field_name, minimum=None, maximum=None):
 
 def _legacy_upload_band_id():
     """Resolve the only tenant v1 upload endpoints are allowed to mutate."""
-    return validated_legacy_band_id(db.session.connection())
+    return legacy_band_id()
+
+
+def _legacy_session_or_404(session_id):
+    """Load an upload capability only after both tenant and parent are proven."""
+    band_id = _legacy_upload_band_id()
+    session = get_session_or_404(session_id, band_id=band_id, expire=False)
+    if hasattr(session, 'song_id'):
+        song = Song.query.filter(Song.id == session.song_id, Song.band_id == band_id).one_or_none()
+        if song is None:
+            raise NotFoundError('Upload session not found')
+        if session.rehearsal_id is not None and not Rehearsal.query.filter(
+                Rehearsal.id == session.rehearsal_id, Rehearsal.band_id == band_id).one_or_none():
+            raise NotFoundError('Upload session not found')
+    elif not Member.query.filter(Member.id == session.member_id, Member.band_id == band_id).one_or_none():
+        raise NotFoundError('Upload session not found')
+    expire_session_if_needed(session)
+    return session
 
 
 def _validate_media_target(song_id, rehearsal_id):
@@ -118,6 +135,7 @@ def recover_multipart_upload_sessions(app):
 
 @uploads_bp.route('/uploads/presign', methods=['POST'])
 def presign():
+    _legacy_upload_band_id()
     data = request.get_json()
     if not data:
         raise ValidationError('Request body is required')
@@ -188,6 +206,7 @@ def complete_personal_log():
 
 @uploads_bp.route('/uploads/complete/gallery', methods=['POST'])
 def complete_gallery():
+    legacy_band_id = _legacy_upload_band_id()
     data = request.get_json()
     if not data:
         raise ValidationError('Request body is required')
@@ -201,7 +220,10 @@ def complete_gallery():
     declared_size = data.get('file_size')
     if declared_size is not None and _require_int(declared_size, 'file_size', minimum=0) != actual_size:
         raise ValidationError('Uploaded object size does not match file_size.')
-    image = GalleryImage(filename=filename, original_filename=original_filename or None, file_size=actual_size)
+    image = GalleryImage(
+        band_id=legacy_band_id, filename=filename,
+        original_filename=original_filename or None, file_size=actual_size,
+    )
     db.session.add(image)
     db.session.commit()
     return jsonify(image.to_dict()), 201
@@ -235,13 +257,13 @@ def initiate_multipart_media():
         session, capability_token = create_session(
             PERSONAL_LOG_TARGET, original_filename=filename, filename=secure_name,
             content_type=content_type, declared_bytes=declared_bytes,
-            member_id=member_id, title=title,
+            member_id=member_id, title=title, band_id=_legacy_upload_band_id(),
         )
     else:
         session, capability_token = create_session(
             MEDIA_TARGET, original_filename=filename, filename=secure_name,
             content_type=content_type, declared_bytes=declared_bytes,
-            song_id=song_id, rehearsal_id=rehearsal_id,
+            song_id=song_id, rehearsal_id=rehearsal_id, band_id=_legacy_upload_band_id(),
         )
     return jsonify({
         'session_id': session.id, 'filename': secure_name, 'part_size': MULTIPART_PART_SIZE,
@@ -253,7 +275,10 @@ def initiate_multipart_media():
 
 @uploads_bp.route('/uploads/multipart/<session_id>/parts', methods=['POST'])
 def presign_multipart_part(session_id):
-    session = require_active_session(session_id, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    session = _legacy_session_or_404(session_id)
+    require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    if session.status != 'initiated':
+        raise ValidationError(f'Upload session is {session.status}.', status_code=409)
     data = request.get_json()
     if not data:
         raise ValidationError('Request body is required')
@@ -268,7 +293,10 @@ def presign_multipart_part(session_id):
 
 @uploads_bp.route('/uploads/multipart/<session_id>/parts/<int:part_number>/ack', methods=['POST'])
 def acknowledge_multipart_part(session_id, part_number):
-    session = require_active_session(session_id, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    session = _legacy_session_or_404(session_id)
+    require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+    if session.status != 'initiated':
+        raise ValidationError(f'Upload session is {session.status}.', status_code=409)
     _require_int(part_number, 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
     data = request.get_json()
     if not data:
@@ -287,7 +315,7 @@ def acknowledge_multipart_part(session_id, part_number):
 
 @uploads_bp.route('/uploads/multipart/<session_id>', methods=['GET'])
 def get_multipart_session(session_id):
-    session = get_session_or_404(session_id)
+    session = _legacy_session_or_404(session_id)
     require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     return jsonify(session_payload(session)), 200
 
@@ -306,7 +334,7 @@ def _create_multipart_item(session, actual_size):
 
 @uploads_bp.route('/uploads/multipart/<session_id>/complete', methods=['POST'])
 def complete_multipart_media(session_id):
-    session = get_session_or_404(session_id)
+    session = _legacy_session_or_404(session_id)
     require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     item, status = complete_session(session, _object_size, _create_multipart_item)
     return jsonify(completion_payload(session, item)), status
@@ -314,6 +342,6 @@ def complete_multipart_media(session_id):
 
 @uploads_bp.route('/uploads/multipart/<session_id>/abort', methods=['POST'])
 def abort_multipart_media(session_id):
-    session = get_session_or_404(session_id)
+    session = _legacy_session_or_404(session_id)
     require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     return jsonify({'session_id': session.id, 'status': abort_session(session)}), 200

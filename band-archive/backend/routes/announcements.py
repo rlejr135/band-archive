@@ -3,13 +3,14 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Announcement
 from errors import NotFoundError, ValidationError
+from legacy_scope import legacy_band_id, legacy_query
 
 announcements_bp = Blueprint('announcements', __name__)
 
 
 @announcements_bp.route('/announcement', methods=['GET'])
 def get_announcement():
-    announcement = db.session.get(Announcement, 1)
+    announcement = legacy_query(Announcement).one_or_none()
     if not announcement:
         return jsonify({'id': None, 'content': '', 'updated_at': None})
     return jsonify(announcement.to_dict())
@@ -25,11 +26,12 @@ def update_announcement():
     if not content:
         raise ValidationError("Content is required")
 
-    announcement = db.session.get(Announcement, 1)
+    band_id = legacy_band_id()
+    announcement = legacy_query(Announcement).one_or_none()
     if announcement:
         announcement.content = content
     else:
-        announcement = Announcement(id=1, content=content)
+        announcement = Announcement(band_id=band_id, content=content)
         db.session.add(announcement)
 
     db.session.commit()

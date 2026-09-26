@@ -51,10 +51,12 @@ def media_viewer_votes(media_files, voter_hash_value=None):
     media_ids = [media.id for media in media_files]
     if not media_ids:
         return {}
+    band_ids = {media.band_id for media in media_files}
     return {
         vote.media_id: vote.value
         for vote in MediaVote.query.filter(
             MediaVote.voter_hash == voter_hash_value,
             MediaVote.media_id.in_(media_ids),
+            MediaVote.band_id.in_(band_ids),
         ).all()
     }

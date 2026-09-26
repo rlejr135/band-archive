@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import GalleryImage
 from errors import ValidationError, NotFoundError
-from route_helpers import get_or_404
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query
 from storage import storage
 from upload_helpers import prepare_upload
 from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
@@ -12,17 +12,19 @@ from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_fi
 gallery_bp = Blueprint('gallery', __name__)
 
 def _get_image_or_404(id):
-    return get_or_404(db.session, GalleryImage, id, "Image not found")
+    return legacy_get_or_404(GalleryImage, id, "Image not found")
 
 
 @gallery_bp.route('/gallery', methods=['GET'])
 def get_images():
-    images = GalleryImage.query.order_by(GalleryImage.created_at.desc()).all()
+    images = legacy_query(GalleryImage).order_by(GalleryImage.created_at.desc()).all()
     return jsonify([img.to_dict() for img in images])
 
 
 @gallery_bp.route('/gallery', methods=['POST'])
 def upload_image():
+    # Prove the target tenant before reading a file or touching object storage.
+    legacy_band_id()
     if 'file' not in request.files:
         raise ValidationError("No file provided")
 
@@ -38,6 +40,7 @@ def upload_image():
     storage.upload(f'gallery/{upload.filename}', file, content_type=upload.content_type)
 
     image = GalleryImage(
+        band_id=legacy_band_id(),
         filename=upload.filename,
         original_filename=upload.original_filename,
         file_size=upload.file_size,
@@ -61,7 +64,9 @@ def set_featured(id):
     image = _get_image_or_404(id)
 
     # 기존 대표 이미지 해제
-    GalleryImage.query.filter_by(is_featured=True).update({'is_featured': False})
+    legacy_query(GalleryImage).filter(GalleryImage.is_featured.is_(True)).update(
+        {'is_featured': False}, synchronize_session=False,
+    )
     image.is_featured = True
     db.session.commit()
     return jsonify(image.to_dict()), 200
@@ -69,7 +74,7 @@ def set_featured(id):
 
 @gallery_bp.route('/gallery/featured', methods=['GET'])
 def get_featured():
-    image = GalleryImage.query.filter_by(is_featured=True).first()
+    image = legacy_query(GalleryImage).filter(GalleryImage.is_featured.is_(True)).first()
     if not image:
         return jsonify(None), 200
     return jsonify(image.to_dict()), 200

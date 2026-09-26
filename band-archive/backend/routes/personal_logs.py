@@ -5,12 +5,13 @@ from flask import Blueprint, jsonify, request, redirect, current_app
 from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
-from route_helpers import get_or_404
+from legacy_scope import legacy_get_or_404, legacy_query, reject_foreign_children
 from upload_helpers import prepare_upload
 from storage import storage
 from media_processing import (create_personal_log, save_personal_log_and_start,
                               retry_audio_processing_record, PERSONAL_LOG_SPEC,
-                              delete_original_and_audio, processing_status_response)
+                              delete_original_and_audio, processing_status_response,
+                              select_media_source_keys)
 from validators import (
     validate_required_string,
     validate_string_length,
@@ -26,14 +27,20 @@ ALLOWED_LOG_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 
 def _get_member_or_404(member_id):
-    return get_or_404(db.session, Member, member_id, "Member not found")
+    return legacy_get_or_404(Member, member_id, "Member not found")
+
+
+def _get_log_or_404(log_id):
+    return legacy_get_or_404(PersonalLog, log_id, "Personal log not found")
 
 
 
 @personal_logs_bp.route('/members/<int:member_id>/logs', methods=['GET'])
 def get_logs(member_id):
     _get_member_or_404(member_id)
-    logs = PersonalLog.query.filter_by(member_id=member_id).order_by(PersonalLog.created_at.desc()).all()
+    logs = legacy_query(PersonalLog).filter(PersonalLog.member_id == member_id).order_by(
+        PersonalLog.created_at.desc(),
+    ).all()
     return jsonify([log.to_dict() for log in logs])
 
 
@@ -82,9 +89,9 @@ def create_log(member_id):
 
 @personal_logs_bp.route('/personal-logs/<int:log_id>', methods=['DELETE'])
 def delete_log(log_id):
-    log = db.session.get(PersonalLog, log_id)
-    if not log:
-        raise NotFoundError("Personal log not found")
+    log = _get_log_or_404(log_id)
+    from models import Comment
+    reject_foreign_children(log, Comment, 'personal_log_id', 'Personal log not found')
 
     delete_original_and_audio(log, 'personal_logs', current_app.logger)
 
@@ -95,17 +102,13 @@ def delete_log(log_id):
 
 @personal_logs_bp.route('/personal-logs/<int:log_id>/processing', methods=['GET'])
 def get_log_processing(log_id):
-    log = db.session.get(PersonalLog, log_id)
-    if not log:
-        raise NotFoundError('Personal log not found')
+    log = _get_log_or_404(log_id)
     return jsonify(processing_status_response(log, 'personal_logs'))
 
 
 @personal_logs_bp.route('/personal-logs/<int:log_id>/retry-audio', methods=['POST'])
 def retry_log_audio(log_id):
-    log = db.session.get(PersonalLog, log_id)
-    if not log:
-        raise NotFoundError('Personal log not found')
+    log = _get_log_or_404(log_id)
     try:
         retry_audio_processing_record(current_app._get_current_object(), log, PERSONAL_LOG_SPEC)
     except ValueError as exc:
@@ -118,5 +121,10 @@ def retry_log_audio(log_id):
 @personal_logs_bp.route('/uploads/personal_logs/<filename>')
 def serve_personal_log_file(filename):
     """하위 호환: presigned URL로 리다이렉트"""
-    url = storage.generate_url(f'personal_logs/{filename}')
+    requested_key = f'personal_logs/{filename}'
+    records = legacy_query(PersonalLog).filter(PersonalLog.filename == filename).all()
+    if not any(select_media_source_keys(record, 'personal_logs')['original'] == requested_key
+               for record in records):
+        raise NotFoundError('Personal log source not found')
+    url = storage.generate_url(requested_key)
     return redirect(url)

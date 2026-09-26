@@ -198,7 +198,9 @@ def test_duplicate_normalized_email_is_rejected_and_v1_stays_public(auth_app, si
     ))
     assert conflict.status_code == 409
     assert conflict.get_json()['error'] == 'identity_conflict'
-    assert auth_app.test_client().get('/songs').status_code == 200
+    # v1 remains unauthenticated, but no longer operates against an
+    # unproven tenant when this isolated auth fixture has no backfill marker.
+    assert auth_app.test_client().get('/songs').status_code == 503
     with auth_app.app_context():
         assert AppUser.query.count() == 1
 

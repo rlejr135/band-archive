@@ -49,7 +49,7 @@ def apply_vote(*, item_model, vote_model, foreign_key, item_id, voter_hash_value
                 raise NotFoundError()
             raise NotFoundError(not_found_message)
 
-        filters = {foreign_key: item_id, 'voter_hash': voter_hash_value}
+        filters = {foreign_key: item_id, 'voter_hash': voter_hash_value, 'band_id': band_id}
         previous_vote = db.session.query(vote_model).filter_by(**filters).first()
         previous_value = previous_vote.value if previous_vote else 0
         if previous_value != expected_value:
@@ -63,7 +63,10 @@ def apply_vote(*, item_model, vote_model, foreign_key, item_id, voter_hash_value
             elif previous_vote:
                 previous_vote.value = value
             else:
-                db.session.add(vote_model(**{foreign_key: item_id, 'voter_hash': voter_hash_value, 'value': value}))
+                db.session.add(vote_model(**{
+                    foreign_key: item_id, 'band_id': band_id,
+                    'voter_hash': voter_hash_value, 'value': value,
+                }))
 
             upvote_delta = int(value == 1) - int(previous_value == 1)
             downvote_delta = int(value == -1) - int(previous_value == -1)

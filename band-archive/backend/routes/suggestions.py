@@ -3,19 +3,19 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Song, SongSuggestion
 from errors import NotFoundError, ValidationError
-from route_helpers import get_or_404
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query
 from validators import validate_string_length
 
 suggestions_bp = Blueprint('suggestions', __name__)
 
 
 def _get_suggestion_or_404(id):
-    return get_or_404(db.session, SongSuggestion, id, "Suggestion not found")
+    return legacy_get_or_404(SongSuggestion, id, "Suggestion not found")
 
 
 @suggestions_bp.route('/suggestions', methods=['GET'])
 def get_suggestions():
-    suggestions = SongSuggestion.query.order_by(
+    suggestions = legacy_query(SongSuggestion).order_by(
         (SongSuggestion.thumbs_up - SongSuggestion.thumbs_down).desc()
     ).all()
     return jsonify([s.to_dict() for s in suggestions])
@@ -42,7 +42,9 @@ def create_suggestion():
     validate_string_length(link, 'link', 500)
 
     memo = data.get('memo', '').strip() or None
-    suggestion = SongSuggestion(title=title, artist=artist, link=link, memo=memo)
+    suggestion = SongSuggestion(
+        band_id=legacy_band_id(), title=title, artist=artist, link=link, memo=memo,
+    )
     db.session.add(suggestion)
     db.session.commit()
     return jsonify(suggestion.to_dict()), 201
@@ -70,6 +72,7 @@ def promote_suggestion(id):
         raise ValidationError("Invalid password")
 
     song = Song(
+        band_id=suggestion.band_id,
         title=suggestion.title,
         artist=suggestion.artist,
         link=suggestion.link,

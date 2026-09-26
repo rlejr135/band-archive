@@ -58,6 +58,21 @@ def require_legacy_related(parent, related, message='Related resource not found'
     return related
 
 
+def reject_foreign_children(parent, child_model, foreign_key, message='Related resource not found'):
+    """Prevent ORM cascades from deleting or detaching corrupt foreign rows."""
+    band_id = legacy_band_id()
+    if getattr(parent, 'band_id', None) != band_id:
+        raise NotFoundError(message)
+    child_key = getattr(child_model, foreign_key)
+    foreign = child_model.query.filter(
+        child_key == parent.id, child_model.band_id != band_id,
+    ).first()
+    if foreign is not None:
+        # Treat a broken cross-tenant graph exactly like an unavailable v1
+        # relation.  Do not reveal or mutate the foreign child via cascade.
+        raise NotFoundError(message)
+
+
 def legacy_v1_request():
     """Whether the current request is part of the public v1 compatibility API."""
     from flask import request

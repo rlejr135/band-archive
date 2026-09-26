@@ -5,9 +5,9 @@ from flask import Blueprint, jsonify, request, redirect, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Song, SongVote, Media, MediaVote, Rehearsal, validated_legacy_band_id
+from models import Song, SongVote, Media, MediaVote, Rehearsal
 from errors import ValidationError, NotFoundError
-from route_helpers import get_or_404
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, reject_foreign_children
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
                               delete_original_and_audio, processing_status_response,
@@ -31,26 +31,16 @@ from validators import (
 songs_bp = Blueprint('songs', __name__)
 
 
-def _get_song_or_404(id):
-    return get_or_404(db.session, Song, id)
-
-
 def _legacy_band_id():
-    return validated_legacy_band_id(db.session.connection())
+    return legacy_band_id()
 
 
 def _get_legacy_song_or_404(song_id):
-    song = Song.query.filter(Song.id == song_id, Song.band_id == _legacy_band_id()).one_or_none()
-    if song is None:
-        raise NotFoundError('Song not found')
-    return song
+    return legacy_get_or_404(Song, song_id, 'Song not found')
 
 
 def _get_legacy_media_or_404(media_id):
-    media = Media.query.filter(Media.id == media_id, Media.band_id == _legacy_band_id()).one_or_none()
-    if media is None:
-        raise NotFoundError('Media not found')
-    return media
+    return legacy_get_or_404(Media, media_id, 'Media not found')
 
 
 def _song_with_media_viewer_votes(song, voter_hash=None):
@@ -66,7 +56,7 @@ def home():
 @songs_bp.route('/songs', methods=['GET'])
 def get_songs():
     voter_hash_value = voter_hash()
-    query = Song.query
+    query = legacy_query(Song)
 
     q = request.args.get('q')
     if q:
@@ -92,7 +82,7 @@ def get_songs():
 
 @songs_bp.route('/songs/<int:id>', methods=['GET'])
 def get_song(id):
-    song = _get_song_or_404(id)
+    song = _get_legacy_song_or_404(id)
     return jsonify(_song_with_media_viewer_votes(song, voter_hash()))
 
 
@@ -221,6 +211,7 @@ def update_song(id):
 @songs_bp.route('/songs/<int:id>', methods=['DELETE'])
 def delete_song(id):
     song = _get_legacy_song_or_404(id)
+    reject_foreign_children(song, Media, 'song_id', 'Song not found')
 
     for media in song.media_files:
         delete_original_and_audio(media, 'media', current_app.logger)
@@ -270,9 +261,11 @@ def upload_sheet_music(id):
 
 @songs_bp.route('/songs/<int:id>/media', methods=['GET'])
 def get_media_list(id):
-    _get_song_or_404(id)
+    _get_legacy_song_or_404(id)
     voter_hash_value = voter_hash()
-    media_files = Media.query.filter_by(song_id=id).order_by(Media.vote_score.desc(), Media.id.asc()).all()
+    media_files = legacy_query(Media).filter(Media.song_id == id).order_by(
+        Media.vote_score.desc(), Media.id.asc(),
+    ).all()
     viewer_votes = media_viewer_votes(media_files, voter_hash_value)
     return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 
@@ -416,6 +409,8 @@ def rename_media(media_id):
 @songs_bp.route('/media/<int:media_id>', methods=['DELETE'])
 def delete_media(media_id):
     media = _get_legacy_media_or_404(media_id)
+    from models import Comment
+    reject_foreign_children(media, Comment, 'media_id', 'Media not found')
 
     delete_original_and_audio(media, 'media', current_app.logger)
 
@@ -426,9 +421,7 @@ def delete_media(media_id):
 
 @songs_bp.route('/media/<int:media_id>/processing', methods=['GET'])
 def get_media_processing(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = _get_legacy_media_or_404(media_id)
     return jsonify(processing_status_response(media, 'media'))
 
 
@@ -448,10 +441,12 @@ def retry_media_audio(media_id):
 def uploaded_file(filename):
     """하위 호환: presigned URL로 리다이렉트"""
     requested_key = f'media/{filename}'
-    matching_records = Media.query.filter_by(filename=filename).all()
-    if matching_records and not any(
-            select_media_source_keys(media, 'media')['original'] == requested_key
-            for media in matching_records):
+    # A filename is never a storage capability.  It must first resolve to a
+    # real legacy-scoped record whose currently allowed original source is the
+    # exact legacy key.  This also rejects pruned originals without signing.
+    matching_records = legacy_query(Media).filter(Media.filename == filename).all()
+    if not any(select_media_source_keys(media, 'media')['original'] == requested_key
+               for media in matching_records):
         raise NotFoundError("Media source not found")
     url = storage.generate_url(requested_key)
     return redirect(url)

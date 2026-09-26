@@ -3,9 +3,9 @@ from datetime import date
 from flask import Blueprint, jsonify, request, current_app
 
 from extensions import db
-from models import Rehearsal, Song, Media, validated_legacy_band_id
+from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
-from route_helpers import get_or_404
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, reject_foreign_children
 from storage import storage
 from media_processing import create_media, save_media_and_start
 from voting import voter_hash, media_viewer_votes
@@ -23,21 +23,12 @@ from validators import (
 rehearsals_bp = Blueprint('rehearsals', __name__)
 
 
-def _get_rehearsal_or_404(id):
-    return get_or_404(db.session, Rehearsal, id)
-
-
 def _legacy_band_id():
-    return validated_legacy_band_id(db.session.connection())
+    return legacy_band_id()
 
 
 def _get_legacy_rehearsal_or_404(rehearsal_id):
-    rehearsal = Rehearsal.query.filter(
-        Rehearsal.id == rehearsal_id, Rehearsal.band_id == _legacy_band_id(),
-    ).one_or_none()
-    if rehearsal is None:
-        raise NotFoundError('Rehearsal not found')
-    return rehearsal
+    return legacy_get_or_404(Rehearsal, rehearsal_id, 'Rehearsal not found')
 
 
 def _parse_date(value, field_name):
@@ -63,7 +54,7 @@ def _songs_in_rehearsal_band_or_error(band_id, song_ids):
 
 @rehearsals_bp.route('/rehearsals', methods=['GET'])
 def get_rehearsals():
-    query = Rehearsal.query
+    query = legacy_query(Rehearsal)
 
     year = request.args.get('year', type=int)
     month = request.args.get('month', type=int)
@@ -89,7 +80,7 @@ def get_rehearsals():
 
 @rehearsals_bp.route('/rehearsals/<int:id>', methods=['GET'])
 def get_rehearsal(id):
-    rehearsal = _get_rehearsal_or_404(id)
+    rehearsal = _get_legacy_rehearsal_or_404(id)
     return jsonify(rehearsal.to_dict())
 
 
@@ -197,6 +188,9 @@ def update_rehearsal(id):
 @rehearsals_bp.route('/rehearsals/<int:id>', methods=['DELETE'])
 def delete_rehearsal(id):
     rehearsal = _get_legacy_rehearsal_or_404(id)
+    reject_foreign_children(rehearsal, Media, 'rehearsal_id', 'Rehearsal not found')
+    if any(song.band_id != rehearsal.band_id for song in rehearsal.songs):
+        raise NotFoundError('Rehearsal not found')
     db.session.delete(rehearsal)
     db.session.commit()
     return jsonify({"message": "Rehearsal deleted"}), 200
@@ -205,8 +199,10 @@ def delete_rehearsal(id):
 
 @rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['GET'])
 def get_rehearsal_media(id):
-    rehearsal = _get_rehearsal_or_404(id)
-    media_files = sorted(rehearsal.media_files, key=lambda media: (-media.vote_score, media.id))
+    rehearsal = _get_legacy_rehearsal_or_404(id)
+    media_files = legacy_query(Media).filter(Media.rehearsal_id == rehearsal.id).order_by(
+        Media.vote_score.desc(), Media.id.asc(),
+    ).all()
     viewer_votes = media_viewer_votes(media_files, voter_hash())
     return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 

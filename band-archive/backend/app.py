@@ -364,6 +364,16 @@ def create_app(config_class=None, start_worker=None):
 
     @app.before_request
     def _require_phase4_orm_schema():
+        # The retirement switch is intentionally the very first v1 mutation
+        # decision.  It is independent of migration readiness and must not
+        # parse a body or reach a handler before returning its stable status.
+        from legacy_scope import legacy_v1_request, legacy_writes_enabled
+        if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
+                and legacy_v1_request() and not legacy_writes_enabled()):
+            return jsonify(
+                error='legacy_v1_writes_disabled',
+                message='Legacy v1 writes have been retired.',
+            ), 410
         if request.method == 'OPTIONS' or request.path == '/health' or request.path.startswith('/api/v2/'):
             return None
         if app.config.get('PHASE4_ORM_SCHEMA_READY', False):
@@ -377,18 +387,6 @@ def create_app(config_class=None, start_worker=None):
             return None
         return jsonify(error='tenant_schema_unavailable',
                        message='Phase 4 database migration is required.'), 503
-
-    @app.before_request
-    def _guard_legacy_v1_writes():
-        """Stop v1 writes before Flask parses bodies or handlers touch storage."""
-        from legacy_scope import legacy_v1_request, legacy_writes_enabled
-
-        if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
-                and legacy_v1_request() and not legacy_writes_enabled()):
-            return jsonify(
-                error='legacy_v1_writes_disabled',
-                message='Legacy v1 writes have been retired.',
-            ), 410
 
     @app.after_request
     def _log_legacy_v1_usage(response):

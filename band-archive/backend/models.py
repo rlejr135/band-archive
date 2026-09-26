@@ -230,7 +230,11 @@ class Song(db.Model):
         media_viewer_votes = media_viewer_votes or {}
         # Keep the pre-vote list order for Song itself.  Votes only rank media
         # within a song; ties retain the historical ID/insertion order.
-        media = sorted(self.media_files, key=lambda item: (-item.vote_score, item.id))
+        media = sorted(
+            (item for item in self.media_files if item.band_id == self.band_id),
+            key=lambda item: (-item.vote_score, item.id),
+        )
+        rehearsals = [item for item in self.rehearsals if item.band_id == self.band_id]
         return {
             'id': self.id,
             'title': self.title,
@@ -242,9 +246,9 @@ class Song(db.Model):
             'genre': self.genre,
             'difficulty': self.difficulty,
             'sheet_music': self.sheet_music,
-            'has_featured_media': any(m.is_featured for m in self.media_files),
+            'has_featured_media': any(m.is_featured for m in media),
             'media': [item.to_dict(viewer_vote=media_viewer_votes.get(item.id, 0)) for item in media],
-            'rehearsals': [{'id': r.id, 'title': r.title, 'date': r.date.isoformat()} for r in self.rehearsals],
+            'rehearsals': [{'id': r.id, 'title': r.title, 'date': r.date.isoformat()} for r in rehearsals],
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -335,10 +339,10 @@ class Media(db.Model):
             'id': self.id,
             'song_id': self.song_id,
             'rehearsal_id': self.rehearsal_id,
-            'rehearsal_title': self.rehearsal.title if self.rehearsal else None,
-            'rehearsal_date': self.rehearsal.date.isoformat() if self.rehearsal and self.rehearsal.date else None,
-            'song_title': self.song.title if self.song else None,
-            'song_artist': self.song.artist if self.song else None,
+            'rehearsal_title': self.rehearsal.title if self.rehearsal and self.rehearsal.band_id == self.band_id else None,
+            'rehearsal_date': self.rehearsal.date.isoformat() if self.rehearsal and self.rehearsal.band_id == self.band_id and self.rehearsal.date else None,
+            'song_title': self.song.title if self.song and self.song.band_id == self.band_id else None,
+            'song_artist': self.song.artist if self.song and self.song.band_id == self.band_id else None,
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
@@ -349,7 +353,7 @@ class Media(db.Model):
             'downvote_count': self.downvote_count,
             'vote_score': self.vote_score,
             'viewer_vote': viewer_vote,
-            'comment_count': len(self.comments),
+            'comment_count': sum(comment.band_id == self.band_id for comment in self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -496,13 +500,13 @@ class PersonalLog(db.Model):
         return {
             'id': self.id,
             'member_id': self.member_id,
-            'member_name': self.member.name if self.member else None,
+            'member_name': self.member.name if self.member and self.member.band_id == self.band_id else None,
             'title': self.title,
             'filename': self.original_filename or self.filename,
             'file_type': self.file_type,
             'file_size': self.file_size,
             **fields,
-            'comment_count': len(self.comments),
+            'comment_count': sum(comment.band_id == self.band_id for comment in self.comments),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -588,8 +592,9 @@ class Rehearsal(db.Model):
             'longitude': self.longitude,
             'memo': self.memo,
             'color': self.color,
-            'songs': [{'id': s.id, 'title': s.title, 'artist': s.artist} for s in self.songs],
-            'media_count': len(self.media_files),
+            'songs': [{'id': s.id, 'title': s.title, 'artist': s.artist}
+                      for s in self.songs if s.band_id == self.band_id],
+            'media_count': sum(media.band_id == self.band_id for media in self.media_files),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -641,7 +646,7 @@ class GalleryImage(db.Model):
             'filename': self.original_filename or self.filename,
             'file_size': self.file_size,
             'is_featured': self.is_featured,
-            'url': storage.generate_url(f'gallery/{self.filename}'),
+            'url': storage.generate_url(self.object_key or f'gallery/{self.filename}'),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -690,7 +695,7 @@ class Comment(db.Model):
             'content': self.content,
             'timestamp_seconds': self.timestamp_seconds,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'replies': [reply.to_dict() for reply in self.replies],
+            'replies': [reply.to_dict() for reply in self.replies if reply.band_id == self.band_id],
         }
 
 

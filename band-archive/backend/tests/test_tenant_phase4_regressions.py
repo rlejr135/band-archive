@@ -115,13 +115,15 @@ def test_revision_four_blocks_every_orm_backed_v1_read_and_write_without_mutatio
         _dispose(runtime)
 
 
-def test_revision_five_preserves_reads_but_blocks_writes_until_backfill(tmp_path):
+def test_revision_five_fails_closed_until_legacy_scope_is_backfilled(tmp_path):
     path = tmp_path / 'revision-five-unbackfilled.db'
     _upgrade(path, '20260916_05')
     runtime = create_app(_runtime_config(path), start_worker=False)
     try:
         client = runtime.test_client()
-        assert client.get('/songs').status_code == 200
+        read = client.get('/songs')
+        assert read.status_code == 503
+        assert read.get_json()['error'] == 'tenant_scope_unavailable'
         for endpoint, payload in _V1_WRITES:
             response = client.post(endpoint, json=payload)
             assert response.status_code == 503

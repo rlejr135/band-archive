@@ -5,18 +5,18 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Comment, Media, PersonalLog
 from errors import NotFoundError, ValidationError
-from route_helpers import get_or_404
+from legacy_scope import legacy_get_or_404, legacy_query, reject_foreign_children
 
 comments_bp = Blueprint('comments', __name__)
 
 
 def _get_comment_or_404(id):
-    return get_or_404(db.session, Comment, id, "Comment not found")
+    return legacy_get_or_404(Comment, id, "Comment not found")
 
 
 def _get_top_level_comments(query_filter):
     """Get top-level comments (no parent) with nested replies via to_dict()."""
-    comments = Comment.query.filter(
+    comments = legacy_query(Comment).filter(
         query_filter,
         Comment.parent_id.is_(None)
     ).order_by(Comment.created_at.asc()).all()
@@ -101,17 +101,13 @@ def _create_comment(data, media_id=None, personal_log_id=None, parent_id=None, t
 
 @comments_bp.route('/media/<int:media_id>/comments', methods=['GET'])
 def get_media_comments(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = legacy_get_or_404(Media, media_id, "Media not found")
     return jsonify(_get_top_level_comments(Comment.media_id == media_id))
 
 
 @comments_bp.route('/media/<int:media_id>/comments', methods=['POST'])
 def create_media_comment(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = legacy_get_or_404(Media, media_id, "Media not found")
     comment = _create_comment(request.json, media_id=media_id, target=media)
     return jsonify(comment.to_dict()), 201
 
@@ -120,17 +116,13 @@ def create_media_comment(media_id):
 
 @comments_bp.route('/personal-logs/<int:log_id>/comments', methods=['GET'])
 def get_personal_log_comments(log_id):
-    log = db.session.get(PersonalLog, log_id)
-    if not log:
-        raise NotFoundError("Personal log not found")
+    log = legacy_get_or_404(PersonalLog, log_id, "Personal log not found")
     return jsonify(_get_top_level_comments(Comment.personal_log_id == log_id))
 
 
 @comments_bp.route('/personal-logs/<int:log_id>/comments', methods=['POST'])
 def create_personal_log_comment(log_id):
-    log = db.session.get(PersonalLog, log_id)
-    if not log:
-        raise NotFoundError("Personal log not found")
+    log = legacy_get_or_404(PersonalLog, log_id, "Personal log not found")
     comment = _create_comment(request.json, personal_log_id=log_id, target=log)
     return jsonify(comment.to_dict()), 201
 
@@ -184,6 +176,7 @@ def update_comment(comment_id):
 @comments_bp.route('/comments/<int:comment_id>', methods=['DELETE'])
 def delete_comment(comment_id):
     comment = _get_comment_or_404(comment_id)
+    reject_foreign_children(comment, Comment, 'parent_id', 'Comment not found')
     data = request.json
     if not data:
         raise ValidationError("Request body is required")
