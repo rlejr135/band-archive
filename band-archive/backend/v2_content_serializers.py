@@ -3,7 +3,9 @@
 These serializers intentionally do not call model ``to_dict`` methods.  The
 legacy serializers may create presigned URLs and retain storage-era filename
 fields; neither is safe to reuse before a resource has passed v2 visibility
-and tenant checks.
+and tenant checks.  A direct, expiring R2 presigned URL may necessarily encode
+its object path as part of the signed protocol; no separate storage-key or
+filename field is returned.
 """
 
 from band_access import MEMBERS, PUBLIC, content_capabilities, effective_visibility
@@ -234,7 +236,7 @@ def serialize_processing(scope, media):
     }
 
 
-def serialize_comment(scope, comment, media_visibility_value):
+def serialize_comment(scope, comment, media_visibility_value, children_by_parent=None):
     value = {
         'id': comment.id, 'media_id': comment.media_id, 'parent_id': comment.parent_id,
         'author': comment.author, 'content': comment.content,
@@ -243,8 +245,9 @@ def serialize_comment(scope, comment, media_visibility_value):
         # declared/effective representation is explicitly inherited.
         **_flags(scope, comment, media_visibility_value),
     }
-    replies = [reply for reply in comment.replies if belongs_to_scope(scope, reply)
+    relation = (children_by_parent.get(comment.id, []) if children_by_parent is not None else comment.replies)
+    replies = [reply for reply in relation if belongs_to_scope(scope, reply)
                and reply.media_id == comment.media_id]
-    value['replies'] = [serialize_comment(scope, reply, media_visibility_value)
+    value['replies'] = [serialize_comment(scope, reply, media_visibility_value, children_by_parent)
                         for reply in sorted(replies, key=lambda item: (_iso(item.created_at) or '', item.id))]
     return value
