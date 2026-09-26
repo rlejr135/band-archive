@@ -1,4 +1,5 @@
 import os
+import re
 import time
 
 from flask import Flask, jsonify, request
@@ -377,12 +378,61 @@ def create_app(config_class=None, start_worker=None):
         return jsonify(error='tenant_schema_unavailable',
                        message='Phase 4 database migration is required.'), 503
 
+    @app.before_request
+    def _guard_legacy_v1_writes():
+        """Stop v1 writes before Flask parses bodies or handlers touch storage."""
+        from legacy_scope import legacy_v1_request, legacy_writes_enabled
+
+        if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
+                and legacy_v1_request() and not legacy_writes_enabled()):
+            return jsonify(
+                error='legacy_v1_writes_disabled',
+                message='Legacy v1 writes have been retired.',
+            ), 410
+
+    @app.after_request
+    def _log_legacy_v1_usage(response):
+        """One privacy-safe usage event for every historical API request."""
+        try:
+            from legacy_scope import legacy_v1_request
+
+            if legacy_v1_request():
+                # Never log arbitrary headers, query strings, request bodies,
+                # filenames, identities, or capability tokens.  Client
+                # version is useful rollout telemetry but bounded/sanitized.
+                raw_version = request.headers.get('X-Client-Version', '').strip()
+                # Accept only a compact release-like version; arbitrary
+                # caller-controlled headers can otherwise smuggle identities
+                # or secrets into the observability stream.
+                client_version = raw_version if re.fullmatch(
+                    r'v?\d+(?:\.\d+){0,3}(?:[-._][A-Za-z0-9]+)?', raw_version[:80],
+                ) else ''
+                rule = request.url_rule.rule if request.url_rule is not None else '<unmatched>'
+                app.logger.info('legacy_v1_usage route=%s method=%s status=%s client_version=%s',
+                                rule, request.method, response.status_code, client_version or '-')
+        except Exception:
+            # Observability must never alter a public request's outcome.
+            pass
+        return response
+
     db.init_app(app)
     # Keep Flask-Migrate pointed at the checked-in baseline.  The existing
     # create_all/startup migration path below remains the production path
     # until the later Postgres cutover; this only establishes the toolchain.
     Migrate(app, db, directory=str(MIGRATIONS_DIRECTORY))
     register_error_handlers(app)
+
+    from legacy_scope import LegacyScopeUnavailable
+
+    @app.errorhandler(LegacyScopeUnavailable)
+    def _legacy_scope_unavailable(error):
+        # Do not let an ambiguous/missing backfill marker degrade into an
+        # unscoped v1 query.  Leave every other exception to Flask's normal
+        # error handling.
+        return jsonify(
+            error='tenant_scope_unavailable',
+            message='Validated legacy tenant scope is unavailable.',
+        ), 503
     app.register_blueprint(songs_bp)
     app.register_blueprint(migrations_bp)
     app.register_blueprint(auth_bp)

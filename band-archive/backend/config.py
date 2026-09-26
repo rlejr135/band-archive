@@ -103,6 +103,9 @@ def _origin(parsed):
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     MAX_CONTENT_LENGTH = 200 * 1024 * 1024  # 200MB
+    # Emergency retirement switch for the unauthenticated compatibility API.
+    # Reads remain available so legacy clients can be migrated gracefully.
+    LEGACY_V1_WRITES_ENABLED = _env_flag('LEGACY_V1_WRITES_ENABLED', 'true')
 
     # S3 호환 스토리지 설정 (R2, B2 등)
     S3_ENDPOINT_URL = os.getenv('S3_ENDPOINT_URL')
