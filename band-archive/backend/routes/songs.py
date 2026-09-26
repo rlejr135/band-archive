@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, request, redirect, current_app
 from werkzeug.utils import secure_filename
 
 from extensions import db
-from models import Song, SongVote, Media, MediaVote, Rehearsal
+from models import Song, SongVote, Media, MediaVote, Rehearsal, validated_legacy_band_id
 from errors import ValidationError, NotFoundError
 from route_helpers import get_or_404
 from storage import storage
@@ -33,6 +33,24 @@ songs_bp = Blueprint('songs', __name__)
 
 def _get_song_or_404(id):
     return get_or_404(db.session, Song, id)
+
+
+def _legacy_band_id():
+    return validated_legacy_band_id(db.session.connection())
+
+
+def _get_legacy_song_or_404(song_id):
+    song = Song.query.filter(Song.id == song_id, Song.band_id == _legacy_band_id()).one_or_none()
+    if song is None:
+        raise NotFoundError('Song not found')
+    return song
+
+
+def _get_legacy_media_or_404(media_id):
+    media = Media.query.filter(Media.id == media_id, Media.band_id == _legacy_band_id()).one_or_none()
+    if media is None:
+        raise NotFoundError('Media not found')
+    return media
 
 
 def _song_with_media_viewer_votes(song, voter_hash=None):
@@ -142,6 +160,7 @@ def add_song():
     validate_difficulty(difficulty)
 
     new_song = Song(
+        band_id=_legacy_band_id(),
         title=data['title'],
         artist=data['artist'],
         status=status,
@@ -158,7 +177,7 @@ def add_song():
 
 @songs_bp.route('/songs/<int:id>', methods=['PUT'])
 def update_song(id):
-    song = _get_song_or_404(id)
+    song = _get_legacy_song_or_404(id)
 
     data = request.json
     if not data:
@@ -199,7 +218,7 @@ def update_song(id):
 
 @songs_bp.route('/songs/<int:id>', methods=['DELETE'])
 def delete_song(id):
-    song = _get_song_or_404(id)
+    song = _get_legacy_song_or_404(id)
 
     for media in song.media_files:
         delete_original_and_audio(media, 'media', current_app.logger)
@@ -217,7 +236,7 @@ def _safe_filename(filename):
 
 @songs_bp.route('/songs/<int:id>/upload', methods=['POST'])
 def upload_sheet_music(id):
-    song = _get_song_or_404(id)
+    song = _get_legacy_song_or_404(id)
 
     if 'file' not in request.files:
         raise ValidationError("No file provided")
@@ -258,7 +277,18 @@ def get_media_list(id):
 
 @songs_bp.route('/songs/<int:id>/media', methods=['POST'])
 def add_media(id):
-    song = _get_song_or_404(id)
+    song = _get_legacy_song_or_404(id)
+
+    # Resolve the optional relation before reading or uploading the file.  A
+    # cross-band rehearsal ID is intentionally indistinguishable from a
+    # missing one and must not leave an orphan object in storage.
+    rehearsal_id = request.form.get('rehearsal_id', type=int)
+    if rehearsal_id is not None:
+        rehearsal = Rehearsal.query.filter(
+            Rehearsal.id == rehearsal_id, Rehearsal.band_id == song.band_id,
+        ).one_or_none()
+        if rehearsal is None:
+            raise NotFoundError("Rehearsal not found")
 
     if 'file' not in request.files:
         raise ValidationError("No file provided")
@@ -273,14 +303,6 @@ def add_media(id):
     upload = prepare_upload(file, generate_secure_filename(file.filename),
                             guess_content_type(file.filename))
     storage.upload(f'media/{upload.filename}', file, content_type=upload.content_type)
-
-    rehearsal_id = request.form.get('rehearsal_id', type=int)
-    if rehearsal_id:
-        rehearsal = Rehearsal.query.filter(
-            Rehearsal.id == rehearsal_id, Rehearsal.band_id == song.band_id,
-        ).one_or_none()
-        if not rehearsal:
-            raise ValidationError("Rehearsal not found")
 
     media = create_media(
         song_id=id,
@@ -297,9 +319,7 @@ def add_media(id):
 
 @songs_bp.route('/media/<int:media_id>/rehearsal', methods=['PATCH'])
 def link_media_rehearsal(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = _get_legacy_media_or_404(media_id)
 
     data = request.get_json()
     rehearsal_id = data.get('rehearsal_id')
@@ -318,11 +338,9 @@ def link_media_rehearsal(media_id):
 
 @songs_bp.route('/media/<int:media_id>/featured', methods=['PATCH'])
 def set_featured_media(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = _get_legacy_media_or_404(media_id)
 
-    Media.query.filter_by(song_id=media.song_id, is_featured=True).update({'is_featured': False})
+    Media.query.filter_by(band_id=media.band_id, song_id=media.song_id, is_featured=True).update({'is_featured': False})
     media.is_featured = True
     db.session.commit()
     return jsonify(media.to_dict()), 200
@@ -330,9 +348,7 @@ def set_featured_media(media_id):
 
 @songs_bp.route('/media/<int:media_id>/rename', methods=['PUT'])
 def rename_media(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = _get_legacy_media_or_404(media_id)
 
     data = request.get_json()
     if not data:
@@ -397,9 +413,7 @@ def rename_media(media_id):
 
 @songs_bp.route('/media/<int:media_id>', methods=['DELETE'])
 def delete_media(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = _get_legacy_media_or_404(media_id)
 
     delete_original_and_audio(media, 'media', current_app.logger)
 
@@ -418,9 +432,7 @@ def get_media_processing(media_id):
 
 @songs_bp.route('/media/<int:media_id>/retry-audio', methods=['POST'])
 def retry_media_audio(media_id):
-    media = db.session.get(Media, media_id)
-    if not media:
-        raise NotFoundError("Media not found")
+    media = _get_legacy_media_or_404(media_id)
     try:
         retry_audio_processing(current_app._get_current_object(), media)
     except ValueError as exc:

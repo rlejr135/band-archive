@@ -3,7 +3,7 @@ from datetime import date
 from flask import Blueprint, jsonify, request, current_app
 
 from extensions import db
-from models import Rehearsal, Song, Media
+from models import Rehearsal, Song, Media, validated_legacy_band_id
 from errors import ValidationError, NotFoundError
 from route_helpers import get_or_404
 from storage import storage
@@ -25,6 +25,19 @@ rehearsals_bp = Blueprint('rehearsals', __name__)
 
 def _get_rehearsal_or_404(id):
     return get_or_404(db.session, Rehearsal, id)
+
+
+def _legacy_band_id():
+    return validated_legacy_band_id(db.session.connection())
+
+
+def _get_legacy_rehearsal_or_404(rehearsal_id):
+    rehearsal = Rehearsal.query.filter(
+        Rehearsal.id == rehearsal_id, Rehearsal.band_id == _legacy_band_id(),
+    ).one_or_none()
+    if rehearsal is None:
+        raise NotFoundError('Rehearsal not found')
+    return rehearsal
 
 
 def _parse_date(value, field_name):
@@ -103,7 +116,14 @@ def create_rehearsal():
     if location:
         validate_string_length(location, 'location', 200)
 
+    legacy_band_id = _legacy_band_id()
+    song_ids = data.get('song_ids', [])
+    # Validate every relation before the new rehearsal is flushed, so a
+    # cross-band ID cannot mutate even the current transaction.
+    songs = _songs_in_rehearsal_band_or_error(legacy_band_id, song_ids) if song_ids else []
+
     rehearsal = Rehearsal(
+        band_id=legacy_band_id,
         title=data['title'],
         date=rehearsal_date,
         start_date=start_date,
@@ -116,13 +136,9 @@ def create_rehearsal():
         color=data.get('color', '#ffd32a'),
     )
 
-    # Flush first so the legacy before-insert tenant guard has assigned the
-    # rehearsal's authoritative band before relationship IDs are resolved.
     db.session.add(rehearsal)
-    db.session.flush()
-    song_ids = data.get('song_ids', [])
     if song_ids:
-        rehearsal.songs = _songs_in_rehearsal_band_or_error(rehearsal.band_id, song_ids)
+        rehearsal.songs = songs
 
     db.session.commit()
     return jsonify(rehearsal.to_dict()), 201
@@ -130,7 +146,7 @@ def create_rehearsal():
 
 @rehearsals_bp.route('/rehearsals/<int:id>', methods=['PUT'])
 def update_rehearsal(id):
-    rehearsal = _get_rehearsal_or_404(id)
+    rehearsal = _get_legacy_rehearsal_or_404(id)
 
     data = request.json
     if not data:
@@ -180,7 +196,7 @@ def update_rehearsal(id):
 
 @rehearsals_bp.route('/rehearsals/<int:id>', methods=['DELETE'])
 def delete_rehearsal(id):
-    rehearsal = _get_rehearsal_or_404(id)
+    rehearsal = _get_legacy_rehearsal_or_404(id)
     db.session.delete(rehearsal)
     db.session.commit()
     return jsonify({"message": "Rehearsal deleted"}), 200
@@ -197,7 +213,7 @@ def get_rehearsal_media(id):
 
 @rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['POST'])
 def upload_rehearsal_media(id):
-    rehearsal = _get_rehearsal_or_404(id)
+    rehearsal = _get_legacy_rehearsal_or_404(id)
 
     song_id = request.form.get('song_id', type=int)
     if not song_id:
