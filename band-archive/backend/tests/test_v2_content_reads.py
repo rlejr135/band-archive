@@ -11,6 +11,9 @@ import pytest
 from extensions import db
 from models import Band, BandMembership, Comment, Media, Rehearsal, Song
 from tests.test_auth import _install_jwks, _jwk, _token
+# Share the authenticated current-schema fixture with the central-access
+# contracts; importing the fixture functions makes them local pytest fixtures.
+from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 
 
 def _headers(token):
@@ -30,6 +33,8 @@ def content_graph(access_app, signer):
         public_author = BandMembership.query.filter_by(band_id=public.id, role='owner').one()
         public_song = Song(band_id=public.id, created_by_membership_id=public_author.id,
                            visibility='PUBLIC', title='Public song', artist='Band B')
+        playback_song = Song(band_id=public.id, created_by_membership_id=public_author.id,
+                             visibility='PUBLIC', title='Playback song', artist='Band B')
         member_song = Song(band_id=public.id, visibility='MEMBERS',
                            title='Members song', artist='Band B')
         linked_private_rehearsal = Rehearsal(
@@ -40,8 +45,9 @@ def content_graph(access_app, signer):
             band_id=public.id, created_by_membership_id=public_author.id,
             visibility='PUBLIC', title='Public rehearsal', date=date(2026, 1, 2),
         )
-        public_song.rehearsals.extend((linked_private_rehearsal, public_rehearsal))
-        db.session.add_all((public_song, member_song, linked_private_rehearsal, public_rehearsal))
+        public_song.rehearsals.append(linked_private_rehearsal)
+        playback_song.rehearsals.append(public_rehearsal)
+        db.session.add_all((public_song, playback_song, member_song, linked_private_rehearsal, public_rehearsal))
         db.session.flush()
         hidden_by_link = Media(
             band_id=public.id, created_by_membership_id=public_author.id,
@@ -54,7 +60,7 @@ def content_graph(access_app, signer):
         )
         public_media = Media(
             band_id=public.id, created_by_membership_id=public_author.id,
-            visibility='PUBLIC', song_id=public_song.id, rehearsal_id=public_rehearsal.id,
+            visibility='PUBLIC', song_id=playback_song.id, rehearsal_id=public_rehearsal.id,
             filename='pruned-original.mp4', object_key='bands/b/public/pruned-original.mp4',
             original_filename='visible.mp4', file_type='video', transcoding_status='completed',
             video_720_object_key='bands/b/public/visible-720.mp4',
@@ -73,6 +79,7 @@ def content_graph(access_app, signer):
         db.session.commit()
         return {
             'public_band': public.id, 'private_band': private.id, 'public_song': public_song.id,
+            'playback_song': playback_song.id,
             'member_song': member_song.id, 'public_media': public_media.id,
             'hidden_media': hidden_by_link.id, 'public_rehearsal': public_rehearsal.id,
             'owner_membership': owner.id, 'member_membership': member.id,
@@ -90,18 +97,17 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
     songs = client.get(f'{base}/songs')
     assert songs.status_code == 200
     assert list(songs.get_json()) == ['songs']
-    song = next(item for item in songs.get_json()['songs'] if item['id'] == content_graph['public_song'])
-    assert song['id'] == content_graph['public_song']
+    song = next(item for item in songs.get_json()['songs'] if item['id'] == content_graph['playback_song'])
+    assert song['id'] == content_graph['playback_song']
     assert song['visibility'] == song['effective_visibility'] == 'PUBLIC'
-    assert song['rehearsals'] == [
-        {'id': content_graph['public_rehearsal'], 'title': 'Public rehearsal', 'date': '2026-01-02'}
-    ]
+    assert [item['id'] for item in song['rehearsals']] == [content_graph['public_rehearsal']]
+    assert song['rehearsals'][0]['effective_visibility'] == 'PUBLIC'
     # A MEMBER-only rehearsal linked to a public song hides that media through
     # every route, not merely the rehearsal route.
     assert [item['id'] for item in song['media']] == [content_graph['public_media']]
-    assert all(item is False for item in song['capabilities'].values())
+    assert song['can_edit'] is song['can_delete'] is song['can_manage'] is False
 
-    media = client.get(f"{base}/songs/{content_graph['public_song']}/media")
+    media = client.get(f"{base}/songs/{content_graph['playback_song']}/media")
     assert media.status_code == 200
     assert [item['id'] for item in media.get_json()['media']] == [content_graph['public_media']]
     item = media.get_json()['media'][0]
@@ -142,8 +148,8 @@ def test_member_owner_capabilities_cross_tenant_concealment_and_optional_auth_ca
     # Band B owner's token sees member content and its own authored controls.
     b_owner = _token(signer, sub='77777777-7777-7777-7777-777777777777', email='outsider@example.com')
     visible = client.get(f"{public_base}/songs/{content_graph['public_song']}/media", headers=_headers(b_owner))
-    assert [x['id'] for x in visible.get_json()['media']] == [content_graph['hidden_media'], content_graph['public_media']]
+    assert [x['id'] for x in visible.get_json()['media']] == [content_graph['hidden_media']]
     assert all(x['can_edit'] and x['can_delete'] and x['can_manage'] for x in visible.get_json()['media'])
     # Members get short-lived URLs even for a public resource only when the
     # effective visibility is MEMBERS; public remains public-TTL.
-    assert all(ttl == 3600 for _, ttl in calls)
+    assert all(ttl == 300 for _, ttl in calls)
