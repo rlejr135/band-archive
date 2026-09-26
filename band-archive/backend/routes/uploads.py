@@ -3,6 +3,7 @@ from sqlalchemy import inspect
 
 from extensions import db
 from models import (Media, Song, Rehearsal, Member, PersonalLog, GalleryImage,
+                    validated_legacy_band_id,
                     )
 from errors import ValidationError, NotFoundError
 from storage import storage
@@ -34,21 +35,31 @@ def _require_int(value, field_name, minimum=None, maximum=None):
     return value
 
 
+def _legacy_upload_band_id():
+    """Resolve the only tenant v1 upload endpoints are allowed to mutate."""
+    return validated_legacy_band_id(db.session.connection())
+
+
 def _validate_media_target(song_id, rehearsal_id):
+    legacy_band_id = _legacy_upload_band_id()
     song_id = _require_int(song_id, 'song_id', minimum=1)
-    song = db.session.get(Song, song_id)
+    song = Song.query.filter(Song.id == song_id, Song.band_id == legacy_band_id).one_or_none()
     if not song:
         raise NotFoundError('Song not found')
     if rehearsal_id is not None:
         rehearsal_id = _require_int(rehearsal_id, 'rehearsal_id', minimum=1)
-        if not db.session.get(Rehearsal, rehearsal_id):
+        rehearsal = Rehearsal.query.filter(
+            Rehearsal.id == rehearsal_id, Rehearsal.band_id == legacy_band_id,
+        ).one_or_none()
+        if not rehearsal:
             raise NotFoundError('Rehearsal not found')
     return song_id, rehearsal_id
 
 
 def _validate_personal_log_target(member_id):
+    legacy_band_id = _legacy_upload_band_id()
     member_id = _require_int(member_id, 'member_id', minimum=1)
-    if not db.session.get(Member, member_id):
+    if not Member.query.filter(Member.id == member_id, Member.band_id == legacy_band_id).one_or_none():
         raise NotFoundError('Member not found')
     return member_id
 

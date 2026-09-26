@@ -720,6 +720,15 @@ def _legacy_band_id(connection):
     return band_id
 
 
+def validated_legacy_band_id(connection):
+    """Return the sole validated v1 import tenant for legacy HTTP writers.
+
+    Keep all legacy-target resolution on the same validation marker and
+    import-band predicate as the ORM before-insert guard.
+    """
+    return _legacy_band_id(connection)
+
+
 def _parent_band(connection, table, record_id):
     if record_id is None:
         return None
