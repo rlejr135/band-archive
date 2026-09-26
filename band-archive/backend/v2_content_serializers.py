@@ -186,11 +186,7 @@ def serialize_song(scope, song, *, include_children=True):
         rehearsals = [rehearsal_ref(scope, item) for item in song.rehearsals
                       if belongs_to_scope(scope, item)
                       and visible_to_scope(scope, rehearsal_visibility(scope, item))]
-        media = [serialize_media(scope, item) for item in song.media_files
-                 if graph_is_scoped(scope, item)
-                 and visible_to_scope(scope, media_visibility(scope, item))]
         value['rehearsals'] = sorted(rehearsals, key=lambda item: (item['date'] or '', item['id']))
-        value['media'] = sorted(media, key=lambda item: (-item['vote_score'], item['id']))
     return value
 
 
@@ -212,12 +208,6 @@ def serialize_rehearsal(scope, rehearsal, *, include_children=True):
              if belongs_to_scope(scope, song)
              and visible_to_scope(scope, song_visibility(scope, song))),
             key=lambda item: item['id'],
-        )
-        value['media'] = sorted(
-            (serialize_media(scope, media) for media in rehearsal.media_files
-             if graph_is_scoped(scope, media)
-             and visible_to_scope(scope, media_visibility(scope, media))),
-            key=lambda item: (-item['vote_score'], item['id']),
         )
     return value
 

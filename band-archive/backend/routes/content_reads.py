@@ -151,17 +151,19 @@ def _rehearsal_graph_sql(scope):
 
 
 def _song_or_404(song_id, scope):
-    song = visible_object_or_404(Song, song_id, scope, parent_visibility=scope.band_visibility)
-    if not graph_is_scoped(scope, song) or not visible_to_scope(scope, song_visibility(scope, song)):
+    song = visible_query(Song.query, Song, scope, parent_visibility=scope.band_visibility).filter(
+        Song.id == song_id, *_song_graph_sql(scope),
+    ).one_or_none()
+    if song is None or not visible_to_scope(scope, song_visibility(scope, song)):
         raise NotFoundError('Resource not found')
     return song
 
 
 def _rehearsal_or_404(rehearsal_id, scope):
-    rehearsal = visible_object_or_404(
-        Rehearsal, rehearsal_id, scope, parent_visibility=scope.band_visibility,
-    )
-    if not graph_is_scoped(scope, rehearsal) or not visible_to_scope(scope, rehearsal_visibility(scope, rehearsal)):
+    rehearsal = visible_query(Rehearsal.query, Rehearsal, scope, parent_visibility=scope.band_visibility).filter(
+        Rehearsal.id == rehearsal_id, *_rehearsal_graph_sql(scope),
+    ).one_or_none()
+    if rehearsal is None or not visible_to_scope(scope, rehearsal_visibility(scope, rehearsal)):
         raise NotFoundError('Resource not found')
     return rehearsal
 
@@ -184,7 +186,6 @@ def list_songs(band_id):
     limit, offset = _page_request()
     query = visible_query(
         Song.query.options(
-            selectinload(Song.media_files).selectinload(Media.rehearsal),
             selectinload(Song.rehearsals),
         ), Song, scope, parent_visibility=scope.band_visibility,
     ).filter(*_song_graph_sql(scope))
@@ -221,8 +222,6 @@ def list_rehearsals(band_id):
     query = visible_query(
         Rehearsal.query.options(
             selectinload(Rehearsal.songs),
-            selectinload(Rehearsal.media_files).selectinload(Media.song).selectinload(Song.rehearsals),
-            selectinload(Rehearsal.media_files).selectinload(Media.rehearsal),
         ), Rehearsal, scope, parent_visibility=scope.band_visibility,
     ).filter(*_rehearsal_graph_sql(scope))
     page, pagination = _page_query(query, (Rehearsal.date.asc(), Rehearsal.id.asc()), limit, offset)

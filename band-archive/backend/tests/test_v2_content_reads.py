@@ -129,9 +129,9 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
     assert song['visibility'] == song['effective_visibility'] == 'PUBLIC'
     assert [item['id'] for item in song['rehearsals']] == [content_graph['public_rehearsal']]
     assert song['rehearsals'][0]['effective_visibility'] == 'PUBLIC'
-    # A MEMBER-only rehearsal linked to a public song hides that media through
-    # every route, not merely the rehearsal route.
-    assert [item['id'] for item in song['media']] == [content_graph['public_media']]
+    # Summaries stay storage-neutral.  Media is only available through the
+    # dedicated SQL-paginated endpoint below.
+    assert 'media' not in song
     assert song['can_edit'] is song['can_delete'] is song['can_manage'] is False
 
     media = client.get(f"{base}/songs/{content_graph['playback_song']}/media")
@@ -257,3 +257,41 @@ def test_comments_are_a_flat_bounded_deterministic_page(access_app, content_grap
     assert payload['pagination']['total'] == 12
     assert payload['pagination']['has_more'] is True
     assert all('replies' not in item for item in payload['comments'])
+
+
+def test_song_and_rehearsal_summaries_never_materialize_or_sign_large_media_children(
+        access_app, content_graph, monkeypatch):
+    from storage import storage
+
+    with access_app.app_context():
+        for index in range(101):
+            db.session.add(Media(
+                band_id=content_graph['public_band'], visibility='PUBLIC',
+                song_id=content_graph['playback_song'], rehearsal_id=content_graph['public_rehearsal'],
+                filename=f'bulk-{index}.jpg', object_key=f'bands/b/bulk-{index}.jpg', file_type='image',
+            ))
+        db.session.commit()
+    calls = []
+    monkeypatch.setattr(storage, 'generate_url',
+                        lambda key, expires_in=None: calls.append((key, expires_in)) or f'url:{key}')
+    client = access_app.test_client()
+    base = f"/api/v2/bands/{content_graph['public_band']}"
+    summaries = (
+        client.get(f'{base}/songs'),
+        client.get(f"{base}/songs/{content_graph['playback_song']}"),
+        client.get(f'{base}/rehearsals'),
+        client.get(f"{base}/rehearsals/{content_graph['public_rehearsal']}"),
+    )
+    assert all(response.status_code == 200 for response in summaries)
+    assert calls == []
+    for response in summaries:
+        body = response.get_json()
+        values = body.get('songs') or body.get('rehearsals') or [body.get('song') or body.get('rehearsal')]
+        assert all('media' not in item and 'object_key' not in item and 'filename' not in item for item in values)
+
+    media = client.get(f"{base}/songs/{content_graph['playback_song']}/media?limit=1")
+    assert media.status_code == 200
+    assert media.get_json()['pagination']['returned'] == 1
+    # The only page row is the pruned video: 720p + completed audio, and no
+    # bulk child from an unrequested page is signed.
+    assert len(calls) == 2
