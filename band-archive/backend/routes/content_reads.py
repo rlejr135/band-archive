@@ -1,7 +1,8 @@
 """Tenant-scoped, optional-authenticated v2 reads for songs and rehearsals."""
 
 from flask import Blueprint, current_app, jsonify, request
-from sqlalchemy.orm import selectinload
+from sqlalchemy import and_, exists, or_
+from sqlalchemy.orm import aliased, selectinload
 
 from band_access import (
     current_audience, optional_auth, read_scope_for_id, visible_object_or_404,
@@ -9,7 +10,7 @@ from band_access import (
 )
 from errors import NotFoundError
 from extensions import db
-from models import Band, Comment, Media, Rehearsal, Song
+from models import Band, Comment, Media, Rehearsal, Song, rehearsal_songs
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
@@ -64,17 +65,89 @@ def _page_request():
         )
 
 
-def _page(items, limit, offset):
-    """Return deterministic page metadata after fail-closed graph filtering."""
-    window = items[offset:offset + limit]
-    has_more = len(items) > offset + limit
-    return window, {
+def _page_query(query, order_columns, limit, offset):
+    """Count and materialize one SQL-bounded deterministic page."""
+    total = query.order_by(None).count()
+    items = query.order_by(*order_columns).offset(offset).limit(limit).all()
+    has_more = total > offset + len(items)
+    return items, {
         'limit': limit,
         'offset': offset,
-        'returned': len(window),
+        'returned': len(items),
+        'total': total,
         'has_more': has_more,
         'next_offset': offset + limit if has_more else None,
     }
+
+
+def _song_graph_sql(scope):
+    """SQL equivalent of the serializer's corrupt-graph fail-closed guard."""
+    foreign_media = exists().where(and_(Media.song_id == Song.id, Media.band_id != scope.band_id))
+    foreign_song_rehearsal = exists().where(and_(
+        rehearsal_songs.c.song_id == Song.id,
+        rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+        Rehearsal.band_id != scope.band_id,
+    ))
+    foreign_media_rehearsal = exists().where(and_(
+        Media.song_id == Song.id,
+        Media.rehearsal_id.is_not(None),
+        Media.rehearsal_id == Rehearsal.id,
+        Rehearsal.band_id != scope.band_id,
+    ))
+    return ~foreign_media, ~foreign_song_rehearsal, ~foreign_media_rehearsal
+
+
+def _media_graph_sql(scope):
+    song_is_scoped = exists().where(and_(Song.id == Media.song_id, Song.band_id == scope.band_id))
+    rehearsal_is_scoped = or_(
+        Media.rehearsal_id.is_(None),
+        exists().where(and_(Rehearsal.id == Media.rehearsal_id, Rehearsal.band_id == scope.band_id)),
+    )
+    foreign_song_rehearsal = exists().where(and_(
+        rehearsal_songs.c.song_id == Media.song_id,
+        rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+        Rehearsal.band_id != scope.band_id,
+    ))
+    predicates = [song_is_scoped, rehearsal_is_scoped, ~foreign_song_rehearsal]
+    if not scope.is_member:
+        song_is_public = exists().where(and_(
+            Song.id == Media.song_id, Song.band_id == scope.band_id, Song.visibility == 'PUBLIC',
+        ))
+        rehearsal_is_public = or_(
+            Media.rehearsal_id.is_(None),
+            exists().where(and_(
+                Rehearsal.id == Media.rehearsal_id, Rehearsal.band_id == scope.band_id,
+                Rehearsal.visibility == 'PUBLIC',
+            )),
+        )
+        no_member_song_rehearsal = ~exists().where(and_(
+            rehearsal_songs.c.song_id == Media.song_id,
+            rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+            Rehearsal.band_id == scope.band_id,
+            Rehearsal.visibility != 'PUBLIC',
+        ))
+        predicates.extend((song_is_public, rehearsal_is_public, no_member_song_rehearsal))
+    return predicates
+
+
+def _rehearsal_graph_sql(scope):
+    linked_rehearsal = aliased(Rehearsal)
+    foreign_song = exists().where(and_(
+        rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+        rehearsal_songs.c.song_id == Song.id,
+        Song.band_id != scope.band_id,
+    ))
+    foreign_media = exists().where(and_(Media.rehearsal_id == Rehearsal.id, Media.band_id != scope.band_id))
+    foreign_media_song = exists().where(and_(
+        Media.rehearsal_id == Rehearsal.id, Media.song_id == Song.id, Song.band_id != scope.band_id,
+    ))
+    foreign_media_song_rehearsal = exists().where(and_(
+        Media.rehearsal_id == Rehearsal.id,
+        rehearsal_songs.c.song_id == Media.song_id,
+        rehearsal_songs.c.rehearsal_id == linked_rehearsal.id,
+        linked_rehearsal.band_id != scope.band_id,
+    ))
+    return ~foreign_song, ~foreign_media, ~foreign_media_song, ~foreign_media_song_rehearsal
 
 
 def _song_or_404(song_id, scope):
@@ -114,10 +187,8 @@ def list_songs(band_id):
             selectinload(Song.media_files).selectinload(Media.rehearsal),
             selectinload(Song.rehearsals),
         ), Song, scope, parent_visibility=scope.band_visibility,
-    )
-    songs = [song for song in query.order_by(Song.id.asc()).all()
-             if graph_is_scoped(scope, song) and visible_to_scope(scope, song_visibility(scope, song))]
-    page, pagination = _page(songs, limit, offset)
+    ).filter(*_song_graph_sql(scope))
+    page, pagination = _page_query(query, (Song.id.asc(),), limit, offset)
     return jsonify({'songs': [serialize_song(scope, song) for song in page], 'pagination': pagination})
 
 
@@ -137,10 +208,8 @@ def list_song_media(band_id, song_id):
     query = visible_query(
         Media.query.options(selectinload(Media.rehearsal), selectinload(Media.song).selectinload(Song.rehearsals)),
         Media, scope, parent_visibility=scope.band_visibility,
-    ).filter(Media.song_id == song.id)
-    media = [item for item in query.order_by(Media.vote_score.desc(), Media.id.asc()).all()
-             if graph_is_scoped(scope, item) and visible_to_scope(scope, media_visibility(scope, item))]
-    page, pagination = _page(media, limit, offset)
+    ).filter(Media.song_id == song.id, *_media_graph_sql(scope))
+    page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
     return jsonify({'media': [serialize_media(scope, item) for item in page], 'pagination': pagination})
 
 
@@ -155,11 +224,8 @@ def list_rehearsals(band_id):
             selectinload(Rehearsal.media_files).selectinload(Media.song).selectinload(Song.rehearsals),
             selectinload(Rehearsal.media_files).selectinload(Media.rehearsal),
         ), Rehearsal, scope, parent_visibility=scope.band_visibility,
-    )
-    rehearsals = [item for item in query.order_by(Rehearsal.date.asc(), Rehearsal.id.asc()).all()
-                  if graph_is_scoped(scope, item)
-                  and visible_to_scope(scope, rehearsal_visibility(scope, item))]
-    page, pagination = _page(rehearsals, limit, offset)
+    ).filter(*_rehearsal_graph_sql(scope))
+    page, pagination = _page_query(query, (Rehearsal.date.asc(), Rehearsal.id.asc()), limit, offset)
     return jsonify({'rehearsals': [serialize_rehearsal(scope, item) for item in page], 'pagination': pagination})
 
 
@@ -179,10 +245,8 @@ def list_rehearsal_media(band_id, rehearsal_id):
     query = visible_query(
         Media.query.options(selectinload(Media.rehearsal), selectinload(Media.song).selectinload(Song.rehearsals)),
         Media, scope, parent_visibility=scope.band_visibility,
-    ).filter(Media.rehearsal_id == rehearsal.id)
-    media = [item for item in query.order_by(Media.vote_score.desc(), Media.id.asc()).all()
-             if graph_is_scoped(scope, item) and visible_to_scope(scope, media_visibility(scope, item))]
-    page, pagination = _page(media, limit, offset)
+    ).filter(Media.rehearsal_id == rehearsal.id, *_media_graph_sql(scope))
+    page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
     return jsonify({'media': [serialize_media(scope, item) for item in page], 'pagination': pagination})
 
 
@@ -200,16 +264,13 @@ def get_media_comments(band_id, media_id):
     limit, offset = _page_request()
     media = _media_or_404(media_id, scope)
     visibility = media_visibility(scope, media)
-    # One scoped graph query avoids one lazy relationship query per reply.
+    # v2 intentionally exposes a flat, bounded comment feed. ``parent_id``
+    # lets a client reconstruct threads without recursively fetching an
+    # unbounded descendant tree.
     comments = Comment.query.filter(
         Comment.band_id == scope.band_id,
         Comment.media_id == media.id,
-    ).order_by(Comment.created_at.asc(), Comment.id.asc()).all()
-    roots = [item for item in comments if item.parent_id is None]
-    page, pagination = _page(roots, limit, offset)
-    children = {}
-    for item in comments:
-        if item.parent_id is not None:
-            children.setdefault(item.parent_id, []).append(item)
-    return jsonify({'comments': [serialize_comment(scope, item, visibility, children) for item in page],
+    )
+    page, pagination = _page_query(comments, (Comment.created_at.asc(), Comment.id.asc()), limit, offset)
+    return jsonify({'comments': [serialize_comment(scope, item, visibility, include_replies=False) for item in page],
                     'pagination': pagination})

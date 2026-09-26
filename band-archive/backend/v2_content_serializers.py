@@ -236,7 +236,7 @@ def serialize_processing(scope, media):
     }
 
 
-def serialize_comment(scope, comment, media_visibility_value, children_by_parent=None):
+def serialize_comment(scope, comment, media_visibility_value, children_by_parent=None, *, include_replies=True):
     value = {
         'id': comment.id, 'media_id': comment.media_id, 'parent_id': comment.parent_id,
         'author': comment.author, 'content': comment.content,
@@ -245,6 +245,8 @@ def serialize_comment(scope, comment, media_visibility_value, children_by_parent
         # declared/effective representation is explicitly inherited.
         **_flags(scope, comment, media_visibility_value),
     }
+    if not include_replies:
+        return value
     relation = (children_by_parent.get(comment.id, []) if children_by_parent is not None else comment.replies)
     replies = [reply for reply in relation if belongs_to_scope(scope, reply)
                and reply.media_id == comment.media_id]

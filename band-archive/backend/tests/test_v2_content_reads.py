@@ -157,7 +157,9 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
 
     comments = client.get(f"{base}/media/{content_graph['public_media']}/comments")
     assert comments.status_code == 200
-    assert comments.get_json()['comments'][0]['replies'][0]['content'] == 'reply'
+    flat_comments = comments.get_json()['comments']
+    assert all('replies' not in item for item in flat_comments)
+    assert any(item['parent_id'] is not None and item['content'] == 'reply' for item in flat_comments)
     assert client.get(f"{base}/media/{content_graph['hidden_media']}/comments").status_code == 404
 
 
@@ -226,7 +228,7 @@ def test_collections_have_bounded_deterministic_pages_and_reject_bad_paging(acce
     payload = first.get_json()
     assert len(payload['songs']) == 1
     assert payload['pagination'] == {
-        'limit': 1, 'offset': 0, 'returned': 1, 'has_more': True, 'next_offset': 1,
+        'limit': 1, 'offset': 0, 'returned': 1, 'total': 3, 'has_more': True, 'next_offset': 1,
     }
     second = client.get(f'{base}/songs?limit=1&offset=1').get_json()
     assert second['songs'][0]['id'] > payload['songs'][0]['id']
@@ -234,11 +236,8 @@ def test_collections_have_bounded_deterministic_pages_and_reject_bad_paging(acce
         assert client.get(f'{base}/songs?{query}').status_code == 400
 
 
-def test_comment_tree_uses_a_single_scoped_graph_query_not_reply_n_plus_one(access_app, content_graph):
-    from sqlalchemy import event
-
+def test_comments_are_a_flat_bounded_deterministic_page(access_app, content_graph):
     with access_app.app_context():
-        engine = db.engine
         for index in range(5):
             root = Comment(band_id=content_graph['public_band'], media_id=content_graph['public_media'],
                            author=f'root-{index}', content='root', password_hash='not-used')
@@ -249,22 +248,12 @@ def test_comment_tree_uses_a_single_scoped_graph_query_not_reply_n_plus_one(acce
                 author=f'reply-{index}', content='reply', password_hash='not-used',
             ))
         db.session.commit()
-
-    statements = []
-
-    def observe(_, __, statement, ___, ____, _____):
-        if statement.lstrip().upper().startswith('SELECT'):
-            statements.append(statement)
-
-    event.listen(engine, 'before_cursor_execute', observe)
-    try:
-        response = access_app.test_client().get(
-            f"/api/v2/bands/{content_graph['public_band']}/media/{content_graph['public_media']}/comments?limit=10",
-        )
-    finally:
-        event.remove(engine, 'before_cursor_execute', observe)
+    response = access_app.test_client().get(
+        f"/api/v2/bands/{content_graph['public_band']}/media/{content_graph['public_media']}/comments?limit=3",
+    )
     assert response.status_code == 200
-    assert len(response.get_json()['comments']) == 6
-    # Scope/media resolution may require a handful of fixed graph queries;
-    # serializing five extra reply trees must not add one query per reply.
-    assert len(statements) <= 8
+    payload = response.get_json()
+    assert len(payload['comments']) == 3
+    assert payload['pagination']['total'] == 12
+    assert payload['pagination']['has_more'] is True
+    assert all('replies' not in item for item in payload['comments'])
