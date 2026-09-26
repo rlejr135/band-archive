@@ -109,6 +109,7 @@ def vote_song(id):
     result = apply_vote(
         item_model=Song, vote_model=SongVote, foreign_key='song_id', item_id=id,
         voter_hash_value=voter_hash_value, value=value, expected_value=expected_value,
+        band_id_resolver=_legacy_band_id,
         conflict_snapshot=lambda song, _previous_value: song.to_dict(),
     )
     if result.is_conflict:
@@ -128,6 +129,7 @@ def vote_media(media_id):
     result = apply_vote(
         item_model=Media, vote_model=MediaVote, foreign_key='media_id', item_id=media_id,
         voter_hash_value=voter_hash_value, value=value, expected_value=expected_value,
+        band_id_resolver=_legacy_band_id,
         not_found_message='Media not found',
         conflict_snapshot=lambda media, previous_value: media.to_dict(viewer_vote=previous_value),
     )

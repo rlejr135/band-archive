@@ -20,19 +20,30 @@ class VoteResult:
 
 
 def apply_vote(*, item_model, vote_model, foreign_key, item_id, voter_hash_value,
-               value, expected_value, not_found_message=None, conflict_snapshot):
+               value, expected_value, band_id_resolver, not_found_message=None, conflict_snapshot):
     """Apply one compare-and-set vote and keep denormalized counters in sync.
 
+    ``band_id_resolver`` is required rather than optional so every caller
+    supplies an explicit tenant boundary. It is evaluated after SQLite obtains
+    its write lock, avoiding a pre-lock scope query that would weaken its
+    current compare-and-set semantics.
+
     ``conflict_snapshot`` is deliberately evaluated while the database lock is
-    still held.  The caller may access relationships while serializing, and a
+    still held. The caller may access relationships while serializing, and a
     later competing request must not change what the 409 response represents.
     """
     try:
         if db.engine.dialect.name == 'sqlite':
             db.session.execute(text('BEGIN IMMEDIATE'))
-            item = db.session.get(item_model, item_id)
+            band_id = band_id_resolver()
+            item = db.session.query(item_model).filter(
+                item_model.id == item_id, item_model.band_id == band_id,
+            ).one_or_none()
         else:
-            item = db.session.query(item_model).filter_by(id=item_id).with_for_update().first()
+            band_id = band_id_resolver()
+            item = db.session.query(item_model).filter(
+                item_model.id == item_id, item_model.band_id == band_id,
+            ).with_for_update().first()
         if not item:
             if not_found_message is None:
                 raise NotFoundError()

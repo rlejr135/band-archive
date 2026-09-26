@@ -1,9 +1,11 @@
 import sqlite3
 import threading
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask
 import pytest
+from sqlalchemy import text
 
 from app import _run_migrations, create_app
 from config import TestingConfig
@@ -13,6 +15,34 @@ from models import Band, Media, MediaVote, Song, SongVote, TenantBackfillState
 
 VOTER_A = '123e4567-e89b-12d3-a456-426614174000'
 VOTER_B = '123e4567-e89b-12d3-a456-426614174001'
+
+
+@pytest.fixture
+def foreign_vote_targets(app):
+    """Historical foreign records that v1 vote writes must never touch."""
+    with app.app_context():
+        foreign = Band(name='foreign votes', slug='foreign-votes',
+                       default_visibility='PUBLIC', storage_quota_bytes=1)
+        db.session.add(foreign)
+        db.session.flush()
+        foreign_band_id = foreign.id
+        db.session.execute(text(
+            "INSERT INTO song (band_id, visibility, title, artist, upvote_count, downvote_count, vote_score) "
+            "VALUES (:band, 'PUBLIC', 'foreign song', 'foreign band', 0, 0, 0)"
+        ), {'band': foreign_band_id})
+        foreign_song = db.session.execute(text(
+            "SELECT id FROM song WHERE band_id = :band"
+        ), {'band': foreign_band_id}).scalar_one()
+        db.session.execute(text(
+            "INSERT INTO media (band_id, visibility, song_id, filename, file_type, transcoding_status, "
+            "processing_attempts, upvote_count, downvote_count, vote_score) "
+            "VALUES (:band, 'PUBLIC', :song, 'foreign.mp3', 'audio', 'not_required', 0, 0, 0, 0)"
+        ), {'band': foreign_band_id, 'song': foreign_song})
+        foreign_media = db.session.execute(text(
+            "SELECT id FROM media WHERE band_id = :band"
+        ), {'band': foreign_band_id}).scalar_one()
+        db.session.commit()
+    return {'band_id': foreign_band_id, 'song_id': foreign_song, 'media_id': foreign_media}
 
 
 def _song(client, title='Vote song'):
@@ -49,6 +79,56 @@ def _vote(client, media_id, value, voter=VOTER_A, expected=0):
         json={'vote': value, 'expected_viewer_vote': expected},
         headers={'X-Voter-ID': voter},
     )
+
+
+@pytest.mark.parametrize('kind,table,target_key,foreign_key,path_template', (
+    ('song', 'song_vote', 'song_id', 'song_id', '/songs/{id}/vote'),
+    ('media', 'media_vote', 'media_id', 'media_id', '/media/{id}/vote'),
+))
+@pytest.mark.parametrize('has_existing_vote', (False, True))
+@pytest.mark.parametrize('value', (1, -1, 0))
+def test_foreign_song_and_media_votes_cannot_mutate_existing_or_new_rows(
+        app, client, foreign_vote_targets, kind, table, target_key, foreign_key,
+        path_template, has_existing_vote, value):
+    target_id = foreign_vote_targets[target_key]
+    voter_value = hashlib.sha256(VOTER_A.encode('utf-8')).hexdigest()
+    expected = 1 if has_existing_vote else 0
+    with app.app_context():
+        if has_existing_vote:
+            db.session.execute(text(
+                f"INSERT INTO {table} (band_id, {foreign_key}, voter_hash, value, created_at, updated_at) "
+                "VALUES (:band, :target, :voter, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {'band': foreign_vote_targets['band_id'], 'target': target_id, 'voter': voter_value})
+            item_table = 'song' if kind == 'song' else 'media'
+            db.session.execute(text(
+                f"UPDATE {item_table} SET upvote_count = 1, downvote_count = 0, vote_score = 1 "
+                "WHERE id = :target"
+            ), {'target': target_id})
+            db.session.commit()
+        item_model = Song if kind == 'song' else Media
+        before_counts = tuple(getattr(db.session.get(item_model, target_id), field) for field in (
+            'upvote_count', 'downvote_count', 'vote_score',
+        ))
+        before_votes = db.session.execute(text(
+            f"SELECT count(*) FROM {table} WHERE {foreign_key} = :target"
+        ), {'target': target_id}).scalar_one()
+
+    response = client.patch(path_template.format(id=target_id), json={
+        'vote': value, 'expected_viewer_vote': expected,
+    }, headers={'X-Voter-ID': VOTER_A})
+
+    assert response.status_code == 404
+    with app.app_context():
+        item_model = Song if kind == 'song' else Media
+        after = db.session.get(item_model, target_id)
+        assert (after.upvote_count, after.downvote_count, after.vote_score) == before_counts
+        assert db.session.execute(text(
+            f"SELECT count(*) FROM {table} WHERE {foreign_key} = :target"
+        ), {'target': target_id}).scalar_one() == before_votes
+        if has_existing_vote:
+            assert db.session.execute(text(
+                f"SELECT value FROM {table} WHERE {foreign_key} = :target AND voter_hash = :voter"
+            ), {'target': target_id, 'voter': voter_value}).scalar_one() == 1
 
 
 def test_media_vote_first_repeat_switch_and_cancel_are_idempotent(client, app):

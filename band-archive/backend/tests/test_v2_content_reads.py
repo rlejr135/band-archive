@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from extensions import db
-from models import Band, BandMembership, Comment, Media, Rehearsal, Song
+from models import Band, BandMembership, Comment, Media, Rehearsal, Song, TenantBackfillState
 from tests.test_auth import _install_jwks, _jwk, _token
 # Share the authenticated current-schema fixture with the central-access
 # contracts; importing the fixture functions makes them local pytest fixtures.
@@ -204,20 +204,46 @@ def test_member_owner_capabilities_cross_tenant_concealment_and_optional_auth_ca
 def test_legacy_rehearsal_relation_writer_rejects_cross_band_song_ids_atomically(access_app, content_graph):
     client = access_app.test_client()
     with access_app.app_context():
-        rehearsal = db.session.get(Rehearsal, content_graph['public_rehearsal'])
-        original_ids = [song.id for song in rehearsal.songs]
+        # This v1 compatibility route is intentionally limited to the
+        # validated import band, so create an isolated legacy graph instead
+        # of borrowing Band B's v2 content fixture.
+        legacy_band = Band(name='legacy relation writer', slug='legacy-relation-writer',
+                           default_visibility='PUBLIC', storage_quota_bytes=1, is_legacy_import=True)
+        db.session.add(legacy_band)
+        db.session.flush()
+        db.session.add(TenantBackfillState(key='phase4_tenant_scope', status='validated'))
+        db.session.flush()
+        legacy_song = Song(band_id=legacy_band.id, visibility='PUBLIC', title='Legacy relation', artist='Legacy')
+        legacy_replacement_song = Song(
+            band_id=legacy_band.id, visibility='PUBLIC', title='Legacy replacement', artist='Legacy',
+        )
+        legacy_rehearsal = Rehearsal(
+            band_id=legacy_band.id, visibility='PUBLIC', title='Legacy rehearsal', date=date(2026, 1, 6),
+        )
+        db.session.add_all((legacy_song, legacy_replacement_song, legacy_rehearsal))
+        db.session.flush()
+        legacy_rehearsal.songs.append(legacy_song)
+        db.session.commit()
+        legacy_song_id = legacy_song.id
+        legacy_replacement_song_id = legacy_replacement_song.id
+        legacy_rehearsal_id = legacy_rehearsal.id
+    # v2 Band B remains outside the legacy-only v1 writer boundary.
     response = client.put(f"/rehearsals/{content_graph['public_rehearsal']}", json={
         'song_ids': [content_graph['member_song']],
     })
-    # Same-band member song is accepted; the cross-band case is tested below.
+    assert response.status_code == 404
+    response = client.put(f"/rehearsals/{legacy_rehearsal_id}", json={
+        'song_ids': [legacy_replacement_song_id],
+    })
     assert response.status_code == 200
-    response = client.put(f"/rehearsals/{content_graph['public_rehearsal']}", json={
-        'song_ids': [content_graph['corrupt_song'], content_graph['foreign_song']],
+    response = client.put(f"/rehearsals/{legacy_rehearsal_id}", json={
+        'song_ids': [legacy_replacement_song_id, content_graph['foreign_song']],
     })
     assert response.status_code == 404
     with access_app.app_context():
-        rehearsal = db.session.get(Rehearsal, content_graph['public_rehearsal'])
-        assert [song.id for song in rehearsal.songs] == [content_graph['member_song']]
+        rehearsal = db.session.get(Rehearsal, legacy_rehearsal_id)
+        assert [song.id for song in rehearsal.songs] == [legacy_replacement_song_id]
+        assert legacy_song_id != legacy_replacement_song_id
 
 
 def test_collections_have_bounded_deterministic_pages_and_reject_bad_paging(access_app, content_graph):
