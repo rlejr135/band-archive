@@ -175,6 +175,12 @@ def read_scope_for_slug(slug, audience=None):
     return read_scope_for_band(band, audience)
 
 
+def read_scope_for_id(band_id, audience=None):
+    """Resolve an integer URL tenant without ever falling back to a global id."""
+    band = Band.query.filter(Band.id == band_id, Band.deleted_at.is_(None)).one_or_none()
+    return read_scope_for_band(band, audience)
+
+
 def visible_query(query, entity, scope, *, parent_visibility=None):
     """Apply mandatory band and audience visibility predicates to a query."""
     if not isinstance(scope, BandReadScope):
