@@ -140,7 +140,8 @@ def test_remaining_member_access_roster_policy_and_error_redaction(access_app, r
     }
     private = next(item for item in logs.get_json()['logs'] if item['id'] == remaining_graph['private_log'])
     assert private['playback']['video_url'] == 'url:bands/b/logs/private.mov'
-    assert all(ttl == 300 for _, ttl in calls)
+    assert ('bands/b/logs/private.mov', 300) in calls
+    assert ('bands/b/logs/canonical.mov', 3600) in calls
     processing = client.get(f"{base}/personal-logs/{remaining_graph['private_log']}/processing", headers=headers)
     assert processing.status_code == 200
     assert processing.get_json()['processing']['error'] == 'processing_failed'

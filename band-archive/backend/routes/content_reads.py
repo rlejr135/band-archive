@@ -1,7 +1,7 @@
 """Tenant-scoped, optional-authenticated v2 reads for songs and rehearsals."""
 
 from flask import Blueprint, current_app, jsonify, request
-from sqlalchemy import and_, exists, or_
+from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import aliased, selectinload
 
 from band_access import (
@@ -10,11 +10,18 @@ from band_access import (
 )
 from errors import NotFoundError
 from extensions import db
-from models import Band, Comment, Media, Rehearsal, Song, rehearsal_songs
+from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media,
+                    Member, PersonalLog, Rehearsal, Song, SongSuggestion, rehearsal_songs)
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
     serialize_song, song_visibility, visible_to_scope,
+)
+from v2_remaining_read_serializers import (
+    personal_log_visibility,
+    serialize_announcement, serialize_gallery_image, serialize_member,
+    serialize_personal_comment, serialize_personal_log, serialize_personal_processing,
+    serialize_suggestion,
 )
 
 
@@ -78,6 +85,62 @@ def _page_query(query, order_columns, limit, offset):
         'has_more': has_more,
         'next_offset': offset + limit if has_more else None,
     }
+
+
+def _creator_is_scoped_sql(entity, scope):
+    """Reject a corrupt cross-band creator pointer without rejecting legacy NULLs."""
+    creator_id = getattr(entity, 'created_by_membership_id', None)
+    if creator_id is None:
+        return True
+    return or_(
+        creator_id.is_(None),
+        exists().where(and_(BandMembership.id == creator_id,
+                            BandMembership.band_id == scope.band_id)),
+    )
+
+
+def _roster_visible_or_404(scope):
+    band = db.session.get(Band, scope.band_id)
+    if band is None or (not band.member_roster_public and not scope.is_member):
+        raise NotFoundError('Resource not found')
+    return band
+
+
+def _member_or_404(member_id, scope):
+    _roster_visible_or_404(scope)
+    member = Member.query.filter(Member.id == member_id, Member.band_id == scope.band_id).one_or_none()
+    if member is None:
+        raise NotFoundError('Resource not found')
+    return member
+
+
+def _personal_logs_query(scope):
+    member_is_scoped = exists().where(and_(Member.id == PersonalLog.member_id,
+                                           Member.band_id == scope.band_id))
+    return visible_query(PersonalLog.query.options(selectinload(PersonalLog.member)), PersonalLog, scope,
+                         parent_visibility=scope.band_visibility).filter(
+                             member_is_scoped, _creator_is_scoped_sql(PersonalLog, scope),
+                         )
+
+
+def _personal_log_or_404(log_id, scope):
+    log = _personal_logs_query(scope).filter(PersonalLog.id == log_id).one_or_none()
+    if log is None:
+        raise NotFoundError('Resource not found')
+    return log
+
+
+def _personal_comment_graph_sql(scope, log_id):
+    parent = aliased(Comment)
+    parent_is_scoped = exists().where(and_(parent.id == Comment.parent_id,
+                                           parent.band_id == scope.band_id,
+                                           parent.personal_log_id == log_id))
+    return (
+        Comment.band_id == scope.band_id,
+        Comment.personal_log_id == log_id,
+        _creator_is_scoped_sql(Comment, scope),
+        or_(Comment.parent_id.is_(None), parent_is_scoped),
+    )
 
 
 def _song_graph_sql(scope):
@@ -272,4 +335,135 @@ def get_media_comments(band_id, media_id):
     )
     page, pagination = _page_query(comments, (Comment.created_at.asc(), Comment.id.asc()), limit, offset)
     return jsonify({'comments': [serialize_comment(scope, item, visibility, include_replies=False) for item in page],
+                    'pagination': pagination})
+
+
+# Remaining Phase 6 read domains live on this blueprint so all v2 reads share
+# the exact optional-auth/cache/schema boundary above.  The legacy blueprints
+# remain intentionally untouched for the import-band compatibility API.
+@content_reads_bp.get('/dashboard/stats')
+@optional_auth
+def get_dashboard_stats(band_id):
+    scope = _scope(band_id)
+    songs = visible_query(Song.query, Song, scope, parent_visibility=scope.band_visibility).filter(
+        *_song_graph_sql(scope), _creator_is_scoped_sql(Song, scope),
+    )
+    total_songs = songs.with_entities(func.count(Song.id)).scalar() or 0
+    rows = songs.with_entities(Song.status, func.count(Song.id)).group_by(Song.status).all()
+    return jsonify({'stats': {
+        'total_songs': total_songs,
+        'status_counts': {status: count for status, count in rows},
+    }})
+
+
+@content_reads_bp.get('/members')
+@optional_auth
+def list_members(band_id):
+    scope = _scope(band_id)
+    _roster_visible_or_404(scope)
+    limit, offset = _page_request()
+    query = Member.query.filter(Member.band_id == scope.band_id)
+    page, pagination = _page_query(query, (Member.name.asc(), Member.id.asc()), limit, offset)
+    return jsonify({'members': [serialize_member(scope, item) for item in page], 'pagination': pagination})
+
+
+@content_reads_bp.get('/members/<int:member_id>')
+@optional_auth
+def get_member(band_id, member_id):
+    scope = _scope(band_id)
+    return jsonify({'member': serialize_member(scope, _member_or_404(member_id, scope))})
+
+
+@content_reads_bp.get('/members/<int:member_id>/logs')
+@optional_auth
+def list_member_logs(band_id, member_id):
+    scope = _scope(band_id)
+    member = _member_or_404(member_id, scope)
+    limit, offset = _page_request()
+    query = _personal_logs_query(scope).filter(PersonalLog.member_id == member.id)
+    page, pagination = _page_query(query, (PersonalLog.created_at.desc(), PersonalLog.id.desc()), limit, offset)
+    return jsonify({'logs': [serialize_personal_log(scope, item) for item in page], 'pagination': pagination})
+
+
+@content_reads_bp.get('/personal-logs/<int:log_id>/processing')
+@optional_auth
+def get_personal_log_processing(band_id, log_id):
+    scope = _scope(band_id)
+    return jsonify({'processing': serialize_personal_processing(scope, _personal_log_or_404(log_id, scope))})
+
+
+@content_reads_bp.get('/personal-logs/<int:log_id>/comments')
+@optional_auth
+def get_personal_log_comments(band_id, log_id):
+    scope = _scope(band_id)
+    limit, offset = _page_request()
+    log = _personal_log_or_404(log_id, scope)
+    page, pagination = _page_query(
+        Comment.query.filter(*_personal_comment_graph_sql(scope, log.id)),
+        (Comment.created_at.asc(), Comment.id.asc()), limit, offset,
+    )
+    visibility = personal_log_visibility(scope, log)
+    return jsonify({'comments': [serialize_personal_comment(scope, item, visibility) for item in page],
+                    'pagination': pagination})
+
+
+def _gallery_query(scope):
+    return visible_query(GalleryImage.query, GalleryImage, scope,
+                         parent_visibility=scope.band_visibility).filter(
+                             _creator_is_scoped_sql(GalleryImage, scope),
+                         )
+
+
+@content_reads_bp.get('/gallery')
+@optional_auth
+def list_gallery(band_id):
+    scope = _scope(band_id)
+    limit, offset = _page_request()
+    page, pagination = _page_query(_gallery_query(scope),
+                                   (GalleryImage.created_at.desc(), GalleryImage.id.desc()), limit, offset)
+    return jsonify({'gallery': [serialize_gallery_image(scope, item) for item in page], 'pagination': pagination})
+
+
+@content_reads_bp.get('/gallery/featured')
+@optional_auth
+def get_featured_gallery(band_id):
+    scope = _scope(band_id)
+    # v06 creates a per-band partial uniqueness constraint.  Do not choose an
+    # arbitrary row if a manually corrupted database contains multiple rows.
+    featured = _gallery_query(scope).filter(GalleryImage.is_featured.is_(True)).order_by(
+        GalleryImage.id.asc()).limit(2).all()
+    if len(featured) != 1:
+        raise NotFoundError('Resource not found')
+    return jsonify({'gallery': serialize_gallery_image(scope, featured[0])})
+
+
+def _announcement_query(scope):
+    return visible_query(Announcement.query, Announcement, scope,
+                         parent_visibility=scope.band_visibility).filter(
+                             _creator_is_scoped_sql(Announcement, scope),
+                         )
+
+
+@content_reads_bp.get('/announcement')
+@optional_auth
+def get_band_announcement(band_id):
+    scope = _scope(band_id)
+    values = _announcement_query(scope).order_by(Announcement.id.asc()).limit(2).all()
+    if len(values) != 1:
+        raise NotFoundError('Resource not found')
+    return jsonify({'announcement': serialize_announcement(scope, values[0])})
+
+
+@content_reads_bp.get('/suggestions')
+@optional_auth
+def list_suggestions(band_id):
+    scope = _scope(band_id)
+    limit, offset = _page_request()
+    query = visible_query(SongSuggestion.query, SongSuggestion, scope,
+                          parent_visibility=scope.band_visibility).filter(
+                              _creator_is_scoped_sql(SongSuggestion, scope),
+                          )
+    score = (func.coalesce(SongSuggestion.thumbs_up, 0) - func.coalesce(SongSuggestion.thumbs_down, 0))
+    page, pagination = _page_query(query, (score.desc(), SongSuggestion.id.asc()), limit, offset)
+    return jsonify({'suggestions': [serialize_suggestion(scope, item) for item in page],
                     'pagination': pagination})
