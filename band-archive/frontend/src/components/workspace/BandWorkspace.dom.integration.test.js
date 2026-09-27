@@ -24,17 +24,23 @@ afterEach(() => cleanup());
 
 const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null)))));
 
-test('DOM route navigation immediately removes A and ignores its late response', async () => {
-  await load(); const previousFetch = globalThis.fetch; const a = deferred(); const b = deferred(); let navigate;
-  globalThis.fetch = async (url) => url.endsWith('/by-slug/band-a') ? a.promise : b.promise;
-  const Go = () => { navigate = useNavigate(); return null; };
-  const authValue = { user: { id: 'account-a' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
-  const view = render(createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: { activeBands: [] } }, createElement(MemoryRouter, { initialEntries: ['/bands/band-a'] }, createElement(Go), createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }))))));
-  await act(async () => { a.resolve(response({ band: { id: 1, slug: 'band-a', name: 'A secret' } })); }); await view.findByText('A secret');
-  await act(async () => { navigate('/bands/band-b'); });
-  assert.equal(view.queryByText('A secret'), null);
-  await act(async () => { b.resolve(response({ band: { id: 2, slug: 'band-b', name: 'B public' } })); }); await view.findByText('B public');
-  assert.equal(view.queryByText('A secret'), null); view.unmount(); globalThis.fetch = previousFetch;
+test('DOM route navigation drops a genuinely pending A resolution without mutating rendered B state', async () => {
+  await load(); const previousFetch = globalThis.fetch; const a = deferred(); const b = deferred(); const calls = []; let aSettled = false; let navigate;
+  a.promise.then(() => { aSettled = true; });
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/band-a')) { calls.push('A band'); return a.promise; }
+    if (url.includes('/by-slug/band-b')) { calls.push('B band'); return b.promise; }
+    if (url.includes('/bands/2/songs?')) { calls.push('B songs'); return response({ songs: [{ id: 21, title: 'B 선택 곡', artist: 'B', can_edit: true }], pagination: { has_more: false } }); }
+    if (url.includes('/songs/21/media?')) { calls.push('B media'); return response({ media: [], pagination: { has_more: false } }); }
+    throw new Error(`unexpected request ${url}`);
+  };
+  const Go = () => { navigate = useNavigate(); return null; }; const authValue = { user: { id: 'account-a' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  const tree = createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: { activeBands: [] } }, createElement(MemoryRouter, { initialEntries: ['/bands/band-a/songs'] }, createElement(Go), createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }))))));
+  const view = render(tree); await waitFor(() => assert.deepEqual(calls, ['A band'])); assert.equal(aSettled, false);
+  await act(async () => { navigate('/bands/band-b/songs'); }); assert.equal(view.queryByText('A 비밀 밴드'), null); await waitFor(() => assert.deepEqual(calls, ['A band', 'B band']));
+  await act(async () => { b.resolve(response({ band: { id: 2, slug: 'band-b', name: 'B 공개 밴드', default_visibility: 'MEMBERS', membership: { id: 2, role: 'member' } } })); }); await view.findByText('B 선택 곡'); await userEvent.click(view.getByText('B 선택 곡')); await userEvent.click(view.getByRole('button', { name: '수정' })); await userEvent.type(view.getByLabelText('제목'), ' 초안'); assert.deepEqual(calls, ['A band', 'B band', 'B songs', 'B media']);
+  await act(async () => { a.resolve(response({ band: { id: 1, slug: 'band-a', name: 'A 비밀 밴드', membership: { id: 1, role: 'member' } } })); });
+  assert.equal(view.queryByText('A 비밀 밴드'), null); assert.equal(view.queryByText('A 선택 곡'), null); assert.equal(view.getByLabelText('제목').value, 'B 선택 곡 초안'); assert.deepEqual(calls, ['A band', 'B band', 'B songs', 'B media']); view.unmount(); globalThis.fetch = previousFetch;
 });
 
 test('member DOM form writes tenant-free v2 payload once; visitor sees no write control', async () => {
@@ -51,12 +57,12 @@ test('member DOM form writes tenant-free v2 payload once; visitor sees no write 
 });
 
 test('rejected rapid member submissions issue one request and keep the form usable', async () => {
-  await load(); const previousFetch = globalThis.fetch; let posts = 0;
-  globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/reject')) return response({ band: { id: 9, slug: 'reject', name: 'Reject', default_visibility: 'MEMBERS', membership: { id: 9, role: 'member' } } }); if (url.includes('/songs') && options.method === 'POST') { posts += 1; return response({}, 403); } if (url.includes('/songs?')) return response({ songs: [], pagination: { total: 0, has_more: false } }); return response({}); };
+  await load(); const previousFetch = globalThis.fetch; const rejected = deferred(); let posts = 0;
+  globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/reject')) return response({ band: { id: 9, slug: 'reject', name: 'Reject', default_visibility: 'MEMBERS', membership: { id: 9, role: 'member' } } }); if (url.includes('/songs') && options.method === 'POST') { posts += 1; return rejected.promise; } if (url.includes('/songs?')) return response({ songs: [], pagination: { total: 0, has_more: false } }); return response({}); };
   const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
   const view = render(createElement(App, { entry: '/bands/reject/songs', authValue: member, bandValue: { activeBands: [] }, songs: true }));
   await view.findByRole('button', { name: '곡 추가' }); await userEvent.click(view.getByRole('button', { name: '곡 추가' })); await userEvent.type(view.getByLabelText('제목'), '실패 곡'); await userEvent.type(view.getByLabelText('아티스트'), '밴드');
-  const save = view.getByRole('button', { name: '저장' }); await Promise.all([userEvent.click(save), userEvent.click(save)]); await view.findByRole('alert');
+  const save = view.getByRole('button', { name: '저장' }); await Promise.all([userEvent.click(save), userEvent.click(save)]); await waitFor(() => assert.equal(posts, 1)); await act(async () => { rejected.resolve(response({}, 403)); }); await view.findByRole('alert');
   assert.equal(posts, 1); assert.equal(view.getByLabelText('제목').value, '실패 곡'); assert.equal(view.getByRole('button', { name: '저장' }).disabled, false);
   view.unmount(); globalThis.fetch = previousFetch;
 });
