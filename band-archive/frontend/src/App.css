@@ -28,6 +28,12 @@
   justify-content: flex-end;
 }
 
+.auth-account {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 .nav-btn {
   background-color: transparent;
   color: var(--text-secondary);

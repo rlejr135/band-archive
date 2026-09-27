@@ -13,6 +13,12 @@ import MemberDashboard from './components/members/MemberDashboard';
 import MemberDetail from './components/members/MemberDetail';
 import AnnouncementToast from './components/common/AnnouncementToast';
 import Gallery from './components/gallery/Gallery';
+import { AuthProvider } from './context/AuthContext';
+import { BandProvider } from './context/BandContext';
+import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages';
+import { BandsPage } from './components/bands/BandsPage';
+import AuthStatus from './components/layout/AuthStatus';
+import RequireAuth from './components/layout/RequireAuth';
 import './App.css';
 import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
 // Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
@@ -167,6 +173,7 @@ const MainContent = () => {
         </div>
         <div className="header-actions">
           <UploadCenter />
+          <AuthStatus />
           <button
             className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`}
             onClick={() => navigate('/')}
@@ -212,6 +219,7 @@ const MainContent = () => {
           <Route path="/members" element={<MemberDashboard />} />
           <Route path="/members/:id" element={<MemberDetail />} />
           <Route path="/gallery" element={<Gallery />} />
+          <Route path="/bands" element={<RequireAuth><BandsPage /></RequireAuth>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
@@ -219,13 +227,30 @@ const MainContent = () => {
   );
 };
 
-function App() {
+const LegacyApp = () => {
   return (
     <SongProvider>
       <UploadProvider>
         <MainContent />
       </UploadProvider>
     </SongProvider>
+  );
+};
+
+function App() {
+  return (
+    <AuthProvider>
+      <BandProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="*" element={<LegacyApp />} />
+        </Routes>
+      </BandProvider>
+    </AuthProvider>
   );
 }
 
