@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { getSupabaseClient, getSupabaseConfigError } from '../services/supabase.js';
 
-const AuthContext = createContext(null);
+// eslint-disable-next-line react-refresh/only-export-components
+export const AuthContext = createContext(null);
 const RECOVERY_MARKER = 'band-archive.password-recovery';
 
 const setRecoveryMarker = (value) => {

@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import { useAuth } from './AuthContext.jsx';
 import { activeBandsOnly, selectValidBand } from './bandSelection.js';
 
-const BandContext = createContext(null);
+// eslint-disable-next-line react-refresh/only-export-components
+export const BandContext = createContext(null);
 const storageKey = (userId) => `band-archive.selected-band:${userId}`;
 
 const readSelectedId = (userId) => {

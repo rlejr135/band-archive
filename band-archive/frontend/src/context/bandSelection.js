@@ -8,5 +8,9 @@ export const selectValidBand = (bandId, bands) => {
 // the client boundary as well: a public/pending response must never become
 // the global account-scoped selection.
 export const activeBandsOnly = (bands) => (Array.isArray(bands) ? bands : []).filter((band) => (
-  band && Number.isInteger(Number(band.id)) && band.membership?.status === 'active'
+  band && Number.isInteger(Number(band.id)) && band.membership
+  // The current `/api/v2/bands` endpoint is itself an active-membership list
+  // and its membership serializer omits status. Future shapes that include a
+  // lifecycle value must still explicitly be active.
+  && (band.membership.status === undefined || band.membership.status === 'active')
 ));
