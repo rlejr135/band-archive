@@ -19,6 +19,7 @@ import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswo
 import { BandsPage } from './components/bands/BandsPage';
 import AuthStatus from './components/layout/AuthStatus';
 import RequireAuth from './components/layout/RequireAuth';
+import { BandDashboard, BandWorkspace, RehearsalWorkspace, SongWorkspace } from './components/workspace/BandWorkspace';
 import './App.css';
 import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
 // Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
@@ -247,6 +248,11 @@ function App() {
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/bands/:bandSlug" element={<BandWorkspace />}>
+            <Route index element={<BandDashboard />} />
+            <Route path="songs" element={<SongWorkspace />} />
+            <Route path="rehearsals" element={<RehearsalWorkspace />} />
+          </Route>
           <Route path="*" element={<LegacyApp />} />
         </Routes>
       </BandProvider>
