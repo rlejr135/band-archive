@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Song, SongSuggestion
 from errors import NotFoundError, ValidationError
-from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, validate_legacy_graphs
 from validators import validate_string_length
 
 suggestions_bp = Blueprint('suggestions', __name__)
@@ -18,6 +18,7 @@ def get_suggestions():
     suggestions = legacy_query(SongSuggestion).order_by(
         (SongSuggestion.thumbs_up - SongSuggestion.thumbs_down).desc()
     ).all()
+    validate_legacy_graphs(suggestions, 'Suggestion not found')
     return jsonify([s.to_dict() for s in suggestions])
 
 

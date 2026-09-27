@@ -3,7 +3,7 @@ from sqlalchemy import inspect
 
 from extensions import db
 from models import Media, Song, Rehearsal, Member, PersonalLog, GalleryImage
-from legacy_scope import legacy_band_id
+from legacy_scope import legacy_band_id, legacy_get_or_404, validate_legacy_graph
 from errors import ValidationError, NotFoundError
 from storage import storage
 from media_processing import (create_media, create_personal_log, save_media_and_start,
@@ -44,15 +44,7 @@ def _legacy_session_or_404(session_id):
     """Load an upload capability only after both tenant and parent are proven."""
     band_id = _legacy_upload_band_id()
     session = get_session_or_404(session_id, band_id=band_id, expire=False)
-    if hasattr(session, 'song_id'):
-        song = Song.query.filter(Song.id == session.song_id, Song.band_id == band_id).one_or_none()
-        if song is None:
-            raise NotFoundError('Upload session not found')
-        if session.rehearsal_id is not None and not Rehearsal.query.filter(
-                Rehearsal.id == session.rehearsal_id, Rehearsal.band_id == band_id).one_or_none():
-            raise NotFoundError('Upload session not found')
-    elif not Member.query.filter(Member.id == session.member_id, Member.band_id == band_id).one_or_none():
-        raise NotFoundError('Upload session not found')
+    validate_legacy_graph(session, 'Upload session not found')
     expire_session_if_needed(session)
     return session
 
@@ -60,24 +52,17 @@ def _legacy_session_or_404(session_id):
 def _validate_media_target(song_id, rehearsal_id):
     legacy_band_id = _legacy_upload_band_id()
     song_id = _require_int(song_id, 'song_id', minimum=1)
-    song = Song.query.filter(Song.id == song_id, Song.band_id == legacy_band_id).one_or_none()
-    if not song:
-        raise NotFoundError('Song not found')
+    song = legacy_get_or_404(Song, song_id, 'Song not found')
     if rehearsal_id is not None:
         rehearsal_id = _require_int(rehearsal_id, 'rehearsal_id', minimum=1)
-        rehearsal = Rehearsal.query.filter(
-            Rehearsal.id == rehearsal_id, Rehearsal.band_id == legacy_band_id,
-        ).one_or_none()
-        if not rehearsal:
-            raise NotFoundError('Rehearsal not found')
+        legacy_get_or_404(Rehearsal, rehearsal_id, 'Rehearsal not found')
     return song_id, rehearsal_id
 
 
 def _validate_personal_log_target(member_id):
     legacy_band_id = _legacy_upload_band_id()
     member_id = _require_int(member_id, 'member_id', minimum=1)
-    if not Member.query.filter(Member.id == member_id, Member.band_id == legacy_band_id).one_or_none():
-        raise NotFoundError('Member not found')
+    legacy_get_or_404(Member, member_id, 'Member not found')
     return member_id
 
 

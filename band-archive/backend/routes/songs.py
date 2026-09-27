@@ -7,7 +7,9 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import Song, SongVote, Media, MediaVote, Rehearsal
 from errors import ValidationError, NotFoundError
-from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, reject_foreign_children
+from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
+                          reject_foreign_children, validate_legacy_graph,
+                          validate_legacy_graphs)
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
                               delete_original_and_audio, processing_status_response,
@@ -74,6 +76,7 @@ def get_songs():
 
     # Restore the pre-song-vote list behavior: no vote-score ordering.
     songs = query.order_by(Song.id.asc()).all()
+    validate_legacy_graphs(songs, 'Song not found')
     viewer_votes = media_viewer_votes(
         [media for song in songs for media in song.media_files], voter_hash_value,
     )
@@ -266,6 +269,7 @@ def get_media_list(id):
     media_files = legacy_query(Media).filter(Media.song_id == id).order_by(
         Media.vote_score.desc(), Media.id.asc(),
     ).all()
+    validate_legacy_graphs(media_files, 'Media not found')
     viewer_votes = media_viewer_votes(media_files, voter_hash_value)
     return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 
@@ -284,6 +288,7 @@ def add_media(id):
         ).one_or_none()
         if rehearsal is None:
             raise NotFoundError("Rehearsal not found")
+        validate_legacy_graph(rehearsal, 'Rehearsal not found')
 
     if 'file' not in request.files:
         raise ValidationError("No file provided")
@@ -325,6 +330,7 @@ def link_media_rehearsal(media_id):
         ).one_or_none()
         if not rehearsal:
             raise NotFoundError("Rehearsal not found")
+        validate_legacy_graph(rehearsal, 'Rehearsal not found')
 
     media.rehearsal_id = rehearsal_id
     db.session.commit()
@@ -445,6 +451,7 @@ def uploaded_file(filename):
     # real legacy-scoped record whose currently allowed original source is the
     # exact legacy key.  This also rejects pruned originals without signing.
     matching_records = legacy_query(Media).filter(Media.filename == filename).all()
+    validate_legacy_graphs(matching_records, 'Media source not found')
     if not any(select_media_source_keys(media, 'media')['original'] == requested_key
                for media in matching_records):
         raise NotFoundError("Media source not found")

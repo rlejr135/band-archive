@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Announcement
 from errors import NotFoundError, ValidationError
-from legacy_scope import legacy_band_id, legacy_query
+from legacy_scope import legacy_band_id, legacy_query, validate_legacy_graph
 
 announcements_bp = Blueprint('announcements', __name__)
 
@@ -13,6 +13,7 @@ def get_announcement():
     announcement = legacy_query(Announcement).one_or_none()
     if not announcement:
         return jsonify({'id': None, 'content': '', 'updated_at': None})
+    validate_legacy_graph(announcement, 'Announcement not found')
     return jsonify(announcement.to_dict())
 
 
@@ -29,6 +30,7 @@ def update_announcement():
     band_id = legacy_band_id()
     announcement = legacy_query(Announcement).one_or_none()
     if announcement:
+        validate_legacy_graph(announcement, 'Announcement not found')
         announcement.content = content
     else:
         announcement = Announcement(band_id=band_id, content=content)

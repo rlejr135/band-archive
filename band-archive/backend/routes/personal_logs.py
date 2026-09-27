@@ -5,7 +5,8 @@ from flask import Blueprint, jsonify, request, redirect, current_app
 from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
-from legacy_scope import legacy_get_or_404, legacy_query, reject_foreign_children
+from legacy_scope import (legacy_get_or_404, legacy_query, reject_foreign_children,
+                          validate_legacy_graphs)
 from upload_helpers import prepare_upload
 from storage import storage
 from media_processing import (create_personal_log, save_personal_log_and_start,
@@ -41,6 +42,7 @@ def get_logs(member_id):
     logs = legacy_query(PersonalLog).filter(PersonalLog.member_id == member_id).order_by(
         PersonalLog.created_at.desc(),
     ).all()
+    validate_legacy_graphs(logs, 'Personal log not found')
     return jsonify([log.to_dict() for log in logs])
 
 
@@ -123,6 +125,7 @@ def serve_personal_log_file(filename):
     """하위 호환: presigned URL로 리다이렉트"""
     requested_key = f'personal_logs/{filename}'
     records = legacy_query(PersonalLog).filter(PersonalLog.filename == filename).all()
+    validate_legacy_graphs(records, 'Personal log source not found')
     if not any(select_media_source_keys(record, 'personal_logs')['original'] == requested_key
                for record in records):
         raise NotFoundError('Personal log source not found')

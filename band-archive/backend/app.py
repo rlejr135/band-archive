@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 import time
 
 from flask import Flask, jsonify, request
@@ -351,6 +352,12 @@ def create_app(config_class=None, start_worker=None):
         config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
+    # Dedicated rollout telemetry logger: configuring its level/propagation is
+    # idempotent and it owns no handler, so Flask/root logging emits once.
+    legacy_usage_logger = logging.getLogger('band_archive.legacy_v1')
+    legacy_usage_logger.setLevel(logging.INFO)
+    legacy_usage_logger.propagate = True
+    app.extensions['legacy_v1_usage_logger'] = legacy_usage_logger
     validate_supabase_auth_config(app.config)
     if app.debug:
         CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
@@ -406,8 +413,10 @@ def create_app(config_class=None, start_worker=None):
                     r'v?\d+(?:\.\d+){0,3}(?:[-._][A-Za-z0-9]+)?', raw_version[:80],
                 ) else ''
                 rule = request.url_rule.rule if request.url_rule is not None else '<unmatched>'
-                app.logger.info('legacy_v1_usage route=%s method=%s status=%s client_version=%s',
-                                rule, request.method, response.status_code, client_version or '-')
+                legacy_usage_logger.info(
+                    'legacy_v1_usage route=%s method=%s status=%s client_version=%s',
+                    rule, request.method, response.status_code, client_version or '-',
+                )
         except Exception:
             # Observability must never alter a public request's outcome.
             pass

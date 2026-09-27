@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from extensions import db
 from errors import NotFoundError
+from legacy_scope import validate_legacy_graph
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ def apply_vote(*, item_model, vote_model, foreign_key, item_id, voter_hash_value
             if not_found_message is None:
                 raise NotFoundError()
             raise NotFoundError(not_found_message)
+        validate_legacy_graph(item, not_found_message or 'Resource not found')
 
         filters = {foreign_key: item_id, 'voter_hash': voter_hash_value, 'band_id': band_id}
         previous_vote = db.session.query(vote_model).filter_by(**filters).first()

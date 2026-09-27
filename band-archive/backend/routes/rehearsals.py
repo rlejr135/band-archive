@@ -5,7 +5,9 @@ from flask import Blueprint, jsonify, request, current_app
 from extensions import db
 from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
-from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, reject_foreign_children
+from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
+                          reject_foreign_children, validate_legacy_graph,
+                          validate_legacy_graphs)
 from storage import storage
 from media_processing import create_media, save_media_and_start
 from voting import voter_hash, media_viewer_votes
@@ -49,6 +51,8 @@ def _songs_in_rehearsal_band_or_error(band_id, song_ids):
     if len(songs) != len(wanted):
         # Do not distinguish a nonexistent ID from a cross-band ID.
         raise ValidationError('One or more songs are unavailable for this rehearsal', 404)
+    for song in songs:
+        validate_legacy_graph(song, 'One or more songs are unavailable for this rehearsal')
     return songs
 
 
@@ -75,6 +79,7 @@ def get_rehearsals():
         )
 
     rehearsals = query.order_by(Rehearsal.date.asc()).all()
+    validate_legacy_graphs(rehearsals, 'Rehearsal not found')
     return jsonify([r.to_dict() for r in rehearsals])
 
 
@@ -203,6 +208,7 @@ def get_rehearsal_media(id):
     media_files = legacy_query(Media).filter(Media.rehearsal_id == rehearsal.id).order_by(
         Media.vote_score.desc(), Media.id.asc(),
     ).all()
+    validate_legacy_graphs(media_files, 'Media not found')
     viewer_votes = media_viewer_votes(media_files, voter_hash())
     return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 
@@ -217,6 +223,7 @@ def upload_rehearsal_media(id):
     song = Song.query.filter(Song.id == song_id, Song.band_id == rehearsal.band_id).one_or_none()
     if not song:
         raise NotFoundError("Song not found")
+    validate_legacy_graph(song, 'Song not found')
 
     if 'file' not in request.files:
         raise ValidationError("No file provided")

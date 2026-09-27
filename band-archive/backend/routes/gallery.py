@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import GalleryImage
 from errors import ValidationError, NotFoundError
-from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query
+from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, validate_legacy_graphs
 from storage import storage
 from upload_helpers import prepare_upload
 from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
@@ -18,6 +18,7 @@ def _get_image_or_404(id):
 @gallery_bp.route('/gallery', methods=['GET'])
 def get_images():
     images = legacy_query(GalleryImage).order_by(GalleryImage.created_at.desc()).all()
+    validate_legacy_graphs(images, 'Image not found')
     return jsonify([img.to_dict() for img in images])
 
 
@@ -77,4 +78,5 @@ def get_featured():
     image = legacy_query(GalleryImage).filter(GalleryImage.is_featured.is_(True)).first()
     if not image:
         return jsonify(None), 200
+    validate_legacy_graphs([image], 'Image not found')
     return jsonify(image.to_dict()), 200

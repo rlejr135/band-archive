@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Comment, Media, PersonalLog
 from errors import NotFoundError, ValidationError
-from legacy_scope import legacy_get_or_404, legacy_query, reject_foreign_children
+from legacy_scope import legacy_get_or_404, legacy_query, reject_foreign_children, validate_legacy_graphs
 
 comments_bp = Blueprint('comments', __name__)
 
@@ -20,6 +20,7 @@ def _get_top_level_comments(query_filter):
         query_filter,
         Comment.parent_id.is_(None)
     ).order_by(Comment.created_at.asc()).all()
+    validate_legacy_graphs(comments, 'Comment not found')
     return [c.to_dict() for c in comments]
 
 
