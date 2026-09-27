@@ -100,7 +100,7 @@ def test_v1_scope_fails_closed_when_marker_is_invalid_or_import_is_ambiguous(app
 
 
 def test_v1_usage_log_is_once_per_request_and_redacts_sensitive_values(client, caplog):
-    caplog.set_level('INFO')
+    caplog.set_level('INFO', logger='band_archive.legacy_v1')
     client.get('/songs?token=secret-file-name.mp4', headers={
         'X-Client-Version': '1.2.3 bearer-secret@example.test',
     })
