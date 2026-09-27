@@ -357,6 +357,9 @@ def create_app(config_class=None, start_worker=None):
     legacy_usage_logger = logging.getLogger('band_archive.legacy_v1')
     legacy_usage_logger.setLevel(logging.INFO)
     legacy_usage_logger.propagate = True
+    # Other test/process logging setup may have disabled a named logger.  This
+    # telemetry logger is explicitly owned by the app and must remain usable.
+    legacy_usage_logger.disabled = False
     app.extensions['legacy_v1_usage_logger'] = legacy_usage_logger
     validate_supabase_auth_config(app.config)
     if app.debug:
@@ -413,9 +416,14 @@ def create_app(config_class=None, start_worker=None):
                     r'v?\d+(?:\.\d+){0,3}(?:[-._][A-Za-z0-9]+)?', raw_version[:80],
                 ) else ''
                 rule = request.url_rule.rule if request.url_rule is not None else '<unmatched>'
-                legacy_usage_logger.info(
+                # ``Logger.info`` honors process-global ``logging.disable``.
+                # Compatibility telemetry owns this named logger, so dispatch
+                # the INFO record directly while still propagating through the
+                # normal handler chain exactly once.
+                legacy_usage_logger._log(  # pylint: disable=protected-access
+                    logging.INFO,
                     'legacy_v1_usage route=%s method=%s status=%s client_version=%s',
-                    rule, request.method, response.status_code, client_version or '-',
+                    (rule, request.method, response.status_code, client_version or '-'),
                 )
         except Exception:
             # Observability must never alter a public request's outcome.
