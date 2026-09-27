@@ -8,10 +8,16 @@ test('normalizes email input without altering the password', () => {
 });
 
 test('accepts only same-origin internal return paths', () => {
-  assert.equal(safeReturnPath('/bands?tab=mine'), '/bands?tab=mine');
-  assert.equal(safeReturnPath('/songs/42#media'), '/songs/42#media');
-  assert.equal(safeReturnPath('https://attacker.example/bands'), null);
-  assert.equal(safeReturnPath('//attacker.example/bands'), null);
-  assert.equal(safeReturnPath('\\\\attacker.example'), null);
-  assert.equal(safeReturnPath('bands'), null);
+  assert.equal(safeReturnPath('/bands'), '/bands');
+  assert.equal(safeReturnPath('/bands/rehearsals'), '/bands/rehearsals');
+  for (const unsafe of [
+    '/', '/login', '/signup', '/verify-email', '/forgot-password', '/reset-password',
+    '/songs/42', 'https://attacker.example/bands', '//attacker.example/bands', 'javascript:alert(1)',
+    '/bands%2f..%2flogin', '/bands%252f..%252flogin', '/bands\\evil', '/bands//evil',
+    '/bands?token=secret', '/bands#token', '/bands\u0000hidden', ' /bands', 'bands',
+  ]) assert.equal(safeReturnPath(unsafe), '/bands', unsafe);
+});
+
+test('authenticated login fallback cannot navigate back to an auth route', () => {
+  assert.equal(safeReturnPath('/login'), '/bands');
 });

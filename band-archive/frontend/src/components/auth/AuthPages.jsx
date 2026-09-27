@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { normalizeEmail, safeReturnPath } from '../../services/authRedirect.js';
 import { getSupabaseClient } from '../../services/supabase.js';
+import { createSubmissionGuard } from '../../services/authSubmission.js';
 import './AuthPages.css';
 
 const authFailure = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
@@ -38,20 +39,27 @@ export const LoginPage = () => {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const submission = useRef(createSubmissionGuard()).current;
 
   if (!loading && user) return <Navigate to={returnTo} replace />;
   const submit = async (event) => {
     event.preventDefault();
-    if (submitting || configError) return;
+    if (configError || !submission.tryAcquire()) return;
     setSubmitting(true);
     setError('');
-    const supabase = getSupabaseClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: normalizeEmail(email), password,
-    });
-    if (signInError) setError(authFailure);
-    else navigate(returnTo, { replace: true });
-    setSubmitting(false);
+    try {
+      const supabase = getSupabaseClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: normalizeEmail(email), password,
+      });
+      if (signInError) setError(authFailure);
+      else navigate(returnTo, { replace: true });
+    } catch {
+      setError(authFailure);
+    } finally {
+      submission.release();
+      setSubmitting(false);
+    }
   };
   return (
     <AuthFrame title="로그인">
@@ -74,20 +82,27 @@ export const SignupPage = () => {
   const [submitting, setSubmitting] = useState(false);
   const [complete, setComplete] = useState(false);
   const [error, setError] = useState('');
+  const submission = useRef(createSubmissionGuard()).current;
   const returnTo = useMemo(() => returnFromSearch(searchParams), [searchParams]);
   const submit = async (event) => {
     event.preventDefault();
-    if (submitting || configError) return;
+    if (configError || !submission.tryAcquire()) return;
     setSubmitting(true);
     setError('');
-    const { error: signUpError } = await getSupabaseClient().auth.signUp({
-      email: normalizeEmail(email),
-      password,
-      options: { emailRedirectTo: `${appOrigin()}/verify-email` },
-    });
-    if (signUpError) setError(authFailure);
-    else setComplete(true);
-    setSubmitting(false);
+    try {
+      const { error: signUpError } = await getSupabaseClient().auth.signUp({
+        email: normalizeEmail(email),
+        password,
+        options: { emailRedirectTo: `${appOrigin()}/verify-email` },
+      });
+      if (signUpError) setError(authFailure);
+      else setComplete(true);
+    } catch {
+      setError(authFailure);
+    } finally {
+      submission.release();
+      setSubmitting(false);
+    }
   };
   return (
     <AuthFrame title="회원가입">
@@ -120,16 +135,23 @@ export const ForgotPasswordPage = () => {
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
+  const submission = useRef(createSubmissionGuard()).current;
   const submit = async (event) => {
     event.preventDefault();
-    if (submitting || configError) return;
+    if (configError || !submission.tryAcquire()) return;
     setSubmitting(true);
-    await getSupabaseClient().auth.resetPasswordForEmail(normalizeEmail(email), {
-      redirectTo: `${appOrigin()}/reset-password`,
-    });
-    // This is intentionally identical whether the address has an account.
-    setSent(true);
-    setSubmitting(false);
+    try {
+      await getSupabaseClient().auth.resetPasswordForEmail(normalizeEmail(email), {
+        redirectTo: `${appOrigin()}/reset-password`,
+      });
+    } catch {
+      // The response remains identical for missing accounts and transport failures.
+    } finally {
+      // This is intentionally identical whether the address has an account.
+      setSent(true);
+      submission.release();
+      setSubmitting(false);
+    }
   };
   return (
     <AuthFrame title="비밀번호 재설정">
@@ -148,17 +170,24 @@ export const ResetPasswordPage = () => {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const submission = useRef(createSubmissionGuard()).current;
   const submit = async (event) => {
     event.preventDefault();
-    if (submitting || !hasRecoverySession || configError) return;
+    if (!hasRecoverySession || configError || !submission.tryAcquire()) return;
     setSubmitting(true);
-    const { error: updateError } = await getSupabaseClient().auth.updateUser({ password });
-    if (updateError) setError(authFailure);
-    else {
-      clearRecoverySession();
-      navigate('/login', { replace: true });
+    try {
+      const { error: updateError } = await getSupabaseClient().auth.updateUser({ password });
+      if (updateError) setError(authFailure);
+      else {
+        clearRecoverySession();
+        navigate('/login', { replace: true });
+      }
+    } catch {
+      setError(authFailure);
+    } finally {
+      submission.release();
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
   return (
     <AuthFrame title="새 비밀번호 설정">
