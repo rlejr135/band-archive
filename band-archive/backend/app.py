@@ -24,6 +24,7 @@ from routes.announcements import announcements_bp
 from routes.rehearsals import rehearsals_bp
 from routes.search import search_bp
 from routes.comments import comments_bp
+from routes.content_writes import content_writes_bp
 from routes.gallery import gallery_bp
 from routes.uploads import uploads_bp
 from routes.migrations import migrations_bp
@@ -467,6 +468,7 @@ def create_app(config_class=None, start_worker=None):
     app.register_blueprint(auth_bp)
     app.register_blueprint(bands_bp)
     app.register_blueprint(content_reads_bp)
+    app.register_blueprint(content_writes_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
     app.register_blueprint(members_bp)
