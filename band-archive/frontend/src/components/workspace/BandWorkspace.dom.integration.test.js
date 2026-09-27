@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/globals */
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { JSDOM } from 'jsdom';
