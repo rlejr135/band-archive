@@ -18,9 +18,9 @@ const writeSelectedId = (userId, id) => {
 };
 
 const BandStateProvider = ({ children, userId }) => {
-  const [state, setState] = useState({ userId: null, activeBands: [], bandsLoaded: false, selectedBandId: null });
+  const [state, setState] = useState({ userId: null, activeBands: [], bandsLoaded: false, selectedBandId: null, selectedBand: null });
   // Previous-account data is never exposed while this account is loading.
-  const scopedState = state.userId === userId ? state : { userId, activeBands: [], bandsLoaded: false, selectedBandId: null };
+  const scopedState = state.userId === userId ? state : { userId, activeBands: [], bandsLoaded: false, selectedBandId: null, selectedBand: null };
 
   const setAvailableBands = useCallback((bands) => {
     const activeBands = Array.isArray(bands) ? bands : [];
@@ -28,27 +28,43 @@ const BandStateProvider = ({ children, userId }) => {
       const candidate = previous.userId === userId ? previous.selectedBandId ?? readSelectedId(userId) : readSelectedId(userId);
       const selected = selectValidBand(candidate, activeBands);
       writeSelectedId(userId, selected?.id ?? null);
-      return { userId, activeBands, bandsLoaded: true, selectedBandId: selected?.id ?? null };
+      return { userId, activeBands, bandsLoaded: true, selectedBandId: selected?.id ?? null, selectedBand: selected ?? null };
     });
   }, [userId]);
 
   const selectBand = useCallback((bandId) => {
     setState((previous) => {
-      if (!userId || previous.userId !== userId) return { userId, activeBands: [], bandsLoaded: false, selectedBandId: null };
+      if (!userId || previous.userId !== userId) return { userId, activeBands: [], bandsLoaded: false, selectedBandId: null, selectedBand: null };
       const selected = selectValidBand(bandId, previous.activeBands);
       writeSelectedId(userId, selected?.id ?? null);
-      return { ...previous, selectedBandId: selected?.id ?? null };
+      return { ...previous, selectedBandId: selected?.id ?? null, selectedBand: selected ?? null };
     });
   }, [userId]);
 
-  const selectedBand = selectValidBand(scopedState.selectedBandId, scopedState.activeBands);
+  const setSelectedBandIdentity = useCallback((band) => {
+    if (!band || !Number.isInteger(Number(band.id))) return;
+    setState((previous) => {
+      if (previous.userId !== userId) return previous;
+      const active = selectValidBand(band.id, previous.activeBands);
+      if (active) writeSelectedId(userId, active.id);
+      return { ...previous, selectedBandId: active?.id ?? null, selectedBand: band };
+    });
+  }, [userId]);
+
+  const clearSelectedBand = useCallback(() => {
+    setState((previous) => ({ ...previous, selectedBandId: null, selectedBand: null }));
+  }, []);
+
+  const selectedBand = scopedState.selectedBand ?? selectValidBand(scopedState.selectedBandId, scopedState.activeBands);
   const value = useMemo(() => ({
     activeBands: scopedState.activeBands,
     bandsLoaded: scopedState.bandsLoaded,
     selectedBand,
     setAvailableBands,
     selectBand,
-  }), [scopedState.activeBands, scopedState.bandsLoaded, selectBand, selectedBand, setAvailableBands]);
+    setSelectedBandIdentity,
+    clearSelectedBand,
+  }), [clearSelectedBand, scopedState.activeBands, scopedState.bandsLoaded, selectBand, selectedBand, setAvailableBands, setSelectedBandIdentity]);
   return <BandContext.Provider value={value}>{children}</BandContext.Provider>;
 };
 
