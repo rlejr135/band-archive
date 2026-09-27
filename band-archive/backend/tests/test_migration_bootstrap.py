@@ -704,6 +704,7 @@ class _PostgresIndexesConnection:
             ('band_membership', 'uq_band_membership_active_owner', owner_predicate),
             ('band_creation_request', 'uq_band_creation_request_pending_user_slug', request_predicate),
             ('gallery_image', 'uq_gallery_image_featured_band', gallery_predicate),
+            ('media_vote', 'uq_media_vote_membership', '(created_by_membership_id IS NOT NULL)'),
         ]
 
     def execute(self, statement):

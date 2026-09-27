@@ -373,6 +373,11 @@ class MediaVote(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint('media_id', 'voter_hash', name='uq_media_vote_voter'),
+        # Legacy device votes retain a NULL membership.  Account votes are a
+        # distinct identity domain and may occur once per active membership.
+        db.Index('uq_media_vote_membership', 'media_id', 'created_by_membership_id', unique=True,
+                 sqlite_where=db.text('created_by_membership_id IS NOT NULL'),
+                 postgresql_where=db.text('created_by_membership_id IS NOT NULL')),
         db.CheckConstraint('value IN (-1, 1)', name='ck_media_vote_value'),
     )
 
@@ -661,7 +666,9 @@ class Comment(db.Model):
     personal_log_id = db.Column(db.Integer, db.ForeignKey('personal_log.id'), nullable=True)
     parent_id = db.Column(db.Integer, db.ForeignKey('comment.id'), nullable=True)
     author = db.Column(db.String(50), nullable=False)
-    password_hash = db.Column(db.String(200), nullable=False)
+    # v1 comments retain their password hash.  Account-owned v2 comments do
+    # not accept or create a password, so the legacy column must be nullable.
+    password_hash = db.Column(db.String(200), nullable=True)
     content = db.Column(db.Text, nullable=False)
     # A media playback offset in seconds.  This remains nullable so comments
     # written before timestamp links, and ordinary text comments, retain the

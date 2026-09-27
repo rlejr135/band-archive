@@ -28,6 +28,7 @@ AUTH_REVISION = '20260914_02'
 PHASE3_REVISION = '20260915_03'
 PHASE3_HARDENED_REVISION = '20260916_04'
 PHASE4_REVISION = '20260916_05'
+PHASE6_REVISION = '20260920_06'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -104,6 +105,7 @@ def baseline_metadata():
                     table.foreign_keys.discard(foreign_key)
                     column.foreign_keys.discard(foreign_key)
                 table._columns.remove(column)
+    _restore_pre_phase7_content_writes(metadata)
     return metadata
 
 
@@ -148,6 +150,7 @@ def phase4_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _restore_pre_phase7_content_writes(metadata)
     for table_name in (
         'song', 'rehearsal', 'media', 'member', 'personal_log', 'gallery_image',
         'announcement', 'song_suggestion', 'comment', 'song_vote', 'media_vote',
@@ -174,6 +177,27 @@ def phase4_metadata():
             if index.name in read_indexes:
                 table.indexes.remove(index)
     return metadata
+
+
+def phase6_metadata():
+    """Exact revision-06 snapshot before the account write contract."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    _restore_pre_phase7_content_writes(metadata)
+    return metadata
+
+
+def _restore_pre_phase7_content_writes(metadata):
+    """Remove v07-only nullability/indexes from older immutable snapshots."""
+    comment = metadata.tables.get('comment')
+    if comment is not None and comment.c.get('password_hash') is not None:
+        comment.c.password_hash.nullable = False
+    media_vote = metadata.tables.get('media_vote')
+    if media_vote is not None:
+        index = next((item for item in media_vote.indexes if item.name == 'uq_media_vote_membership'), None)
+        if index is not None:
+            media_vote.indexes.remove(index)
 
 
 def _restore_pre_phase4_band(metadata):
@@ -860,6 +884,8 @@ def _canonical_postgres_partial_predicate(value):
     # or ``IS NOT FALSE``.
     if re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?is_featured\s+is\s+true', expression):
         return ('is_featured', 'is_true')
+    if re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?created_by_membership_id\s+is\s+not\s+null', expression):
+        return ('created_by_membership_id', 'is_not_null')
     atoms = _split_postgres_predicate_and(expression)
     if not atoms:
         return None
@@ -1132,6 +1158,8 @@ def metadata_for_recorded_revision(revision):
         return phase3_hardened_metadata()
     if revision == PHASE4_REVISION:
         return phase4_metadata()
+    if revision == PHASE6_REVISION:
+        return phase6_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(
