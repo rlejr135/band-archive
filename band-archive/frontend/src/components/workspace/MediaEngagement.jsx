@@ -59,7 +59,7 @@ export const MediaEngagement = ({ band, api, media, onMediaUpdate, onAuthoritati
     if (!member || writeFlight.current || !draft.trim()) return;
     writeFlight.current = true; setWriteBusy(true); setCommentError('');
     try {
-      const response = await api.requestJson(bandWorkspacePaths.mediaComments(band.id, media.id), writeOptions('POST', commentPayload({ content: draft.trim(), parentId: replyTo })));
+      const response = await api.requestJson(bandWorkspacePaths.mediaCommentsWrite(band.id, media.id), writeOptions('POST', commentPayload({ content: draft.trim(), parentId: replyTo })));
       if (!live.current) return;
       if (response?.comment) setComments((previous) => ({ ...previous, entries: mergeCommentPage(previous.entries, [response.comment]) }));
       setDraft(''); setReplyTo(null);

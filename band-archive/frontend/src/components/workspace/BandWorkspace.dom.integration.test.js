@@ -181,3 +181,44 @@ test('a stale playback refresh cannot repaint media after navigating to another 
   await view.findByText('이전 미디어'); await userEvent.click(view.getByText('이전 미디어')); await waitFor(() => assert.ok(view.container.querySelector('video'))); fireEvent.error(view.container.querySelector('video')); await waitFor(() => assert.equal(mediaCalls, 2)); await act(async () => { navigate('/bands/new-media/songs'); }); await view.findByText('새 미디어'); await act(async () => { oldRefresh.resolve(response({ media: [{ id: 902, file_type: 'video', playback: { video_url: 'https://media.invalid/old-refreshed.mp4' } }], pagination: { has_more: false } })); });
   assert.equal(view.queryByText('이전 미디어'), null); assert.equal(view.container.querySelector('video'), null); view.unmount(); globalThis.fetch = previousFetch;
 });
+
+test('member media engagement uses v2 account payloads, refetches score order, and manages flat comments', async () => {
+  await load(); const previousFetch = globalThis.fetch; const writes = []; let mediaReads = 0;
+  const root = { id: 110, author: '멤버', content: '첫 댓글', parent_id: null, created_at: '2026-09-01T00:00:00Z', can_edit: true, can_delete: true };
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/engagement')) return response({ band: { id: 100, slug: 'engagement', name: '참여 밴드', default_visibility: 'PUBLIC', membership: { id: 10, role: 'member', status: 'ACTIVE' } } });
+    if (url.includes('/songs?')) return response({ songs: [{ id: 101, title: '참여 곡', artist: '밴드' }], pagination: { has_more: false } });
+    if (url.includes('/songs/101/media?')) { mediaReads += 1; return response({ media: [{ id: 102, file_type: 'audio', vote_score: mediaReads > 1 ? 1 : 0, playback: { audio_url: 'https://media.invalid/clip.m4a' } }], pagination: { has_more: false } }); }
+    if (url.includes('/media/102/vote') && options.method === 'PUT') { writes.push({ kind: 'vote', body: JSON.parse(options.body) }); return response({ media: { id: 102, vote_score: 1 }, viewer_vote: 1 }); }
+    if (url.includes('/media/102/comments?')) return response(url.includes('offset=20') ? { comments: [{ ...root }, { id: 111, author: '멤버', content: '답글', parent_id: 110, created_at: '2026-09-02T00:00:00Z' }], pagination: { has_more: false } } : { comments: [root], pagination: { has_more: true, next_offset: 20 } });
+    if (url.includes('/media/102/comments') && options.method === 'POST') { writes.push({ kind: 'create', body: JSON.parse(options.body) }); return response({ comment: { id: 111, author: '멤버', content: '답글', parent_id: 110, created_at: '2026-09-02T00:00:00Z' } }, 201); }
+    if (url.includes('/comments/110') && options.method === 'PATCH') { writes.push({ kind: 'edit', body: JSON.parse(options.body) }); return response({ comment: { ...root, content: '수정 댓글' } }); }
+    if (url.includes('/comments/110') && options.method === 'DELETE') { writes.push({ kind: 'delete' }); return response({ deleted: true, id: 110 }); }
+    return response({});
+  };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} }; const confirm = window.confirm; window.confirm = () => true;
+  try {
+    const view = render(createElement(App, { entry: '/bands/engagement/songs', authValue: member, bandValue: { activeBands: [] }, songs: true }));
+    await view.findByText('참여 곡'); await userEvent.click(view.getByText('참여 곡')); await view.findByRole('button', { name: '추천' });
+    await userEvent.click(view.getByRole('button', { name: '추천' })); await waitFor(() => assert.deepEqual(writes[0], { kind: 'vote', body: { value: 1 } })); await waitFor(() => assert.ok(mediaReads >= 2)); assert.equal(view.getByRole('button', { name: '추천' }).getAttribute('aria-pressed'), 'true');
+    await userEvent.click(view.getByRole('button', { name: '답글' })); await userEvent.type(view.getByLabelText('댓글 내용'), '답글'); await waitFor(() => assert.equal(view.getByRole('button', { name: '댓글 등록' }).disabled, false)); await userEvent.click(view.getByRole('button', { name: '댓글 등록' })); await waitFor(() => assert.deepEqual(writes.find((item) => item.kind === 'create'), { kind: 'create', body: { content: '답글', parent_id: 110 } }));
+    await userEvent.click(view.getByRole('button', { name: '수정' })); await userEvent.type(view.getByLabelText('댓글 수정'), ' 수정'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.deepEqual(writes.find((item) => item.kind === 'edit'), { kind: 'edit', body: { content: '첫 댓글 수정' } }));
+    await userEvent.click(view.getByRole('button', { name: '댓글 더 불러오기' })); await waitFor(() => assert.equal(view.container.querySelectorAll('[data-comment-id="111"]').length, 1)); await userEvent.click(view.getByRole('button', { name: '삭제' })); await waitFor(() => assert.equal(writes.some((item) => item.kind === 'delete'), true)); view.unmount();
+  } finally { window.confirm = confirm; globalThis.fetch = previousFetch; }
+});
+
+test('visitor sees media scores and comments but cannot issue engagement writes', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, method: options.method || 'GET' });
+    if (url.includes('/by-slug/visitor-engagement')) return response({ band: { id: 120, slug: 'visitor-engagement', name: '공개 밴드', default_visibility: 'PUBLIC', membership: null } });
+    if (url.includes('/songs?')) return response({ songs: [{ id: 121, title: '공개 곡', artist: '밴드' }], pagination: { has_more: false } });
+    if (url.includes('/songs/121/media?')) return response({ media: [{ id: 122, file_type: 'audio', vote_score: 3, playback: { audio_url: 'https://media.invalid/public.m4a' } }], pagination: { has_more: false } });
+    if (url.includes('/media/122/comments?')) return response({ comments: [{ id: 123, author: '멤버', content: '공개 댓글', parent_id: null, created_at: '2026-09-01T00:00:00Z' }], pagination: { has_more: false } });
+    return response({});
+  };
+  try {
+    const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} }; const view = render(createElement(App, { entry: '/bands/visitor-engagement/songs', authValue: visitor, bandValue: { activeBands: [] }, songs: true }));
+    await view.findByText('공개 곡'); await userEvent.click(view.getByText('공개 곡')); await view.findByText('점수 3'); await view.findByText('공개 댓글'); assert.equal(view.queryByRole('button', { name: '추천' }), null); assert.equal(view.queryByRole('button', { name: '댓글 등록' }), null); assert.ok(view.getAllByText(/로그인 후 밴드에 가입/).length >= 1); assert.equal(calls.some((call) => call.method !== 'GET'), false); view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});

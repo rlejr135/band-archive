@@ -9,6 +9,7 @@ test('workspace paths remain v2, tenant-scoped, and URL-safe', () => {
   assert.equal(bandWorkspacePaths.rehearsalMedia(7, 4), '/api/v2/bands/7/rehearsals/4/media?limit=20&offset=0');
   assert.equal(bandWorkspacePaths.mediaVote(7, 4), '/api/v2/bands/7/media/4/vote');
   assert.equal(bandWorkspacePaths.mediaComments(7, 4, { limit: 3, offset: 9 }), '/api/v2/bands/7/media/4/comments?limit=3&offset=9');
+  assert.equal(bandWorkspacePaths.mediaCommentsWrite(7, 4), '/api/v2/bands/7/media/4/comments');
   assert.equal(bandWorkspacePaths.comment(7, 4), '/api/v2/bands/7/comments/4');
 });
 

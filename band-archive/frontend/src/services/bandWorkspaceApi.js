@@ -12,6 +12,7 @@ export const bandWorkspacePaths = {
   rehearsalMedia: (bandId, rehearsalId, page) => `${bandBase(bandId)}/rehearsals/${Number(rehearsalId)}/media${pageQuery(page)}`,
   mediaVote: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}/vote`,
   mediaComments: (bandId, mediaId, page) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments${pageQuery(page)}`,
+  mediaCommentsWrite: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments`,
   comment: (bandId, commentId) => `${bandBase(bandId)}/comments/${Number(commentId)}`,
 };
 
