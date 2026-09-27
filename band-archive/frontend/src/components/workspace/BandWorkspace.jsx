@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload } from '../../services/bandWorkspaceApi.js';
+import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
 import logo from '../../assets/logo.png';
 import './BandWorkspace.css';
 
@@ -24,40 +25,50 @@ const useWorkspace = () => {
 const requestOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
 const genericError = '정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
 
+// React Router reuses a route element when only params change. Keying this
+// boundary makes the old workspace (including open forms/details) unmount
+// synchronously before the next slug or account can render.
+export const BandWorkspaceRoute = () => {
+  const { bandSlug } = useParams();
+  const { user } = useAuth();
+  return <BandWorkspace key={workspaceIdentityKey(bandSlug, user?.id)} />;
+};
+
 export const BandWorkspace = () => {
   const { bandSlug } = useParams();
   const navigate = useNavigate();
   const { user, getAccessToken, refreshSession, signOut } = useAuth();
-  const { activeBands, selectedBand, setSelectedBandIdentity } = useBands();
+  const { activeBands } = useBands();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ loading: true, error: '', band: null });
-  const requestVersion = useRef(0);
+  const requestGate = useRef(createWorkspaceRequestGate());
+  const routeKey = workspaceIdentityKey(bandSlug, user?.id);
 
   useEffect(() => {
     const controller = new AbortController();
-    const version = ++requestVersion.current;
+    const version = requestGate.current.begin(routeKey);
     setState({ loading: true, error: '', band: null });
     api.requestJson(bandWorkspacePaths.bandBySlug(bandSlug), requestOptions(controller.signal))
       .then((response) => {
-        if (controller.signal.aborted || version !== requestVersion.current || !response?.band) return;
-        setSelectedBandIdentity(response.band);
+        if (controller.signal.aborted || !requestGate.current.accepts(routeKey, version) || !response?.band) return;
         setState({ loading: false, error: '', band: response.band });
       })
       .catch(() => {
-        if (!controller.signal.aborted && version === requestVersion.current) {
+        if (!controller.signal.aborted && requestGate.current.accepts(routeKey, version)) {
           setState({ loading: false, error: '밴드를 찾을 수 없거나 볼 권한이 없습니다.', band: null });
         }
       });
     return () => controller.abort();
-  }, [api, bandSlug, user?.id, setSelectedBandIdentity]);
+  }, [api, bandSlug, routeKey]);
 
   const switchBand = (event) => {
     const band = activeBands.find((item) => String(item.id) === event.target.value);
     if (band?.slug) navigate(`/bands/${encodeURIComponent(band.slug)}`);
   };
 
-  if (state.loading) return <main className="band-workspace-loading" aria-live="polite">밴드 공간을 여는 중입니다…</main>;
+  if (state.loading) return <WorkspacePaintGate requestedSlug={bandSlug} />;
   if (state.error || !state.band) return <main className="band-workspace-loading" role="alert"><p>{state.error}</p><button className="secondary-btn" onClick={() => navigate('/bands')}>내 밴드로 이동</button></main>;
+  if (state.band.slug !== bandSlug) return <WorkspacePaintGate requestedSlug={bandSlug} resolvedSlug={state.band.slug} />;
   const value = { band: state.band, api, workspaceKey: `${state.band.id}:${user?.id || 'visitor'}` };
   const switchable = activeBands.length > 1;
   return <WorkspaceContext.Provider value={value}>
@@ -72,7 +83,7 @@ export const BandWorkspace = () => {
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/rehearsals`}>합주</NavLink>
         </nav>
         <div className="workspace-actions">
-          {switchable && <label className="band-switcher">밴드 전환<select value={String(activeBands.some((item) => item.id === selectedBand?.id) ? selectedBand.id : '')} onChange={switchBand}><option value="" disabled>밴드 선택</option>{activeBands.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+          {switchable && <label className="band-switcher">밴드 전환<select value={String(activeBands.some((item) => item.id === state.band.id) ? state.band.id : '')} onChange={switchBand}><option value="" disabled>밴드 선택</option>{activeBands.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
           <button className="nav-btn" onClick={() => navigate('/bands')}>내 밴드</button>
           {user ? <button className="nav-btn" onClick={async () => { await signOut(); navigate('/', { replace: true }); }}>로그아웃</button> : <button className="nav-btn" onClick={() => navigate('/login')}>로그인</button>}
         </div>
@@ -120,7 +131,7 @@ export const BandDashboard = () => {
     return () => { live = false; controller.abort(); };
   }, [api, band.id, workspaceKey]);
   return <section className="workspace-page" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p>
-    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <div className="workspace-stats"><div><strong>{state.songs}</strong><span>공개된 곡</span></div><div><strong>{state.rehearsals}</strong><span>공개된 합주</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div>}
+    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div>}
     <WriteGuidance /></section>;
 };
 
@@ -155,16 +166,28 @@ const ContentWorkspace = ({ kind }) => {
 };
 
 const ContentDetail = ({ kind, item, onEdit, onDeleted }) => {
-  const { band, api, workspaceKey } = useWorkspace(); const [mediaState, setMediaState] = useState({ loading: true, error: '', media: [] }); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
-  useEffect(() => { const controller = new AbortController(); let live = true; setMediaState({ loading: true, error: '', media: [] }); api.requestJson(kind === 'songs' ? bandWorkspacePaths.songMedia(band.id, item.id) : bandWorkspacePaths.rehearsalMedia(band.id, item.id), requestOptions(controller.signal)).then((response) => { if (live) setMediaState({ loading: false, error: '', media: response?.media || [] }); }).catch(() => { if (live) setMediaState({ loading: false, error: '미디어를 불러오지 못했습니다.', media: [] }); }); return () => { live = false; controller.abort(); }; }, [api, band.id, item.id, kind, workspaceKey]);
+  const { band, api, workspaceKey } = useWorkspace(); const [mediaState, setMediaState] = useState({ loading: true, error: '', pages: [], pagination: null }); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
+  const requestGate = useRef(createWorkspaceRequestGate()); const controllers = useRef(new Set()); const staleAttempts = useRef(new Set());
+  const mediaPath = useCallback((offset) => (kind === 'songs' ? bandWorkspacePaths.songMedia(band.id, item.id, { limit: PAGE_SIZE, offset }) : bandWorkspacePaths.rehearsalMedia(band.id, item.id, { limit: PAGE_SIZE, offset })), [band.id, item.id, kind]);
+  const loadMedia = useCallback(async (offset = 0) => {
+    const controller = new AbortController(); controllers.current.add(controller); const token = requestGate.current.begin(`${workspaceKey}:${item.id}:${offset}`);
+    setMediaState((previous) => ({ ...previous, loading: true, error: '' }));
+    try { const response = await api.requestJson(mediaPath(offset), requestOptions(controller.signal));
+      if (controller.signal.aborted || !requestGate.current.accepts(`${workspaceKey}:${item.id}:${offset}`, token)) return;
+      const page = { offset, media: Array.isArray(response?.media) ? response.media : [] };
+      setMediaState((previous) => ({ loading: false, error: '', pages: mergeMediaPage(previous.pages, page), pagination: response?.pagination ?? previous.pagination }));
+    } catch { if (!controller.signal.aborted && requestGate.current.accepts(`${workspaceKey}:${item.id}:${offset}`, token)) setMediaState((previous) => ({ ...previous, loading: false, error: '미디어를 불러오지 못했습니다.' }));
+    } finally { controllers.current.delete(controller); }
+  }, [api, item.id, mediaPath, workspaceKey]);
+  useEffect(() => { const activeControllers = controllers.current; loadMedia(0); return () => { activeControllers.forEach((controller) => controller.abort()); activeControllers.clear(); }; }, [loadMedia]);
   const remove = async () => { if (!window.confirm(`이 ${kind === 'songs' ? '곡' : '합주'}을 삭제할까요?`)) return; setDeleting(true); setDeleteError(''); try { await api.requestJson(kind === 'songs' ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.rehearsal(band.id, item.id), { method: 'DELETE' }); onDeleted(); } catch { setDeleting(false); setDeleteError('삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.'); } };
   return <article><div className="detail-heading"><div><h2>{item.title}</h2><p>{kind === 'songs' ? item.artist : `${item.date}${item.time ? ` · ${item.time}` : ''}`}</p></div>{item.can_edit && <button className="secondary-btn" onClick={onEdit}>수정</button>}{item.can_delete && <button className="danger-btn" disabled={deleting} onClick={remove}>{deleting ? '삭제 중…' : '삭제'}</button>}</div>
     {deleteError && <p className="workspace-error" role="alert">{deleteError}</p>}{kind === 'songs' ? <dl><dt>상태</dt><dd>{item.status || '-'}</dd><dt>장르</dt><dd>{item.genre || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl> : <dl><dt>장소</dt><dd>{item.location || '-'}</dd><dt>연결된 곡</dt><dd>{item.songs?.map((song) => song.title).join(', ') || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl>}
-    <h3>재생 미디어</h3>{mediaState.loading ? <p>미디어를 불러오는 중입니다…</p> : mediaState.error ? <p className="workspace-muted">{mediaState.error}</p> : mediaState.media.length === 0 ? <p className="workspace-muted">표시할 미디어가 없습니다. 업로드는 준비 중입니다.</p> : <div className="media-list">{mediaState.media.map((media) => <PlaybackMedia key={media.id} media={media} />)}</div>}
+    <h3>재생 미디어</h3>{mediaState.loading && mediaState.pages.length === 0 ? <p>미디어를 불러오는 중입니다…</p> : mediaState.error && mediaState.pages.length === 0 ? <p className="workspace-muted">{mediaState.error}</p> : mediaState.pages.length === 0 ? <p className="workspace-muted">표시할 미디어가 없습니다. 업로드는 준비 중입니다.</p> : <><div className="media-list">{mediaState.pages.flatMap((page) => page.media.map((media) => <PlaybackMedia key={media.id} media={media} onStale={() => { if (takeOneStaleRefresh(staleAttempts.current, page.offset, media.id)) loadMedia(page.offset); }} />))}</div>{mediaState.pagination?.has_more && <button className="secondary-btn" disabled={mediaState.loading} onClick={() => loadMedia(mediaState.pagination.next_offset)}>{mediaState.loading ? '미디어를 불러오는 중…' : '미디어 더 불러오기'}</button>}{mediaState.error && <p className="workspace-muted" role="alert">{mediaState.error}</p>}</>}
   </article>;
 };
 
-const PlaybackMedia = ({ media }) => { const [mode, setMode] = useState(media.playback?.video_url ? 'video' : 'audio'); const source = mode === 'audio' ? media.playback?.audio_url : (media.playback?.video_url || media.playback?.url); return <section className="workspace-media"><div><strong>{media.file_type === 'video' ? '720p 영상' : '파일'} </strong><span>점수 {media.vote_score ?? 0}</span></div>{media.playback?.video_url && media.playback?.audio_url && <div className="media-modes"><button className={mode === 'video' ? 'active' : ''} onClick={() => setMode('video')}>720p 영상</button><button className={mode === 'audio' ? 'active' : ''} onClick={() => setMode('audio')}>오디오</button></div>}{source ? mode === 'video' ? <video controls preload="metadata" src={source}>브라우저가 영상을 지원하지 않습니다.</video> : <audio controls preload="metadata" src={source}>브라우저가 오디오를 지원하지 않습니다.</audio> : <p className="workspace-muted">현재 재생 가능한 변환본이 없습니다.</p>}</section>; };
+const PlaybackMedia = ({ media, onStale }) => { const [mode, setMode] = useState(media.playback?.video_url ? 'video' : 'audio'); const [failed, setFailed] = useState(false); const source = mode === 'audio' ? media.playback?.audio_url : (media.playback?.video_url || media.playback?.url); const stale = () => { setFailed(true); onStale(); }; return <section className="workspace-media"><div><strong>{media.file_type === 'video' ? '720p 영상' : '파일'} </strong><span>점수 {media.vote_score ?? 0}</span></div>{media.playback?.video_url && media.playback?.audio_url && <div className="media-modes"><button className={mode === 'video' ? 'active' : ''} onClick={() => { setFailed(false); setMode('video'); }}>720p 영상</button><button className={mode === 'audio' ? 'active' : ''} onClick={() => { setFailed(false); setMode('audio'); }}>오디오</button></div>}{source ? mode === 'video' ? <video controls preload="metadata" src={source} onError={stale}>브라우저가 영상을 지원하지 않습니다.</video> : <audio controls preload="metadata" src={source} onError={stale}>브라우저가 오디오를 지원하지 않습니다.</audio> : <p className="workspace-muted">현재 재생 가능한 변환본이 없습니다.</p>}{failed && <p className="workspace-muted">재생 주소를 한 번 새로고침했습니다. 계속 실패하면 잠시 후 다시 시도해 주세요.</p>}</section>; };
 
 const ContentForm = ({ kind, item, onDone, onCancel }) => {
   const { band, api } = useWorkspace(); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [songs, setSongs] = useState([]);

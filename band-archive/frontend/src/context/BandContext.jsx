@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext.jsx';
-import { selectValidBand } from './bandSelection.js';
+import { activeBandsOnly, selectValidBand } from './bandSelection.js';
 
 const BandContext = createContext(null);
 const storageKey = (userId) => `band-archive.selected-band:${userId}`;
@@ -18,53 +18,42 @@ const writeSelectedId = (userId, id) => {
 };
 
 const BandStateProvider = ({ children, userId }) => {
-  const [state, setState] = useState({ userId: null, activeBands: [], bandsLoaded: false, selectedBandId: null, selectedBand: null });
+  const [state, setState] = useState({ userId: null, activeBands: [], bandsLoaded: false, selectedBandId: null });
   // Previous-account data is never exposed while this account is loading.
-  const scopedState = state.userId === userId ? state : { userId, activeBands: [], bandsLoaded: false, selectedBandId: null, selectedBand: null };
+  const scopedState = state.userId === userId ? state : { userId, activeBands: [], bandsLoaded: false, selectedBandId: null };
 
   const setAvailableBands = useCallback((bands) => {
-    const activeBands = Array.isArray(bands) ? bands : [];
+    const activeBands = activeBandsOnly(bands);
     setState((previous) => {
       const candidate = previous.userId === userId ? previous.selectedBandId ?? readSelectedId(userId) : readSelectedId(userId);
       const selected = selectValidBand(candidate, activeBands);
       writeSelectedId(userId, selected?.id ?? null);
-      return { userId, activeBands, bandsLoaded: true, selectedBandId: selected?.id ?? null, selectedBand: selected ?? null };
+      return { userId, activeBands, bandsLoaded: true, selectedBandId: selected?.id ?? null };
     });
   }, [userId]);
 
   const selectBand = useCallback((bandId) => {
     setState((previous) => {
-      if (!userId || previous.userId !== userId) return { userId, activeBands: [], bandsLoaded: false, selectedBandId: null, selectedBand: null };
+      if (!userId || previous.userId !== userId) return { userId, activeBands: [], bandsLoaded: false, selectedBandId: null };
       const selected = selectValidBand(bandId, previous.activeBands);
       writeSelectedId(userId, selected?.id ?? null);
-      return { ...previous, selectedBandId: selected?.id ?? null, selectedBand: selected ?? null };
-    });
-  }, [userId]);
-
-  const setSelectedBandIdentity = useCallback((band) => {
-    if (!band || !Number.isInteger(Number(band.id))) return;
-    setState((previous) => {
-      if (previous.userId !== userId) return previous;
-      const active = selectValidBand(band.id, previous.activeBands);
-      if (active) writeSelectedId(userId, active.id);
-      return { ...previous, selectedBandId: active?.id ?? null, selectedBand: band };
+      return { ...previous, selectedBandId: selected?.id ?? null };
     });
   }, [userId]);
 
   const clearSelectedBand = useCallback(() => {
-    setState((previous) => ({ ...previous, selectedBandId: null, selectedBand: null }));
+    setState((previous) => ({ ...previous, selectedBandId: null }));
   }, []);
 
-  const selectedBand = scopedState.selectedBand ?? selectValidBand(scopedState.selectedBandId, scopedState.activeBands);
+  const selectedBand = selectValidBand(scopedState.selectedBandId, scopedState.activeBands);
   const value = useMemo(() => ({
     activeBands: scopedState.activeBands,
     bandsLoaded: scopedState.bandsLoaded,
     selectedBand,
     setAvailableBands,
     selectBand,
-    setSelectedBandIdentity,
     clearSelectedBand,
-  }), [clearSelectedBand, scopedState.activeBands, scopedState.bandsLoaded, selectBand, selectedBand, setAvailableBands, setSelectedBandIdentity]);
+  }), [clearSelectedBand, scopedState.activeBands, scopedState.bandsLoaded, selectBand, selectedBand, setAvailableBands]);
   return <BandContext.Provider value={value}>{children}</BandContext.Provider>;
 };
 
