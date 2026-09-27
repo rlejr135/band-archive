@@ -40,6 +40,24 @@ _SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 750
 _BAND_SCHEMA_TABLES = {
     'band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event',
 }
+_LEGACY_CLIENT_VERSION_RE = re.compile(
+    r'^[vV]?[0-9]{1,5}(?:\.[0-9]{1,5}){0,3}$'
+)
+_LEGACY_CLIENT_VERSION_MAX_LENGTH = 25
+
+
+def _sanitize_legacy_client_version(raw_version):
+    """Return only a deliberately tiny, non-identifying release version.
+
+    Historical clients sometimes put arbitrary build metadata in this header.
+    It is telemetry, not an identity field: accept one to four ASCII numeric
+    components (with an optional ``v``) and omit everything else.  In
+    particular, prerelease/build suffixes are not safe to retain because they
+    can contain capability tokens or other caller-controlled data.
+    """
+    if not isinstance(raw_version, str) or len(raw_version) > _LEGACY_CLIENT_VERSION_MAX_LENGTH:
+        return ''
+    return raw_version if _LEGACY_CLIENT_VERSION_RE.fullmatch(raw_version) else ''
 
 
 def _band_schema_ready():
@@ -408,13 +426,9 @@ def create_app(config_class=None, start_worker=None):
                 # Never log arbitrary headers, query strings, request bodies,
                 # filenames, identities, or capability tokens.  Client
                 # version is useful rollout telemetry but bounded/sanitized.
-                raw_version = request.headers.get('X-Client-Version', '').strip()
-                # Accept only a compact release-like version; arbitrary
-                # caller-controlled headers can otherwise smuggle identities
-                # or secrets into the observability stream.
-                client_version = raw_version if re.fullmatch(
-                    r'v?\d+(?:\.\d+){0,3}(?:[-._][A-Za-z0-9]+)?', raw_version[:80],
-                ) else ''
+                client_version = _sanitize_legacy_client_version(
+                    request.headers.get('X-Client-Version', '')
+                )
                 rule = request.url_rule.rule if request.url_rule is not None else '<unmatched>'
                 # ``Logger.info`` honors process-global ``logging.disable``.
                 # Compatibility telemetry owns this named logger, so dispatch

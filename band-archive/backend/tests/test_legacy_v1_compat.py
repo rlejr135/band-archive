@@ -110,6 +110,43 @@ def test_v1_usage_log_is_once_per_request_and_redacts_sensitive_values(client, c
     assert 'route=/songs method=GET status=200' in events[0]
     assert 'secret' not in events[0]
     assert '?' not in events[0]
+    assert 'client_version=-' in events[0]
+
+
+@pytest.mark.parametrize('version', [
+    '1', '1.2', '1.2.3', '1.2.3.4', 'v1.2.3', 'V12345.00001.42.9',
+])
+def test_legacy_usage_log_accepts_only_numeric_dotted_client_versions(client, caplog, version):
+    caplog.set_level('INFO', logger='band_archive.legacy_v1')
+    client.get('/songs', headers={'X-Client-Version': version})
+    events = [record.getMessage() for record in caplog.records
+              if record.name == 'band_archive.legacy_v1']
+    assert len(events) == 1
+    assert f'client_version={version}' in events[0]
+
+
+@pytest.mark.parametrize('version', [
+    '1.2.3.CapabilitySecretABC123', '1.2.3-rc.1', '1.2.3+build.secret',
+    '1.2.3_bearer-token', 'Bearer eyJ.secret.signature',
+    'secret@example.test', '/client?token=CapabilitySecretABC123',
+    '1.2.3.4.5', '123456.1', '1.2.3.123456', ' 1.2.3 ',
+])
+def test_legacy_usage_log_omits_token_shaped_or_oversized_client_versions(client, caplog, version):
+    caplog.set_level('INFO', logger='band_archive.legacy_v1')
+    client.get('/songs', headers={'X-Client-Version': version})
+    events = [record.getMessage() for record in caplog.records
+              if record.name == 'band_archive.legacy_v1']
+    assert len(events) == 1
+    assert 'client_version=-' in events[0]
+    assert version not in events[0]
+    assert 'CapabilitySecretABC123' not in events[0]
+
+
+@pytest.mark.parametrize('version', ['\u0661.\u0662.\u0663', '\uff11.\uff12.\uff13', '1.\u0662.3'])
+def test_client_version_sanitizer_rejects_unicode_digits(version):
+    from app import _sanitize_legacy_client_version
+
+    assert _sanitize_legacy_client_version(version) == ''
 
 
 @pytest.mark.parametrize('value,enabled', [
