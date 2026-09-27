@@ -44,21 +44,25 @@ export const createAuthenticatedApiClient = ({
 } = {}) => {
   const requestJson = async (path, {
     authenticated = true,
+    optionalAuth = false,
     headers = {},
     ...requestOptions
   } = {}, errorMessage = '요청을 처리할 수 없습니다.') => {
     const send = async (token) => {
       const nextHeaders = asHeaders(headers);
-      if (authenticated) {
-        if (!token) throw new ApiRequestError(AUTH_REQUIRED_MESSAGE, 401);
-        nextHeaders.Authorization = `Bearer ${token}`;
+      if (authenticated || (optionalAuth && token)) {
+        if (authenticated && !token) throw new ApiRequestError(AUTH_REQUIRED_MESSAGE, 401);
+        if (token) {
+          nextHeaders.Authorization = `Bearer ${token}`;
+        }
       }
       return fetchImpl(`${apiUrl}${path}`, { ...requestOptions, headers: nextHeaders });
     };
 
-    let token = authenticated ? await getAccessToken?.() : null;
+    const canAuthenticate = authenticated || optionalAuth;
+    let token = canAuthenticate ? await getAccessToken?.() : null;
     let response = await send(token);
-    if (authenticated && response.status === 401) {
+    if (canAuthenticate && token && response.status === 401) {
       token = await refreshAccessToken(refreshSession);
       response = await send(token);
     }

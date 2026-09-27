@@ -22,6 +22,30 @@ test('anonymous calls remain anonymous', async () => {
   assert.equal(calls[0].options.headers.Authorization, undefined);
 });
 
+test('optional authentication keeps public reads anonymous when no session exists', async () => {
+  const calls = [];
+  const api = createAuthenticatedApiClient({
+    apiUrl: 'https://api.example',
+    fetchImpl: async (_url, options) => { calls.push(options); return response(200, { band: {} }); },
+    getAccessToken: async () => null,
+  });
+
+  await api.requestJson('/api/v2/bands/by-slug/public', { authenticated: false, optionalAuth: true });
+  assert.equal(calls[0].headers.Authorization, undefined);
+});
+
+test('optional authentication includes the current session for membership-aware reads', async () => {
+  const api = createAuthenticatedApiClient({
+    apiUrl: 'https://api.example',
+    fetchImpl: async (_url, options) => response(200, { authorization: options.headers.Authorization }),
+    getAccessToken: async () => 'member-token',
+  });
+
+  assert.deepEqual(await api.requestJson('/api/v2/bands/by-slug/private', {
+    authenticated: false, optionalAuth: true,
+  }), { authorization: 'Bearer member-token' });
+});
+
 test('an authenticated 401 refreshes and retries exactly once', async () => {
   const headers = [];
   let refreshes = 0;
