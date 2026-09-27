@@ -12,6 +12,7 @@ import math
 
 from flask import Blueprint, after_this_request, current_app, jsonify, request
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from auth_service import current_app_user
 from band_access import BandReadScope, MembershipAudience, RequestAudience
@@ -536,10 +537,28 @@ def _apply_media_vote(band_id, media_id):
             elif row is not None:
                 row.value = value
             elif value:
-                db.session.add(MediaVote(
-                    media_id=media.id, band_id=band.id, created_by_membership_id=membership.id,
-                    is_legacy=False, voter_hash=_v2_voter_hash(membership.id), value=value,
-                ))
+                # The parent media lock serializes normal v2 callers.  The
+                # savepoint is a second line of defence for a direct writer or
+                # a transaction that began before it acquired that lock: after
+                # a uniqueness race, reread the authoritative account vote
+                # and apply the requested state exactly once.
+                try:
+                    with db.session.begin_nested():
+                        row = MediaVote(
+                            media_id=media.id, band_id=band.id, created_by_membership_id=membership.id,
+                            is_legacy=False, voter_hash=_v2_voter_hash(membership.id), value=value,
+                        )
+                        db.session.add(row)
+                        db.session.flush()
+                except IntegrityError:
+                    row = MediaVote.query.filter_by(
+                        media_id=media.id, created_by_membership_id=membership.id,
+                    ).one_or_none()
+                    if row is None:
+                        raise
+                    previous = row.value
+                    if previous != value:
+                        row.value = value
             media.upvote_count = max(0, (media.upvote_count or 0) + int(value == 1) - int(previous == 1))
             media.downvote_count = max(0, (media.downvote_count or 0) + int(value == -1) - int(previous == -1))
             media.vote_score = media.upvote_count - media.downvote_count

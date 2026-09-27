@@ -15,6 +15,7 @@ from migration_bootstrap import (
     MIGRATIONS_DIRECTORY,
     create_migration_app,
     phase4_metadata,
+    phase6_metadata,
     schema_contract_differences,
     schema_differences,
 )
@@ -23,6 +24,7 @@ from tenant_backfill import apply
 
 HEAD05 = '20260916_05'
 READ_SCOPE_REVISION = '20260920_06'
+CONTENT_WRITE_REVISION = '20260927_07'
 
 
 def _url(path):
@@ -150,8 +152,8 @@ def test_read_scope_sqlite_upgrade_downgrade_round_trip_preserves_data_and_metad
                 'personal_log_multipart_upload_session',
             ))
             assert db.session.execute(text('SELECT count(*) FROM song')).scalar_one() == before
-            assert schema_differences(db.session.connection()) == []
-            assert schema_contract_differences(db.session.connection()) == []
+            assert schema_differences(db.session.connection(), metadata=phase6_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase6_metadata()) == []
 
             downgrade(revision=HEAD05, directory=str(MIGRATIONS_DIRECTORY))
             assert db.session.execute(text('SELECT count(*) FROM song')).scalar_one() == before
@@ -159,10 +161,78 @@ def test_read_scope_sqlite_upgrade_downgrade_round_trip_preserves_data_and_metad
             assert schema_contract_differences(db.session.connection(), metadata=phase4_metadata()) == []
 
             upgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert schema_differences(db.session.connection(), metadata=phase6_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase6_metadata()) == []
+    finally:
+        _dispose(app)
+
+
+def test_content_write_downgrade_fails_before_ddl_when_account_comments_exist(tmp_path):
+    """A failed v07 downgrade must leave the database precisely at v07."""
+    app = _head05_with_valid_backfill(tmp_path / 'content-write-downgrade-blocked.db')
+    try:
+        with app.app_context():
+            upgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            db.session.execute(text('UPDATE comment SET password_hash = NULL WHERE id = (SELECT min(id) FROM comment)'))
+            db.session.commit()
+            before_version = db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one()
+            assert before_version == CONTENT_WRITE_REVISION
+            assert next(column for column in inspect(db.engine).get_columns('comment')
+                        if column['name'] == 'password_hash')['nullable'] is True
+            assert 'uq_media_vote_membership' in {item['name'] for item in inspect(db.engine).get_indexes('media_vote')}
+
+            with pytest.raises(SystemExit):
+                downgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+
+            assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == before_version
+            assert next(column for column in inspect(db.engine).get_columns('comment')
+                        if column['name'] == 'password_hash')['nullable'] is True
+            assert 'uq_media_vote_membership' in {item['name'] for item in inspect(db.engine).get_indexes('media_vote')}
             assert schema_differences(db.session.connection()) == []
             assert schema_contract_differences(db.session.connection()) == []
     finally:
         _dispose(app)
+
+
+def test_content_write_valid_downgrade_restores_v06_and_can_reupgrade(tmp_path):
+    app = _head05_with_valid_backfill(tmp_path / 'content-write-downgrade-valid.db')
+    try:
+        with app.app_context():
+            upgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            downgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == READ_SCOPE_REVISION
+            assert schema_differences(db.session.connection(), metadata=phase6_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase6_metadata()) == []
+            assert next(column for column in inspect(db.engine).get_columns('comment')
+                        if column['name'] == 'password_hash')['nullable'] is False
+            assert 'uq_media_vote_membership' not in {item['name'] for item in inspect(db.engine).get_indexes('media_vote')}
+
+            upgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert schema_differences(db.session.connection()) == []
+            assert schema_contract_differences(db.session.connection()) == []
+    finally:
+        _dispose(app)
+
+
+def test_content_write_postgres_downgrade_calls_preflight_before_any_ddl(monkeypatch):
+    revision = importlib.import_module('migrations.versions.20260927_07_content_write_contract')
+    calls = []
+    monkeypatch.setattr(revision, '_assert_downgrade_preflight', lambda: calls.append('preflight'))
+    monkeypatch.setattr(revision, '_is_sqlite', lambda: False)
+    monkeypatch.setattr(revision.op, 'drop_index', lambda *args, **kwargs: calls.append('drop_index'))
+    monkeypatch.setattr(revision.op, 'alter_column', lambda *args, **kwargs: calls.append('alter_column'))
+    revision.downgrade()
+    assert calls == ['preflight', 'drop_index', 'alter_column']
+
+
+def test_content_write_revision_has_postgres_offline_sql_shape(monkeypatch):
+    revision = importlib.import_module('migrations.versions.20260927_07_content_write_contract')
+    monkeypatch.setattr(revision.context, 'is_offline_mode', lambda: True)
+    downgrade_sql = _offline_postgres(revision.downgrade)
+    assert 'DROP INDEX uq_media_vote_membership' in downgrade_sql
+    assert 'ALTER TABLE comment ALTER COLUMN password_hash SET NOT NULL' in downgrade_sql
 
 
 @pytest.mark.parametrize(

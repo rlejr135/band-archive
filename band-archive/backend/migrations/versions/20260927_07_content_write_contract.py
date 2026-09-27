@@ -53,6 +53,30 @@ def _assert_preflight():
         raise RuntimeError('Phase 7 content-write contract is not satisfied: ' + '; '.join(defects))
 
 
+def _downgrade_defects(connection):
+    """Return data states that v06 cannot represent without loss.
+
+    Revision 06 declares ``comment.password_hash`` NOT NULL.  Account-owned
+    v2 comments deliberately use NULL, so changing the column first would
+    either fail part-way through a SQLite batch rebuild or invite an unsafe
+    data rewrite.  Do not start *any* downgrade DDL in that case.
+    """
+    null_id = connection.execute(sa.text(
+        'SELECT id FROM comment WHERE password_hash IS NULL LIMIT 1'
+    )).scalar_one_or_none()
+    return ([f'comment.password_hash is NULL (id={null_id})'] if null_id is not None else [])
+
+
+def _assert_downgrade_preflight():
+    # Offline SQL rendering has no rows to inspect.  Live downgrade commands
+    # run this before the first index or table operation.
+    if context.is_offline_mode():
+        return
+    defects = _downgrade_defects(op.get_bind())
+    if defects:
+        raise RuntimeError('Phase 7 content-write downgrade is not safe: ' + '; '.join(defects))
+
+
 def upgrade():
     _assert_preflight()
     # Existing v1 values remain unchanged; only v2 rows use NULL here.
@@ -69,6 +93,7 @@ def upgrade():
 
 
 def downgrade():
+    _assert_downgrade_preflight()
     op.drop_index('uq_media_vote_membership', table_name='media_vote')
     if _is_sqlite():
         with op.batch_alter_table('comment', recreate='always') as batch:
