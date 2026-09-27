@@ -22,8 +22,19 @@ export const WorkspacePaintGate = ({ requestedSlug, resolvedSlug, children }) =>
     : createElement('main', { className: 'band-workspace-loading', 'data-workspace-state': 'loading', 'aria-live': 'polite' }, '밴드 공간을 여는 중입니다…')
 );
 
-export const mergeMediaPage = (pages, page) => [...pages.filter((value) => value.offset !== page.offset), page]
-  .sort((left, right) => left.offset - right.offset);
+export const mergeMediaPage = (pages, page) => {
+  const ordered = [...pages.filter((value) => value.offset !== page.offset), page]
+    .sort((left, right) => left.offset - right.offset);
+  const seen = new Set();
+  return ordered.map((value) => ({
+    ...value,
+    media: value.media.filter((media) => {
+      if (seen.has(media.id)) return false;
+      seen.add(media.id);
+      return true;
+    }),
+  }));
+};
 
 export const takeOneStaleRefresh = (attempts, pageOffset, mediaId) => {
   const key = `${pageOffset}:${mediaId}`;

@@ -1,8 +1,8 @@
 /* eslint-disable react-hooks/globals */
 import assert from 'node:assert/strict';
-import test, { after } from 'node:test';
+import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { act, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createElement } from 'react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
@@ -20,6 +20,7 @@ const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const load = async () => { if (workspace) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
+afterEach(() => cleanup());
 
 const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null)))));
 
@@ -66,4 +67,111 @@ test('rehearsal DOM create sends only allowed same-band fields and song ids', as
   const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
   const view = render(createElement(App, { entry: '/bands/practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); await userEvent.type(view.getByLabelText('제목'), '9월 합주'); await userEvent.type(view.getByLabelText('날짜'), '2026-09-27'); await userEvent.click(view.getByLabelText(/같은 밴드 곡/)); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
   assert.deepEqual(writes[0].song_ids, [31]); assert.equal(writes[0].visibility, 'MEMBERS'); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('account change remounts the workspace and clears the prior form, media, and paged list', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  const account = (id) => ({ user: { id }, getAccessToken: async () => id, refreshSession: async () => id, signOut: async () => {} });
+  globalThis.fetch = async (url, options = {}) => {
+    const a = options.headers?.Authorization === 'Bearer account-a';
+    if (url.includes('/by-slug/shared')) return response({ band: { id: a ? 40 : 41, slug: 'shared', name: a ? 'A 밴드' : 'B 밴드', default_visibility: 'MEMBERS', membership: { id: a ? 40 : 41, role: 'member' } } });
+    if (url.includes('/songs/401/media?')) return response({ media: [{ id: 501, file_type: 'video', playback: { video_url: 'https://media.invalid/a.mp4' } }], pagination: { has_more: false } });
+    if (url.includes('/songs?')) {
+      const second = url.includes('offset=20');
+      return response({ songs: a ? (second ? [{ id: 402, title: 'A 다음 페이지', artist: 'A' }] : [{ id: 401, title: 'A 선택 곡', artist: 'A', can_edit: true }]) : [{ id: 403, title: 'B 새 곡', artist: 'B', can_edit: true }], pagination: { has_more: a && !second, next_offset: 20 } });
+    }
+    return response({});
+  };
+  const view = render(createElement(App, { entry: '/bands/shared/songs', authValue: account('account-a'), bandValue: { activeBands: [] }, songs: true }));
+  await view.findByText('A 선택 곡'); await userEvent.click(view.getByRole('button', { name: '더 불러오기' })); await view.findByText('A 다음 페이지'); await userEvent.click(view.getByText('A 선택 곡'));
+  await view.findByText('720p 영상'); await userEvent.click(view.getByRole('button', { name: '수정' })); assert.equal(view.getByLabelText('제목').value, 'A 선택 곡');
+  view.rerender(createElement(App, { entry: '/bands/shared/songs', authValue: account('account-b'), bandValue: { activeBands: [] }, songs: true }));
+  assert.equal(view.queryByDisplayValue('A 선택 곡'), null); assert.equal(view.queryByText('A 다음 페이지'), null); assert.equal(view.queryByText('720p 영상'), null);
+  await view.findByText('B 새 곡'); assert.equal(view.queryByText('A 선택 곡'), null); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('song edit and confirmed delete issue exact scoped requests and refetch the rendered list', async () => {
+  await load(); const previousFetch = globalThis.fetch; const writes = []; let songs = [{ id: 61, title: '원래 곡', artist: '원래 아티스트', status: 'Practice', visibility: 'MEMBERS', can_edit: true, can_delete: true }];
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/manage')) return response({ band: { id: 60, slug: 'manage', name: '관리 밴드', default_visibility: 'MEMBERS', membership: { id: 60, role: 'member' } } });
+    if (url.includes('/songs/61/media?')) return response({ media: [], pagination: { has_more: false } });
+    if (url.endsWith('/songs/61') && options.method === 'PATCH') { writes.push({ url, body: JSON.parse(options.body) }); songs = [{ ...songs[0], title: '수정된 곡', artist: '수정 아티스트' }]; return response({ song: songs[0] }); }
+    if (url.endsWith('/songs/61') && options.method === 'DELETE') { writes.push({ url, method: 'DELETE' }); songs = []; return response({}); }
+    if (url.includes('/songs?')) return response({ songs, pagination: { total: songs.length, has_more: false } });
+    return response({});
+  };
+  const member = { user: { id: 'editor' }, getAccessToken: async () => 'editor', refreshSession: async () => 'editor', signOut: async () => {} }; const previousConfirm = window.confirm; window.confirm = () => true;
+  try {
+    const view = render(createElement(App, { entry: '/bands/manage/songs', authValue: member, bandValue: { activeBands: [] }, songs: true })); await view.findByText('원래 곡'); await userEvent.click(view.getByText('원래 곡')); await userEvent.click(view.getByRole('button', { name: '수정' }));
+    await userEvent.type(view.getByLabelText('제목'), ' 업데이트'); await userEvent.type(view.getByLabelText('아티스트'), ' 업데이트'); await userEvent.click(view.getByRole('button', { name: '저장' })); await view.findByText('수정된 곡');
+    assert.equal(writes[0].url, 'http://localhost:5000/api/v2/bands/60/songs/61'); assert.deepEqual(writes[0].body, { title: '원래 곡 업데이트', artist: '원래 아티스트 업데이트', status: 'Practice', chords: '', link: '', memo: '', genre: '', visibility: 'MEMBERS' });
+    assert.equal('band_id' in writes[0].body, false); assert.equal('created_by_membership_id' in writes[0].body, false);
+    await userEvent.click(view.getByText('수정된 곡')); await userEvent.click(view.getByRole('button', { name: '삭제' })); await waitFor(() => assert.equal(writes.filter((write) => write.method === 'DELETE').length, 1)); await view.findByText('표시할 곡이 없습니다.'); assert.equal(writes.at(-1).url.endsWith('/api/v2/bands/60/songs/61'), true); view.unmount();
+  } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
+});
+
+test('rejected PATCH and DELETE show generic errors while their controls remain usable', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/reject-edit')) return response({ band: { id: 62, slug: 'reject-edit', name: '실패 밴드', default_visibility: 'MEMBERS', membership: { id: 62, role: 'member' } } });
+    if (url.includes('/songs/63/media?')) return response({ media: [], pagination: { has_more: false } });
+    if (url.endsWith('/songs/63') && (options.method === 'PATCH' || options.method === 'DELETE')) return response({}, 403);
+    if (url.includes('/songs?')) return response({ songs: [{ id: 63, title: '실패 곡', artist: '밴드', can_edit: true, can_delete: true, visibility: 'MEMBERS' }], pagination: { has_more: false } });
+    return response({});
+  };
+  const member = { user: { id: 'editor' }, getAccessToken: async () => 'editor', refreshSession: async () => 'editor', signOut: async () => {} }; const previousConfirm = window.confirm; window.confirm = () => true;
+  try {
+    const view = render(createElement(App, { entry: '/bands/reject-edit/songs', authValue: member, bandValue: { activeBands: [] }, songs: true })); await view.findByText('실패 곡'); await userEvent.click(view.getByText('실패 곡')); await userEvent.click(view.getByRole('button', { name: '수정' })); await userEvent.click(view.getByRole('button', { name: '저장' })); await view.findByRole('alert'); assert.equal(view.getByRole('button', { name: '저장' }).disabled, false); assert.equal(view.getByLabelText('제목').value, '실패 곡');
+    await userEvent.click(view.getByRole('button', { name: '취소' })); await userEvent.click(view.getByRole('button', { name: '삭제' })); await view.findByText('삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.'); assert.equal(view.getByRole('button', { name: '삭제' }).disabled, false); await userEvent.click(view.getByRole('button', { name: '수정' })); await view.findByRole('button', { name: '저장' }); view.unmount();
+  } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
+});
+
+test('rehearsal edit uses the current band song choices and an identity-free PATCH payload', async () => {
+  await load(); const previousFetch = globalThis.fetch; const writes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/edit-practice')) return response({ band: { id: 70, slug: 'edit-practice', name: '합주 밴드', default_visibility: 'MEMBERS', membership: { id: 70, role: 'member' } } });
+    if (url.endsWith('/rehearsals/71') && options.method === 'PATCH') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }); }
+    if (url.includes('/rehearsals?')) return response({ rehearsals: [{ id: 71, title: '이전 합주', date: '2026-09-20', visibility: 'PUBLIC', can_edit: true, songs: [{ id: 72, title: '이전 밴드 곡' }] }], pagination: { has_more: false } });
+    if (url.includes('/songs?')) return response({ songs: [{ id: 72, title: '이전 밴드 곡', artist: '밴드' }, { id: 73, title: '현재 밴드 곡', artist: '밴드' }], pagination: { has_more: false } });
+    if (url.includes('/rehearsals/71/media?')) return response({ media: [], pagination: { has_more: false } });
+    return response({});
+  };
+  const member = { user: { id: 'editor' }, getAccessToken: async () => 'editor', refreshSession: async () => 'editor', signOut: async () => {} }; const view = render(createElement(App, { entry: '/bands/edit-practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true }));
+  await view.findByText('이전 합주'); await userEvent.click(view.getByText('이전 합주')); await userEvent.click(view.getByRole('button', { name: '수정' })); await view.findByLabelText(/현재 밴드 곡/); await userEvent.click(view.getByLabelText(/이전 밴드 곡/)); await userEvent.click(view.getByLabelText(/현재 밴드 곡/)); await userEvent.type(view.getByLabelText('제목'), ' 수정'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
+  assert.deepEqual(writes[0], { title: '이전 합주 수정', date: '2026-09-20', start_date: null, end_date: null, time: '', location: '', memo: '', color: '', visibility: 'PUBLIC', song_ids: [73] }); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('media pagination renders the next offset without duplicate media and bounds each playback refresh', async () => {
+  await load(); const previousFetch = globalThis.fetch; const mediaUrls = [];
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/media')) return response({ band: { id: 80, slug: 'media', name: '미디어 밴드', default_visibility: 'MEMBERS', membership: { id: 80, role: 'member' } } });
+    if (url.includes('/songs/81/media?')) { mediaUrls.push(url); return response(url.includes('offset=20') ? { media: [{ id: 811, file_type: 'video', playback: { video_url: 'https://media.invalid/video.mp4' } }, { id: 813, file_type: 'video', playback: { video_url: 'https://media.invalid/next.mp4' } }], pagination: { has_more: false } } : { media: [{ id: 811, file_type: 'video', playback: { video_url: 'https://media.invalid/video.mp4' } }, { id: 812, file_type: 'audio', playback: { audio_url: 'https://media.invalid/audio.m4a' } }], pagination: { has_more: true, next_offset: 20 } }); }
+    if (url.includes('/songs?')) return response({ songs: [{ id: 81, title: '미디어 곡', artist: '밴드', can_edit: true }], pagination: { has_more: false } });
+    return response({});
+  };
+  const member = { user: { id: 'media' }, getAccessToken: async () => 'media', refreshSession: async () => 'media', signOut: async () => {} }; const view = render(createElement(App, { entry: '/bands/media/songs', authValue: member, bandValue: { activeBands: [] }, songs: true }));
+  await view.findByText('미디어 곡'); await userEvent.click(view.getByText('미디어 곡')); await waitFor(() => assert.equal(view.container.querySelectorAll('.workspace-media').length, 2)); const video = view.container.querySelector('video'); const audio = view.container.querySelector('audio'); assert.ok(video); assert.ok(audio);
+  fireEvent.error(video); fireEvent.error(video); fireEvent.error(audio); fireEvent.error(audio); await waitFor(() => assert.equal(mediaUrls.filter((url) => url.includes('offset=0')).length, 3));
+  await userEvent.click(view.getByRole('button', { name: '미디어 더 불러오기' })); await waitFor(() => assert.equal(mediaUrls.some((url) => url.endsWith('/api/v2/bands/80/songs/81/media?limit=20&offset=20')), true)); await waitFor(() => assert.equal(view.container.querySelectorAll('.workspace-media').length, 3)); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('a stale playback refresh cannot repaint media after navigating to another band', async () => {
+  await load(); const previousFetch = globalThis.fetch; const oldRefresh = deferred(); let mediaCalls = 0; let navigate;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/old-media')) return response({ band: { id: 90, slug: 'old-media', name: '이전 밴드', default_visibility: 'MEMBERS', membership: { id: 90, role: 'member' } } });
+    if (url.includes('/by-slug/new-media')) return response({ band: { id: 91, slug: 'new-media', name: '새 밴드', default_visibility: 'MEMBERS', membership: { id: 91, role: 'member' } } });
+    if (url.includes('/songs/901/media?')) { mediaCalls += 1; return mediaCalls === 1 ? response({ media: [{ id: 902, file_type: 'video', playback: { video_url: 'https://media.invalid/old.mp4' } }], pagination: { has_more: false } }) : oldRefresh.promise; }
+    if (url.includes('/songs?')) return response({ songs: url.includes('/bands/90/') ? [{ id: 901, title: '이전 미디어', artist: 'A' }] : [{ id: 903, title: '새 미디어', artist: 'B' }], pagination: { has_more: false } });
+    return response({});
+  };
+  const Go = () => { navigate = useNavigate(); return null; }; const member = { user: { id: 'media' }, getAccessToken: async () => 'media', refreshSession: async () => 'media', signOut: async () => {} };
+  const tree = createElement(auth.AuthContext.Provider, { value: member },
+    createElement(bands.BandContext.Provider, { value: { activeBands: [] } },
+      createElement(MemoryRouter, { initialEntries: ['/bands/old-media/songs'] }, createElement(Go),
+        createElement(Routes, null,
+          createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
+            createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }))))));
+  const view = render(tree);
+  await view.findByText('이전 미디어'); await userEvent.click(view.getByText('이전 미디어')); await waitFor(() => assert.ok(view.container.querySelector('video'))); fireEvent.error(view.container.querySelector('video')); await waitFor(() => assert.equal(mediaCalls, 2)); await act(async () => { navigate('/bands/new-media/songs'); }); await view.findByText('새 미디어'); await act(async () => { oldRefresh.resolve(response({ media: [{ id: 902, file_type: 'video', playback: { video_url: 'https://media.invalid/old-refreshed.mp4' } }], pagination: { has_more: false } })); });
+  assert.equal(view.queryByText('이전 미디어'), null); assert.equal(view.container.querySelector('video'), null); view.unmount(); globalThis.fetch = previousFetch;
 });
