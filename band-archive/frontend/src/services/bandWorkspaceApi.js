@@ -10,7 +10,19 @@ export const bandWorkspacePaths = {
   rehearsal: (bandId, rehearsalId) => `${bandBase(bandId)}/rehearsals/${Number(rehearsalId)}`,
   songMedia: (bandId, songId, page) => `${bandBase(bandId)}/songs/${Number(songId)}/media${pageQuery(page)}`,
   rehearsalMedia: (bandId, rehearsalId, page) => `${bandBase(bandId)}/rehearsals/${Number(rehearsalId)}/media${pageQuery(page)}`,
+  mediaVote: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}/vote`,
+  mediaComments: (bandId, mediaId, page) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments${pageQuery(page)}`,
+  comment: (bandId, commentId) => `${bandBase(bandId)}/comments/${Number(commentId)}`,
 };
+
+// v2 derives author, ownership and band scope from the authenticated
+// membership.  These payloads intentionally exclude every legacy field.
+export const commentPayload = ({ content, parentId = null }) => ({
+  content,
+  ...(parentId == null ? {} : { parent_id: Number(parentId) }),
+});
+
+export const votePayload = (value) => ({ value });
 
 // Ownership and tenant columns are intentionally not accepted here. The v2
 // server derives them from the authenticated membership and URL-resolved band.
