@@ -21,7 +21,7 @@ const deferred = () => { let resolve; const promise = new Promise((done) => { re
 const load = async () => { if (workspace) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
 
-const App = ({ entry, authValue, bandValue, songs = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null)))));
+const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null)))));
 
 test('DOM route navigation immediately removes A and ignores its late response', async () => {
   await load(); const previousFetch = globalThis.fetch; const a = deferred(); const b = deferred(); let navigate;
@@ -47,4 +47,23 @@ test('member DOM form writes tenant-free v2 payload once; visitor sees no write 
   assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); assert.equal(writes[0].title, '새 곡');
   view.unmount(); globalThis.fetch = async (url) => url.includes('/by-slug/public') ? response({ band: { id: 8, slug: 'public', name: 'Public', default_visibility: 'PUBLIC', membership: null } }) : response({ songs: [], pagination: { total: 0, has_more: false } });
   const visitor = render(createElement(App, { entry: '/bands/public/songs', authValue: member, bandValue: { activeBands: [] }, songs: true })); await visitor.findByText('Public'); assert.equal(visitor.queryByRole('button', { name: '곡 추가' }), null); visitor.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('rejected rapid member submissions issue one request and keep the form usable', async () => {
+  await load(); const previousFetch = globalThis.fetch; let posts = 0;
+  globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/reject')) return response({ band: { id: 9, slug: 'reject', name: 'Reject', default_visibility: 'MEMBERS', membership: { id: 9, role: 'member' } } }); if (url.includes('/songs') && options.method === 'POST') { posts += 1; return response({}, 403); } if (url.includes('/songs?')) return response({ songs: [], pagination: { total: 0, has_more: false } }); return response({}); };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  const view = render(createElement(App, { entry: '/bands/reject/songs', authValue: member, bandValue: { activeBands: [] }, songs: true }));
+  await view.findByRole('button', { name: '곡 추가' }); await userEvent.click(view.getByRole('button', { name: '곡 추가' })); await userEvent.type(view.getByLabelText('제목'), '실패 곡'); await userEvent.type(view.getByLabelText('아티스트'), '밴드');
+  const save = view.getByRole('button', { name: '저장' }); await Promise.all([userEvent.click(save), userEvent.click(save)]); await view.findByRole('alert');
+  assert.equal(posts, 1); assert.equal(view.getByLabelText('제목').value, '실패 곡'); assert.equal(view.getByRole('button', { name: '저장' }).disabled, false);
+  view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('rehearsal DOM create sends only allowed same-band fields and song ids', async () => {
+  await load(); const previousFetch = globalThis.fetch; const writes = [];
+  globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/practice')) return response({ band: { id: 10, slug: 'practice', name: 'Practice', default_visibility: 'MEMBERS', membership: { id: 10, role: 'member' } } }); if (url.includes('/rehearsals') && options.method === 'POST') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }, 201); } if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } }); if (url.includes('/songs?')) return response({ songs: [{ id: 31, title: '같은 밴드 곡', artist: '밴드' }], pagination: { total: 1, has_more: false } }); return response({}); };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  const view = render(createElement(App, { entry: '/bands/practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); await userEvent.type(view.getByLabelText('제목'), '9월 합주'); await userEvent.type(view.getByLabelText('날짜'), '2026-09-27'); await userEvent.click(view.getByLabelText(/같은 밴드 곡/)); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
+  assert.deepEqual(writes[0].song_ids, [31]); assert.equal(writes[0].visibility, 'MEMBERS'); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
 });
