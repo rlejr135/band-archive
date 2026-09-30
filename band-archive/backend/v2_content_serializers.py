@@ -150,7 +150,7 @@ def song_ref(scope, song):
     }
 
 
-def serialize_media(scope, media):
+def serialize_media(scope, media, viewer_vote=0):
     if not graph_is_scoped(scope, media):
         raise ValueError('Media graph is outside the resolved band scope.')
     visibility = media_visibility(scope, media)
@@ -164,6 +164,9 @@ def serialize_media(scope, media):
         'upvote_count': media.upvote_count,
         'downvote_count': media.downvote_count,
         'vote_score': media.vote_score,
+        # Account-scoped read routes supply this from a single page query.
+        # It is never inferred from legacy device votes.
+        'viewer_vote': viewer_vote if viewer_vote in (-1, 0, 1) else 0,
         'created_at': _iso(media.created_at),
         'playback': media_playback(media, visibility),
         **_flags(scope, media, visibility),

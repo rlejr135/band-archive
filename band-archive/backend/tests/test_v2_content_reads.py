@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from extensions import db
-from models import Band, BandMembership, Comment, Media, Rehearsal, Song, TenantBackfillState
+from models import AppUser, Band, BandMembership, Comment, Media, MediaVote, Rehearsal, Song, TenantBackfillState
 from tests.test_auth import _install_jwks, _jwk, _token
 # Share the authenticated current-schema fixture with the central-access
 # contracts; importing the fixture functions makes them local pytest fixtures.
@@ -283,6 +283,37 @@ def test_comments_are_a_flat_bounded_deterministic_page(access_app, content_grap
     assert payload['pagination']['total'] == 12
     assert payload['pagination']['has_more'] is True
     assert all('replies' not in item for item in payload['comments'])
+
+
+def test_media_pages_include_only_the_active_membership_v2_vote(access_app, content_graph, signer):
+    """Song and rehearsal pages have one account-specific, non-legacy vote view."""
+    with access_app.app_context():
+        band_id = content_graph['public_band']
+        owner = BandMembership.query.filter_by(band_id=band_id, role='owner').one()
+        member_user = AppUser.query.filter_by(email='pending@example.com').one()
+        member = BandMembership.query.filter_by(band_id=band_id, user_id=member_user.id).one()
+        member.status = 'active'
+        media_id = content_graph['public_media']
+        db.session.add_all((
+            MediaVote(band_id=band_id, media_id=media_id, created_by_membership_id=owner.id,
+                      is_legacy=False, voter_hash='a' * 64, value=-1),
+            MediaVote(band_id=band_id, media_id=media_id, created_by_membership_id=member.id,
+                      is_legacy=False, voter_hash='b' * 64, value=1),
+            MediaVote(band_id=band_id, media_id=media_id, created_by_membership_id=None,
+                      is_legacy=True, voter_hash='c' * 64, value=1),
+        ))
+        db.session.commit()
+
+    client = access_app.test_client(); base = f"/api/v2/bands/{content_graph['public_band']}"
+    owner_headers = _headers(_token(signer, sub='77777777-7777-7777-7777-777777777777', email='outsider@example.com'))
+    member_headers = _headers(_token(signer, sub='44444444-4444-4444-4444-444444444444', email='pending@example.com'))
+    song_path = f"{base}/songs/{content_graph['playback_song']}/media?limit=1"
+    rehearsal_path = f"{base}/rehearsals/{content_graph['public_rehearsal']}/media?limit=1"
+    assert client.get(song_path).get_json()['media'][0]['viewer_vote'] == 0
+    assert client.get(song_path, headers=owner_headers).get_json()['media'][0]['viewer_vote'] == -1
+    assert client.get(song_path, headers=member_headers).get_json()['media'][0]['viewer_vote'] == 1
+    assert client.get(rehearsal_path, headers=owner_headers).get_json()['media'][0]['viewer_vote'] == -1
+    assert client.get(rehearsal_path, headers=member_headers).get_json()['media'][0]['viewer_vote'] == 1
 
 
 def test_song_and_rehearsal_summaries_never_materialize_or_sign_large_media_children(

@@ -564,7 +564,7 @@ def _apply_media_vote(band_id, media_id):
             media.vote_score = media.upvote_count - media.downvote_count
         db.session.flush()
         audit('content.media_vote.changed', user, band, media, {'value': value, 'changed': previous != value})
-        return jsonify({'media': serialize_media(scope, media), 'viewer_vote': value})
+        return jsonify({'media': serialize_media(scope, media, value), 'viewer_vote': value})
     return _run_write(operation)
 
 

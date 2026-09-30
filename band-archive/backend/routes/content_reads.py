@@ -10,7 +10,7 @@ from band_access import (
 )
 from errors import NotFoundError
 from extensions import db
-from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media,
+from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, Song, SongSuggestion, rehearsal_songs)
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
@@ -85,6 +85,20 @@ def _page_query(query, order_columns, limit, offset):
         'has_more': has_more,
         'next_offset': offset + limit if has_more else None,
     }
+
+
+def _page_viewer_votes(scope, media_page):
+    """Fetch this active member's v2 votes for one media page in one query."""
+    if scope.membership is None or not media_page:
+        return {}
+    ids = [item.id for item in media_page]
+    rows = MediaVote.query.filter(
+        MediaVote.band_id == scope.band_id,
+        MediaVote.created_by_membership_id == scope.membership.id,
+        MediaVote.is_legacy.is_(False),
+        MediaVote.media_id.in_(ids),
+    ).all()
+    return {row.media_id: row.value for row in rows if row.value in (-1, 1)}
 
 
 def _creator_is_scoped_sql(entity, scope):
@@ -274,7 +288,8 @@ def list_song_media(band_id, song_id):
         Media, scope, parent_visibility=scope.band_visibility,
     ).filter(Media.song_id == song.id, *_media_graph_sql(scope))
     page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
-    return jsonify({'media': [serialize_media(scope, item) for item in page], 'pagination': pagination})
+    viewer_votes = _page_viewer_votes(scope, page)
+    return jsonify({'media': [serialize_media(scope, item, viewer_votes.get(item.id, 0)) for item in page], 'pagination': pagination})
 
 
 @content_reads_bp.get('/rehearsals')
@@ -309,7 +324,8 @@ def list_rehearsal_media(band_id, rehearsal_id):
         Media, scope, parent_visibility=scope.band_visibility,
     ).filter(Media.rehearsal_id == rehearsal.id, *_media_graph_sql(scope))
     page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
-    return jsonify({'media': [serialize_media(scope, item) for item in page], 'pagination': pagination})
+    viewer_votes = _page_viewer_votes(scope, page)
+    return jsonify({'media': [serialize_media(scope, item, viewer_votes.get(item.id, 0)) for item in page], 'pagination': pagination})
 
 
 @content_reads_bp.get('/media/<int:media_id>/processing')
