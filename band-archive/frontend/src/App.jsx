@@ -17,6 +17,7 @@ import { AuthProvider } from './context/AuthContext';
 import { BandProvider } from './context/BandContext';
 import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages';
 import { BandsPage } from './components/bands/BandsPage';
+import { BandCreationRequestPage, BandManagePage, DiscoverBandsPage } from './components/bands/BandOnboarding';
 import AuthStatus from './components/layout/AuthStatus';
 import RequireAuth from './components/layout/RequireAuth';
 import { BandDashboard, BandWorkspaceRoute, RehearsalWorkspace, SongWorkspace } from './components/workspace/BandWorkspace';
@@ -248,6 +249,9 @@ function App() {
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/bands/discover" element={<DiscoverBandsPage />} />
+          <Route path="/bands/request" element={<RequireAuth><BandCreationRequestPage /></RequireAuth>} />
+          <Route path="/bands/:bandSlug/manage" element={<RequireAuth><BandManagePage /></RequireAuth>} />
           <Route path="/bands/:bandSlug" element={<BandWorkspaceRoute />}>
             <Route index element={<BandDashboard />} />
             <Route path="songs" element={<SongWorkspace />} />

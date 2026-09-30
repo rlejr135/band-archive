@@ -8,4 +8,14 @@
 .band-choice span { color: var(--text-secondary); text-transform: capitalize; }
 .bands-empty { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .bands-empty p { width: 100%; }
+.bands-panel { margin-top: 28px; }
+.bands-form { display: grid; gap: 12px; max-width: 540px; }
+.bands-form label { display: grid; gap: 6px; color: var(--text-secondary); }
+.bands-form input, .bands-form textarea, .bands-panel select { width: 100%; padding: 9px; border: 1px solid var(--border-color, #cbd5e1); border-radius: 6px; color: var(--text-primary); background: var(--background-color); }
+.bands-form textarea { min-height: 88px; resize: vertical; }
+.band-list > li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border-color, #e2e8f0); border-radius: 8px; }
+.band-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bands-pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }
+.invite-once { display: grid; gap: 8px; margin: 14px 0; padding: 12px; border: 1px solid var(--primary-color); border-radius: 8px; }
+.invite-once code { overflow-wrap: anywhere; user-select: all; }
 @media (max-width: 768px) { .bands-page { padding: 20px; } }
