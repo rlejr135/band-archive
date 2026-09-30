@@ -87,6 +87,58 @@ def test_creation_approval_owner_and_public_contract(band_app):
         assert AuditEvent.query.filter_by(event_type='band_created').count() == 1
 
 
+def test_my_bands_exposes_only_callers_pending_requests_without_private_account_data(band_app):
+    client = band_app.test_client()
+    with band_app.app_context():
+        owner = AppUser.query.filter_by(supabase_user_id='owner-id').one()
+        member = AppUser.query.filter_by(supabase_user_id='member-id').one()
+        other = AppUser.query.filter_by(supabase_user_id='other-id').one()
+        active = Band(name='Active', slug='active', created_by_user_id=owner.id)
+        requested = Band(name='Requested', slug='requested', description='private request', created_by_user_id=owner.id)
+        another = Band(name='Another', slug='another', created_by_user_id=owner.id)
+        db.session.add_all((active, requested, another)); db.session.flush()
+        db.session.add_all((
+            BandMembership(band_id=active.id, user_id=member.id, role='member', status='active'),
+            BandMembership(band_id=requested.id, user_id=member.id, role='member', status='pending'),
+            BandMembership(band_id=another.id, user_id=other.id, role='member', status='pending'),
+        )); db.session.commit()
+    response = client.get('/api/v2/bands', headers=_headers('member-id'))
+    assert response.status_code == 200
+    body = response.get_json()
+    # The established active-list wire shape remains intact.
+    assert [item['slug'] for item in body['bands']] == ['active']
+    assert body['bands'][0]['membership']['user']['id'] == 'member-id'
+    assert len(body['pending_memberships']) == 1
+    pending = body['pending_memberships'][0]
+    assert pending['status'] == 'pending'
+    assert pending['band'] == {'id': pending['band']['id'], 'name': 'Requested', 'slug': 'requested',
+                               'description': 'private request'}
+    assert 'user' not in pending and 'email' not in str(pending)
+    other_body = client.get('/api/v2/bands', headers=_headers('other-id')).get_json()
+    assert [item['band']['slug'] for item in other_body['pending_memberships']] == ['another']
+
+
+def test_public_bands_search_pagination_is_bounded_stable_and_hides_private_deleted(band_app):
+    client = band_app.test_client()
+    with band_app.app_context():
+        owner = AppUser.query.filter_by(supabase_user_id='owner-id').one()
+        visible = [Band(name=name, slug=slug, default_visibility='PUBLIC', created_by_user_id=owner.id)
+                   for name, slug in (('Alpha', 'alpha'), ('Beta', 'beta'), ('Gamma', 'gamma'))]
+        private = Band(name='Private', slug='private', default_visibility='MEMBERS', created_by_user_id=owner.id)
+        deleted = Band(name='Deleted', slug='deleted', default_visibility='PUBLIC', created_by_user_id=owner.id)
+        db.session.add_all((*visible, private, deleted)); db.session.flush()
+        deleted.deleted_at = db.func.now(); db.session.commit()
+    first = client.get('/api/v2/public/bands?limit=2&offset=0').get_json()
+    second = client.get('/api/v2/public/bands?limit=2&offset=2').get_json()
+    assert [item['slug'] for item in first['bands']] == ['alpha', 'beta']
+    assert [item['slug'] for item in second['bands']] == ['gamma']
+    assert first['pagination'] == {'limit': 2, 'offset': 0, 'total': 3, 'has_more': True}
+    assert second['pagination']['has_more'] is False
+    assert [item['slug'] for item in client.get('/api/v2/public/bands?q=alp').get_json()['bands']] == ['alpha']
+    for query in ('limit=0', 'limit=101', 'limit=x', 'offset=-1', 'offset=x'):
+        assert client.get(f'/api/v2/public/bands?{query}').status_code == 400
+
+
 def test_membership_permissions_cross_band_and_invite_lifecycle(band_app):
     client = band_app.test_client()
     band_id = _approve_band(client)

@@ -5,10 +5,11 @@ import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { createSubmissionGuard } from '../../services/authSubmission.js';
 import './BandsPage.css';
 
-const requestOptions = (method, body) => ({
+const requestOptions = (method, body, signal) => ({
   method,
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
+  signal,
 });
 
 const useApi = () => {
@@ -136,36 +137,66 @@ export const BandCreationRequestPage = () => {
   </main>;
 };
 
-export const BandManagePage = () => {
-  const { bandSlug } = useParams(); const api = useApi(); const identity = `${bandSlug || ''}`;
+export const BandManageRoute = () => {
+  const { user } = useAuth();
+  const { bandSlug } = useParams();
+  const identity = `${user?.id || 'visitor'}:${bandSlug || ''}`;
+  // A key is intentional: it removes privileged roster/invite/raw-code state
+  // synchronously before a different account or band can paint.
+  return <BandManagePage key={identity} identity={identity} />;
+};
+
+export const BandManagePage = ({ identity: suppliedIdentity }) => {
+  const { user } = useAuth();
+  const { bandSlug } = useParams(); const api = useApi();
+  const identity = suppliedIdentity || `${user?.id || 'visitor'}:${bandSlug || ''}`;
   const [state, setState] = useState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [] });
-  const [error, setError] = useState(''); const [rawInvite, setRawInvite] = useState(null); const current = useRef(identity);
-  current.current = identity;
-  const load = useCallback(async (expected = identity) => {
-    setState((previous) => ({ ...previous, loading: true, inaccessible: false })); setError('');
+  const [error, setError] = useState(''); const [rawInvite, setRawInvite] = useState(null);
+  const current = useRef({ identity: null, generation: 0, controller: null });
+  const isCurrent = useCallback((operation) => current.current.identity === operation.identity && current.current.generation === operation.generation && !operation.controller.signal.aborted, []);
+  const load = useCallback(async (operation, { preserveRawInvite = false } = {}) => {
+    if (!isCurrent(operation)) return;
+    setState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [] }); setError('');
+    if (!preserveRawInvite) setRawInvite(null);
     try {
-      const detail = await api.requestJson(`/api/v2/bands/by-slug/${encodeURIComponent(bandSlug)}`);
+      const detail = await api.requestJson(`/api/v2/bands/by-slug/${encodeURIComponent(bandSlug)}`, { signal: operation.controller.signal });
       const band = detail?.band;
       if (!band?.permissions?.can_manage_members || !band?.permissions?.can_manage_invites) throw new Error('inaccessible');
-      const [members, invites] = await Promise.all([api.requestJson(`/api/v2/bands/${Number(band.id)}/memberships`), api.requestJson(`/api/v2/bands/${Number(band.id)}/invite-codes`)]);
-      if (current.current !== expected) return;
+      const [members, invites] = await Promise.all([
+        api.requestJson(`/api/v2/bands/${Number(band.id)}/memberships`, { signal: operation.controller.signal }),
+        api.requestJson(`/api/v2/bands/${Number(band.id)}/invite-codes`, { signal: operation.controller.signal }),
+      ]);
+      if (!isCurrent(operation)) return;
       setState({ loading: false, inaccessible: false, band, memberships: Array.isArray(members?.memberships) ? members.memberships : [], invites: Array.isArray(invites?.invite_codes) ? invites.invite_codes : [] });
     } catch {
-      if (current.current === expected) setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [] });
+      if (isCurrent(operation)) setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [] });
     }
-  }, [api, bandSlug, identity]);
-  useEffect(() => { load(identity); }, [identity, load]);
-  const mutate = async (path, body, expected = identity) => {
-    try { await api.requestJson(path, requestOptions('POST', body)); if (current.current === expected) await load(expected); }
-    catch { if (current.current === expected) setError(genericFailure); }
+  }, [api, bandSlug, isCurrent]);
+  useEffect(() => {
+    const previous = current.current.controller;
+    previous?.abort();
+    const operation = { identity, generation: current.current.generation + 1, controller: new AbortController() };
+    current.current = operation;
+    load(operation);
+    return () => operation.controller.abort();
+  }, [identity, load]);
+  const refresh = async (operation, preserveRawInvite = false) => {
+    if (!isCurrent(operation)) return;
+    await load(operation, { preserveRawInvite });
+  };
+  const mutate = async (path, body) => {
+    const operation = current.current;
+    try { await api.requestJson(path, requestOptions('POST', body, operation.controller.signal)); if (isCurrent(operation)) await refresh(operation); }
+    catch { if (isCurrent(operation)) setError(genericFailure); }
   };
   const decide = async (membership, approve) => {
     if (!approve && !window.confirm('이 가입 요청을 거절할까요?')) return;
-    const expected = identity; try { await api.requestJson(`/api/v2/memberships/${Number(membership.id)}`, requestOptions('PATCH', { action: approve ? 'approve' : 'reject' })); if (current.current === expected) await load(expected); } catch { if (current.current === expected) setError(genericFailure); }
+    const operation = current.current;
+    try { await api.requestJson(`/api/v2/memberships/${Number(membership.id)}`, requestOptions('PATCH', { action: approve ? 'approve' : 'reject' }, operation.controller.signal)); if (isCurrent(operation)) await refresh(operation); } catch { if (isCurrent(operation)) setError(genericFailure); }
   };
   const createInvite = async () => {
-    const expected = identity; setRawInvite(null);
-    try { const data = await api.requestJson(`/api/v2/bands/${Number(state.band.id)}/invite-codes`, requestOptions('POST', {})); if (current.current === expected) { setRawInvite(typeof data?.code === 'string' ? { identity: expected, code: data.code } : null); await load(expected); } } catch { if (current.current === expected) setError(genericFailure); }
+    const operation = current.current; setRawInvite(null);
+    try { const data = await api.requestJson(`/api/v2/bands/${Number(state.band.id)}/invite-codes`, requestOptions('POST', {}, operation.controller.signal)); if (isCurrent(operation)) { setRawInvite(typeof data?.code === 'string' ? { identity: operation.identity, code: data.code } : null); await refresh(operation, true); } } catch { if (isCurrent(operation)) setError(genericFailure); }
   };
   const revoke = async (invite) => { if (!window.confirm('이 초대 코드를 취소할까요?')) return; await mutate(`/api/v2/bands/${Number(state.band.id)}/invite-codes/${Number(invite.id)}/revoke`, {}); };
   if (state.loading) return <main className="bands-page"><p aria-live="polite">관리 정보를 불러오는 중입니다…</p></main>;
@@ -174,6 +205,6 @@ export const BandManagePage = () => {
   return <main className="bands-page" aria-labelledby="manage-band-title"><Link to={safeBandPath(state.band.slug)}>← 밴드 공간</Link><h2 id="manage-band-title">{state.band.name} 관리</h2>{error && <p className="auth-error" role="alert">{error}</p>}
     <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><span>{item.user?.display_name || '새 멤버'}</span><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
     <section className="bands-panel" aria-labelledby="invite-title"><h3 id="invite-title">초대 코드</h3><button type="button" className="secondary-btn" onClick={createInvite}>새 초대 코드 만들기</button>{rawInvite?.identity === identity && <div className="invite-once" role="status"><strong>지금 한 번만 표시되는 코드</strong><code>{rawInvite.code}</code><p>안전한 방법으로 전달한 뒤 이 화면을 벗어나면 다시 확인할 수 없습니다.</p></div>}<ul className="band-list">{state.invites.map((invite) => <li key={invite.id}><span>{invite.revoked_at ? '취소됨' : '사용 가능'} · {invite.created_at}</span>{!invite.revoked_at && <button type="button" className="secondary-btn" onClick={() => revoke(invite)}>취소</button>}</li>)}</ul></section>
-    {isOwner && <section className="bands-panel" aria-labelledby="roles-title"><h3 id="roles-title">멤버 역할</h3><ul className="band-list">{active.map((item) => <li key={item.id}><span>{item.user?.display_name || '멤버'} · {item.role}</span>{item.role !== 'owner' && <select aria-label={`${item.user?.display_name || '멤버'} 역할`} value={item.role} onChange={(event) => api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value })).then(() => load(identity)).catch(() => setError(genericFailure))}><option value="member">member</option><option value="admin">admin</option></select>}</li>)}</ul></section>}
+    {isOwner && <section className="bands-panel" aria-labelledby="roles-title"><h3 id="roles-title">멤버 역할</h3><ul className="band-list">{active.map((item) => <li key={item.id}><span>{item.user?.display_name || '멤버'} · {item.role}</span>{item.role !== 'owner' && <select aria-label={`${item.user?.display_name || '멤버'} 역할`} value={item.role} onChange={(event) => { const operation = current.current; api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value }, operation.controller.signal)).then(() => isCurrent(operation) && refresh(operation)).catch(() => isCurrent(operation) && setError(genericFailure)); }}><option value="member">member</option><option value="admin">admin</option></select>}</li>)}</ul></section>}
   </main>;
 };
