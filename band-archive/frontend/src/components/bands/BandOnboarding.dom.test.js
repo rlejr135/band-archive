@@ -3,8 +3,8 @@ import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createElement } from 'react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { createElement, useEffect } from 'react';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { createServer } from 'vite';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
@@ -18,7 +18,8 @@ const load = async () => { if (onboarding) return; vite = await createServer({ s
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
 const account = (id = 'u1') => ({ user: id ? { id } : null, getAccessToken: async () => id, refreshSession: async () => id, loading: false });
 const Login = () => createElement('p', null, `login:${useLocation().search}`);
-const App = ({ entry, authValue = account(), manage = false, discover = false, create = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(MemoryRouter, { key: entry, initialEntries: [entry] }, createElement(Routes, null,
+const Go = ({ target }) => { const navigate = useNavigate(); useEffect(() => { navigate(target); }, [navigate, target]); return null; };
+const App = ({ entry, authValue = account(), manage = false, discover = false, create = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), createElement(Routes, null,
   discover ? createElement(Route, { path: '/bands/discover', element: createElement(onboarding.DiscoverBandsPage) }) : null,
   create ? createElement(Route, { path: '/bands/request', element: createElement(onboarding.BandCreationRequestPage) }) : null,
   manage ? createElement(Route, { path: '/bands/:bandSlug/manage', element: createElement(onboarding.BandManageRoute) }) : null,
