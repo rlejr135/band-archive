@@ -26,7 +26,11 @@ export const MediaEngagement = ({ band, api, media, onMediaUpdate, onAuthoritati
   const [draft, setDraft] = useState(''); const [replyTo, setReplyTo] = useState(null);
   const [editing, setEditing] = useState(null); const [editValue, setEditValue] = useState('');
   const [writeBusy, setWriteBusy] = useState(false); const [commentError, setCommentError] = useState('');
-  const live = useRef(true); const commentControllers = useRef(new Set()); const commentVersion = useRef(0); const writeFlight = useRef(false);
+  const live = useRef(true); const commentControllers = useRef(new Set()); const commentVersion = useRef(0); const writeFlight = useRef(false); const voteFlight = useRef(false);
+
+  // Every v2 list/refetch now carries the current active membership vote.
+  // Keep the pressed state aligned with that authoritative representation.
+  useEffect(() => { setViewerVote(Number.isInteger(media.viewer_vote) ? media.viewer_vote : 0); }, [media.id, media.viewer_vote]);
 
   const loadComments = useCallback(async (offset = 0, append = false) => {
     const controller = new AbortController(); commentControllers.current.add(controller); const version = ++commentVersion.current;
@@ -43,7 +47,8 @@ export const MediaEngagement = ({ band, api, media, onMediaUpdate, onAuthoritati
   useEffect(() => { const controllers = commentControllers.current; live.current = true; loadComments(); return () => { live.current = false; commentVersion.current += 1; controllers.forEach((controller) => controller.abort()); controllers.clear(); }; }, [loadComments]);
 
   const vote = async (clickedValue) => {
-    if (!member || voteBusy) return;
+    if (!member || voteFlight.current) return;
+    voteFlight.current = true;
     setVoteBusy(true); setVoteError('');
     try {
       const response = await api.requestJson(bandWorkspacePaths.mediaVote(band.id, media.id), writeOptions('PUT', votePayload(voteTarget(viewerVote, clickedValue))));
@@ -53,7 +58,7 @@ export const MediaEngagement = ({ band, api, media, onMediaUpdate, onAuthoritati
       // Media ranking is owned by the server. Refresh the page after every
       // mutation so score changes cannot leave a locally sorted list behind.
       onAuthoritativeRefresh();
-    } catch { if (live.current) setVoteError(genericError); } finally { if (live.current) setVoteBusy(false); }
+    } catch { if (live.current) setVoteError(genericError); } finally { voteFlight.current = false; if (live.current) setVoteBusy(false); }
   };
   const postComment = async () => {
     if (!member || writeFlight.current || !draft.trim()) return;
