@@ -53,18 +53,50 @@ def my_bands():
     user = current_app_user()
     memberships = BandMembership.query.filter_by(user_id=user.id, status=ACTIVE).join(Band).filter(
         Band.deleted_at.is_(None)).order_by(Band.name, Band.id).all()
-    return jsonify({'bands': [band_dict(item.band, user) for item in memberships]})
+    # A pending request is part of the caller's own account state, but it is
+    # not an active band audience.  Keep it separate from ``bands`` so older
+    # clients cannot accidentally select it as a workspace and so no other
+    # member's lifecycle information is disclosed.
+    pending = BandMembership.query.filter_by(user_id=user.id, status='pending').join(Band).filter(
+        Band.deleted_at.is_(None)).order_by(Band.name, Band.id).all()
+    return jsonify({
+        'bands': [band_dict(item.band, user) for item in memberships],
+        'pending_memberships': [{
+            'id': item.id,
+            'band': {
+                'id': item.band.id,
+                'name': item.band.name,
+                'slug': item.band.slug,
+                'description': item.band.description,
+            },
+            'role': item.role,
+            'status': item.status,
+            'requested_at': item.requested_at.isoformat() if item.requested_at else None,
+        } for item in pending],
+    })
 
 
 @bands_bp.get('/public/bands')
 def public_bands():
     search = (request.args.get('q') or '').strip()
+    try:
+        limit = int(request.args.get('limit', 20))
+        offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        raise ValidationError('limit and offset must be integers.')
+    if not 1 <= limit <= 100 or offset < 0:
+        raise ValidationError('limit must be 1-100 and offset must be non-negative.')
     query = Band.query.filter_by(default_visibility='PUBLIC').filter(Band.deleted_at.is_(None))
     if search:
         escaped = search.replace('%', '\\%').replace('_', '\\_')
         query = query.filter((Band.name.ilike(f'%{escaped}%')) | (Band.slug.ilike(f'%{escaped}%')))
-    bands = query.order_by(Band.name, Band.id).limit(100).all()
-    return jsonify({'bands': [band_dict(band, include_roster=False) for band in bands]})
+    total = query.count()
+    bands = query.order_by(Band.name, Band.id).offset(offset).limit(limit).all()
+    return jsonify({
+        'bands': [band_dict(band, include_roster=False) for band in bands],
+        'pagination': {'limit': limit, 'offset': offset, 'total': total,
+                       'has_more': offset + len(bands) < total},
+    })
 
 
 @bands_bp.get('/bands/by-slug/<string:band_slug>')
