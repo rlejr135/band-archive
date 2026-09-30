@@ -222,3 +222,17 @@ test('visitor sees media scores and comments but cannot issue engagement writes'
     await view.findByText('공개 곡'); await userEvent.click(view.getByText('공개 곡')); await view.findByText('점수 3'); await view.findByText('공개 댓글'); assert.equal(view.queryByRole('button', { name: '추천' }), null); assert.equal(view.queryByRole('button', { name: '댓글 등록' }), null); assert.ok(view.getAllByText(/로그인 후 밴드에 가입/).length >= 1); assert.equal(calls.some((call) => call.method !== 'GET'), false); view.unmount();
   } finally { globalThis.fetch = previousFetch; }
 });
+
+test('a rejected media vote is generic, releases its flight, and a retry refetches authority', async () => {
+  await load(); const previousFetch = globalThis.fetch; const first = deferred(); let puts = 0; let reads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/vote-retry')) return response({ band: { id: 130, slug: 'vote-retry', name: '재시도', default_visibility: 'PUBLIC', membership: { id: 13, role: 'member' } } });
+    if (url.includes('/songs?')) return response({ songs: [{ id: 131, title: '재시도 곡', artist: '밴드' }], pagination: { has_more: false } });
+    if (url.includes('/songs/131/media?')) { reads += 1; return response({ media: [{ id: 132, file_type: 'audio', vote_score: reads > 1 ? 1 : 0, viewer_vote: reads > 1 ? 1 : 0, playback: { audio_url: 'https://media.invalid/a.m4a' } }], pagination: { has_more: false } }); }
+    if (url.includes('/media/132/comments?')) return response({ comments: [], pagination: { has_more: false } });
+    if (url.includes('/media/132/vote') && options.method === 'PUT') { puts += 1; return puts === 1 ? first.promise : response({ media: { id: 132, vote_score: 1, viewer_vote: 1 }, viewer_vote: 1 }); }
+    return response({});
+  };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  try { const view = render(createElement(App, { entry: '/bands/vote-retry/songs', authValue: member, bandValue: { activeBands: [] }, songs: true })); await view.findByText('재시도 곡'); await userEvent.click(view.getByText('재시도 곡')); const up = await view.findByRole('button', { name: '추천' }); fireEvent.click(up); fireEvent.click(up); await waitFor(() => assert.equal(puts, 1)); await act(async () => { first.resolve(response({}, 403)); }); await view.findByRole('alert'); assert.equal(up.getAttribute('aria-pressed'), 'false'); fireEvent.click(up); await waitFor(() => assert.equal(puts, 2)); await waitFor(() => assert.equal(view.getByRole('button', { name: '추천' }).getAttribute('aria-pressed'), 'true')); view.unmount(); } finally { globalThis.fetch = previousFetch; }
+});
