@@ -207,6 +207,39 @@ test('member media engagement uses v2 account payloads, refetches score order, a
   } finally { window.confirm = confirm; globalThis.fetch = previousFetch; }
 });
 
+test('stale comment reads and writes cannot repaint a newly selected band through the UI router', async () => {
+  await load(); const previousFetch = globalThis.fetch; const oldMore = deferred(); const oldPost = deferred(); let oldCommentReads = 0; let oldPosts = 0; let newCommentReads = 0;
+  const oldComment = { id: 1003, author: '이전 멤버', content: '이전 댓글', parent_id: null, created_at: '2026-09-05T00:00:00Z' };
+  const newComment = { id: 2003, author: '새 멤버', content: '새 댓글', parent_id: null, created_at: '2026-09-06T00:00:00Z' };
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/old-comments')) return response({ band: { id: 100, slug: 'old-comments', name: '이전 댓글 밴드', default_visibility: 'MEMBERS', membership: { id: 100, role: 'member' } } });
+    if (url.includes('/by-slug/new-comments')) return response({ band: { id: 200, slug: 'new-comments', name: '새 댓글 밴드', default_visibility: 'MEMBERS', membership: { id: 200, role: 'member' } } });
+    if (url.includes('/bands/100/songs?')) return response({ songs: [{ id: 1001, title: '이전 댓글 곡', artist: 'A' }], pagination: { has_more: false } });
+    if (url.includes('/bands/200/songs?')) return response({ songs: [{ id: 2001, title: '새 댓글 곡', artist: 'B' }], pagination: { has_more: false } });
+    if (url.includes('/songs/1001/media?')) return response({ media: [{ id: 1002, file_type: 'audio', playback: { audio_url: 'https://media.invalid/old-comments.m4a' } }], pagination: { has_more: false } });
+    if (url.includes('/songs/2001/media?')) return response({ media: [{ id: 2002, file_type: 'audio', playback: { audio_url: 'https://media.invalid/new-comments.m4a' } }], pagination: { has_more: false } });
+    if (url.includes('/media/1002/comments?')) { oldCommentReads += 1; return oldCommentReads === 1 ? response({ comments: [oldComment], pagination: { has_more: true, next_offset: 20 } }) : oldMore.promise; }
+    if (url.includes('/media/2002/comments?')) { newCommentReads += 1; return response({ comments: [newComment], pagination: { has_more: false } }); }
+    if (url.includes('/media/1002/comments') && options.method === 'POST') { oldPosts += 1; return oldPost.promise; }
+    throw new Error(`unexpected request ${url}`);
+  };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  try {
+    const view = render(createElement(App, { entry: '/bands/old-comments/songs', authValue: member, bandValue: { activeBands: [{ id: 100, slug: 'old-comments', name: '이전 댓글 밴드' }, { id: 200, slug: 'new-comments', name: '새 댓글 밴드' }] }, songs: true }));
+    await view.findByText('이전 댓글 곡'); await userEvent.click(view.getByText('이전 댓글 곡')); await view.findByText('이전 댓글');
+    await userEvent.type(view.getByLabelText('댓글 내용'), '이전 초안'); await userEvent.click(view.getByRole('button', { name: '댓글 등록' })); await waitFor(() => assert.equal(oldPosts, 1));
+    await userEvent.click(view.getByRole('button', { name: '댓글 더 불러오기' })); await waitFor(() => assert.equal(oldCommentReads, 2));
+    fireEvent.change(view.getByLabelText('밴드 전환'), { target: { value: '200' } }); await view.findByRole('button', { name: /새 댓글 밴드/ }); await userEvent.click(view.getByRole('link', { name: '곡' }));
+    await view.findByText('새 댓글 곡'); await userEvent.click(view.getByText('새 댓글 곡')); await view.findByText('새 댓글');
+    assert.equal(view.getByLabelText('댓글 내용').value, ''); assert.equal(view.queryByRole('button', { name: '댓글 더 불러오기' }), null); assert.equal(view.queryByRole('alert'), null);
+    await act(async () => { oldMore.resolve(response({ comments: [{ ...oldComment, id: 1004, content: '늦은 이전 댓글' }], pagination: { has_more: true, next_offset: 40 } })); oldPost.resolve(response({}, 403)); });
+    await waitFor(() => assert.equal(newCommentReads, 1));
+    assert.equal(view.queryByText('이전 댓글'), null); assert.equal(view.queryByText('늦은 이전 댓글'), null); assert.ok(view.getByText('새 댓글'));
+    assert.equal(view.getByLabelText('댓글 내용').value, ''); assert.equal(view.queryByRole('button', { name: '댓글 더 불러오기' }), null); assert.equal(view.queryByRole('alert'), null); assert.equal(oldCommentReads, 2); assert.equal(oldPosts, 1);
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('visitor sees media scores and comments but cannot issue engagement writes', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, options = {}) => {
