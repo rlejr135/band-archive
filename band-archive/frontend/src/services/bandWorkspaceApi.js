@@ -22,6 +22,9 @@ export const bandWorkspacePaths = {
   featuredGallery: (bandId) => `${bandBase(bandId)}/gallery/featured`,
   announcement: (bandId) => `${bandBase(bandId)}/announcement`,
   suggestions: (bandId, page) => `${bandBase(bandId)}/suggestions${pageQuery(page)}`,
+  suggestion: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}`,
+  suggestionVote: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}/vote`,
+  suggestionProceed: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}/proceed`,
 };
 
 // v2 derives author, ownership and band scope from the authenticated
@@ -32,6 +35,14 @@ export const commentPayload = ({ content, parentId = null }) => ({
 });
 
 export const votePayload = (value) => ({ value });
+
+export const suggestionPayload = (value) => ({
+  title: value.title,
+  artist: value.artist,
+  link: value.link,
+  memo: value.memo,
+  visibility: value.visibility,
+});
 
 // Ownership and tenant columns are intentionally not accepted here. The v2
 // server derives them from the authenticated membership and URL-resolved band.

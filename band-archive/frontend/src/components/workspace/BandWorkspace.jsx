@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
-import { bandWorkspacePaths, rehearsalPayload, songPayload } from '../../services/bandWorkspaceApi.js';
+import { bandWorkspacePaths, rehearsalPayload, songPayload, suggestionPayload, votePayload } from '../../services/bandWorkspaceApi.js';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import { MediaEngagement } from './MediaEngagement.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
@@ -143,7 +143,7 @@ export const BandDashboard = () => {
     return () => { live = false; controller.abort(); };
   }, [api, band.id, workspaceKey]);
   return <section className="workspace-page" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p>
-    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <><div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div><AnnouncementSummary announcement={state.announcement} /></>}
+    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <><div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div><AnnouncementSummary announcement={state.announcement} onSaved={(announcement) => setState((previous) => ({ ...previous, announcement }))} /></>}
     <WriteGuidance /></section>;
 };
 
@@ -216,12 +216,23 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
   return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2><label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} onChange={change} /></label><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving}>{saving ? '저장 중…' : '저장'}</button></div></form>;
 };
 
-const AnnouncementSummary = ({ announcement }) => (
-  <section className="workspace-announcement" aria-label="공지사항">
-    <h2>공지사항</h2>
-    {announcement?.content ? <p>{announcement.content}</p> : <p className="workspace-muted">현재 공개된 공지사항이 없습니다.</p>}
-  </section>
-);
+const AnnouncementSummary = ({ announcement, onSaved }) => {
+  const { band, api, workspaceKey } = useWorkspace();
+  const [editing, setEditing] = useState(false); const [content, setContent] = useState(''); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
+  const savingRef = useRef(false);
+  useEffect(() => { setEditing(false); setContent(announcement?.content || ''); setError(''); }, [announcement?.content, workspaceKey]);
+  const save = async (event) => {
+    event.preventDefault(); if (savingRef.current || !content.trim()) return;
+    savingRef.current = true; setSaving(true); setError('');
+    try { const response = await api.requestJson(bandWorkspacePaths.announcement(band.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: content.trim(), visibility: announcement?.visibility || band.default_visibility || 'MEMBERS' }) }); if (response?.announcement) onSaved(response.announcement); setEditing(false);
+    } catch { setError('공지사항을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.'); setSaving(false); }
+    finally { savingRef.current = false; }
+  };
+  const canManage = announcement ? announcement.can_manage : band.can_manage;
+  return <section className="workspace-announcement" aria-label="공지사항"><div className="detail-heading"><h2>공지사항</h2>{canManage && !editing && <button type="button" className="secondary-btn" onClick={() => setEditing(true)}>{announcement ? '공지 수정' : '공지 작성'}</button>}</div>
+    {editing ? <form className="workspace-form" onSubmit={save}><label>공지 내용<textarea aria-label="공지 내용" value={content} onChange={(event) => setContent(event.target.value)} /></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={() => { setEditing(false); setContent(announcement?.content || ''); }}>취소</button><button className="primary-btn" disabled={saving || !content.trim()}>{saving ? '저장 중…' : '저장'}</button></div></form> : announcement?.content ? <p>{announcement.content}</p> : <p className="workspace-muted">현재 공개된 공지사항이 없습니다.</p>}
+  </section>;
+};
 
 const dedupeEntries = (entries) => {
   const seen = new Set();
@@ -385,20 +396,35 @@ export const GalleryWorkspace = () => {
 };
 
 export const SuggestionsWorkspace = () => {
-  const { band, api } = useWorkspace();
+  const { band, api, workspaceKey } = useWorkspace();
   const fetchSuggestions = useCallback(async (page, signal) => {
     const response = await api.requestJson(bandWorkspacePaths.suggestions(band.id, page), requestOptions(signal));
     return { entries: response?.suggestions, pagination: response?.pagination };
   }, [api, band.id]);
   const suggestions = usePagedRead('suggestions', fetchSuggestions);
-  return <section className="workspace-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>현재는 밴드가 공개한 추천 목록을 읽기만 할 수 있습니다.</p></div></div>
-    {suggestions.loading && suggestions.entries.length === 0 ? <p aria-live="polite">추천곡을 불러오는 중입니다…</p> : suggestions.error && suggestions.entries.length === 0 ? <ErrorState message={genericError} retry={suggestions.refresh} /> : suggestions.entries.length === 0 ? <div className="workspace-empty"><p>표시할 추천곡이 없습니다.</p></div> : <div className="workspace-cards">{suggestions.entries.map((suggestion) => <SuggestionCard key={suggestion.id} suggestion={suggestion} />)}</div>}
+  const member = Boolean(band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active');
+  const [creating, setCreating] = useState(false);
+  return <section className="workspace-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>{member ? '추천곡을 등록하고 투표해 보세요.' : '공개된 추천곡을 확인할 수 있습니다.'}</p></div>{member && <button type="button" className="primary-btn" onClick={() => setCreating(true)}>추천곡 추가</button>}</div>
+    {!member && <WriteGuidance />}{creating && <SuggestionForm key={workspaceKey} onDone={() => { setCreating(false); suggestions.refresh(); }} onCancel={() => setCreating(false)} />}
+    {suggestions.loading && suggestions.entries.length === 0 ? <p aria-live="polite">추천곡을 불러오는 중입니다…</p> : suggestions.error && suggestions.entries.length === 0 ? <ErrorState message={genericError} retry={suggestions.refresh} /> : suggestions.entries.length === 0 ? <div className="workspace-empty"><p>표시할 추천곡이 없습니다.</p>{member && <button type="button" className="secondary-btn" onClick={() => setCreating(true)}>첫 추천곡 추가</button>}</div> : <div className="workspace-cards">{suggestions.entries.map((suggestion) => <SuggestionCard key={suggestion.id} suggestion={suggestion} member={member} onChanged={suggestions.refresh} />)}</div>}
     {suggestions.pagination?.has_more && <button className="secondary-btn" disabled={suggestions.loading} onClick={suggestions.loadMore}>{suggestions.loading ? '추천곡을 불러오는 중…' : '추천곡 더 불러오기'}</button>}
     {suggestions.error && suggestions.entries.length > 0 && <ErrorState message={genericError} retry={suggestions.refresh} />}
   </section>;
 };
 
-const SuggestionCard = ({ suggestion }) => {
+const SuggestionForm = ({ item, onDone, onCancel }) => {
+  const { band, api } = useWorkspace(); const [value, setValue] = useState({ title: item?.title || '', artist: item?.artist || '', link: item?.link || '', memo: item?.memo || '', visibility: item?.visibility || band.default_visibility || 'MEMBERS' }); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const flight = useRef(false);
+  const save = async (event) => { event.preventDefault(); if (flight.current) return; flight.current = true; setSaving(true); setError(''); try { await api.requestJson(item ? bandWorkspacePaths.suggestion(band.id, item.id) : bandWorkspacePaths.suggestions(band.id), { method: item ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(suggestionPayload(value)) }); onDone(); } catch { setError('추천곡을 저장하지 못했습니다. 입력값을 확인해 주세요.'); setSaving(false); } finally { flight.current = false; } };
+  const change = (event) => setValue((previous) => ({ ...previous, [event.target.name]: event.target.value }));
+  return <form className="workspace-form" onSubmit={save}><h2>{item ? '추천곡 수정' : '추천곡 추가'}</h2><label>제목<input required name="title" value={value.title} onChange={change} /></label><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>참고 링크<input required type="url" name="link" value={value.link} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label><label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving}>{saving ? '저장 중…' : '저장'}</button></div></form>;
+};
+
+const SuggestionCard = ({ suggestion, member, onChanged }) => {
+  const { band, api } = useWorkspace(); const [editing, setEditing] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const voteFlight = useRef(false); const writeFlight = useRef(false);
   const safeLink = safeExternalHttpUrl(suggestion.link);
-  return <article className="workspace-card"><strong>{suggestion.title || '제목 없음'}</strong><span>{suggestion.artist || '아티스트 정보 없음'}</span>{suggestion.memo && <p>{suggestion.memo}</p>}<small>점수 {suggestion.vote_score ?? 0} · {suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</small>{safeLink && <a href={safeLink} target="_blank" rel="noopener noreferrer">참고 링크 열기</a>}</article>;
+  const vote = async (clicked) => { if (!member || voteFlight.current) return; voteFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionVote(band.id, suggestion.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(votePayload(suggestion.viewer_vote === clicked ? 0 : clicked)) }); onChanged(); } catch { setError('투표를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'); } finally { voteFlight.current = false; setBusy(false); } };
+  const remove = async () => { if (!suggestion.can_delete || writeFlight.current || !window.confirm('이 추천곡을 삭제할까요?')) return; writeFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestion(band.id, suggestion.id), { method: 'DELETE' }); onChanged(); } catch { setError('추천곡을 삭제하지 못했습니다.'); } finally { writeFlight.current = false; setBusy(false); } };
+  const proceed = async () => { if (!suggestion.can_manage || writeFlight.current || !window.confirm('이 추천곡을 곡 목록으로 진행할까요?')) return; writeFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionProceed(band.id, suggestion.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ visibility: suggestion.visibility }) }); onChanged(); } catch { setError('추천곡 진행을 완료하지 못했습니다.'); } finally { writeFlight.current = false; setBusy(false); } };
+  if (editing) return <SuggestionForm item={suggestion} onDone={() => { setEditing(false); onChanged(); }} onCancel={() => setEditing(false)} />;
+  return <article className="workspace-card"><strong>{suggestion.title || '제목 없음'}</strong><span>{suggestion.artist || '아티스트 정보 없음'}</span>{suggestion.memo && <p>{suggestion.memo}</p>}<small>점수 {suggestion.vote_score ?? 0} · {suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</small>{safeLink && <a href={safeLink} target="_blank" rel="noopener noreferrer">참고 링크 열기</a>}{member ? <div className="suggestion-actions"><button type="button" aria-pressed={suggestion.viewer_vote === 1} disabled={busy} onClick={() => vote(1)}>추천</button><button type="button" aria-pressed={suggestion.viewer_vote === -1} disabled={busy} onClick={() => vote(-1)}>아쉬워요</button>{suggestion.can_edit && <button type="button" disabled={busy} onClick={() => setEditing(true)}>수정</button>}{suggestion.can_delete && <button type="button" className="danger-btn" disabled={busy} onClick={remove}>삭제</button>}{suggestion.can_manage && <button type="button" className="primary-btn" disabled={busy} onClick={proceed}>곡으로 진행</button>}</div> : <p className="workspace-muted">로그인 후 밴드에 가입하면 투표와 추천이 가능합니다.</p>}{error && <p className="workspace-error" role="alert">{error}</p>}</article>;
 };
