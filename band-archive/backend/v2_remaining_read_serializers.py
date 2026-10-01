@@ -135,10 +135,13 @@ def serialize_announcement(scope, announcement):
     }
 
 
-def serialize_suggestion(scope, suggestion):
+def serialize_suggestion(scope, suggestion, viewer_vote=0):
     visibility = suggestion_visibility(scope, suggestion)
     up = suggestion.thumbs_up or 0
     down = suggestion.thumbs_down or 0
+    is_member = bool(scope.membership)
+    is_author = is_member and suggestion.created_by_membership_id == scope.membership.id
+    is_legacy_managed = bool(is_member and suggestion.created_by_membership_id is None and scope.can_manage)
     return {
         'id': suggestion.id,
         'title': suggestion.title,
@@ -148,9 +151,17 @@ def serialize_suggestion(scope, suggestion):
         'thumbs_up': up,
         'thumbs_down': down,
         'vote_score': up - down,
+        'viewer_vote': viewer_vote if viewer_vote in (-1, 0, 1) else 0,
         # Suggestions have no moderation-state column yet; the only safe
         # read representation is the current queue state.
         'status': 'pending',
         'created_at': _iso(suggestion.created_at),
-        **_flags(scope, suggestion, visibility),
+        # Current member recommendations remain author-owned.  Managers can
+        # steward only historical NULL-author rows, while ``can_manage``
+        # separately exposes the admin/owner proceed action.
+        'visibility': getattr(suggestion, 'visibility', visibility),
+        'effective_visibility': visibility,
+        'can_edit': bool(is_author or is_legacy_managed),
+        'can_delete': bool(is_author or is_legacy_managed),
+        'can_manage': bool(scope.can_manage),
     }

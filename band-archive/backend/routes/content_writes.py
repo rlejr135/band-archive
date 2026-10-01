@@ -19,12 +19,14 @@ from band_access import BandReadScope, MembershipAudience, RequestAudience
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import Band, BandMembership, Comment, Media, MediaVote, PersonalLog, Rehearsal, Song
+from models import (Announcement, Band, BandMembership, Comment, Media, MediaVote, PersonalLog,
+                    Rehearsal, Song, SongSuggestion, SongSuggestionVote)
 from v2_content_serializers import (
     media_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
 )
 from v2_remaining_read_serializers import personal_log_visibility, serialize_personal_comment
+from v2_remaining_read_serializers import serialize_announcement, serialize_suggestion
 
 
 content_writes_bp = Blueprint('content_writes', __name__, url_prefix='/api/v2/bands/<int:band_id>')
@@ -36,6 +38,8 @@ _REHEARSAL_FIELDS = {
     'memo', 'color', 'visibility', 'song_ids',
 }
 _IGNORED_OWNERSHIP_FIELDS = {'band_id', 'created_by_membership_id', 'created_by_user_id', 'is_legacy'}
+_SUGGESTION_FIELDS = {'title', 'artist', 'link', 'memo', 'visibility'}
+_ANNOUNCEMENT_FIELDS = {'content', 'visibility'}
 
 
 @content_writes_bp.before_request
@@ -159,6 +163,19 @@ def _check_fields(data, allowed):
 def _can_change(item, membership):
     return membership.role in MANAGER_ROLES or (
         item.created_by_membership_id is not None and item.created_by_membership_id == membership.id
+    )
+
+
+def _can_change_suggestion(item, membership):
+    """Authors retain their own queue entry; managers only adopt legacy rows.
+
+    Unlike songs, a manager must not silently rewrite a current member's
+    recommendation.  A pre-v2 row has no author, so owner/admin stewardship
+    is the only safe way to keep that historical queue maintainable.
+    """
+    return (
+        item.created_by_membership_id == membership.id
+        or (item.created_by_membership_id is None and membership.role in MANAGER_ROLES)
     )
 
 
@@ -578,3 +595,195 @@ def put_media_vote_v2(band_id, media_id):
 @authenticated_write
 def patch_media_vote_v2(band_id, media_id):
     return _apply_media_vote(band_id, media_id)
+
+
+# Announcement and recommendation queue writes live here rather than in their
+# v1 blueprints.  The legacy endpoints deliberately retain their historical
+# password/device contract for old clients; these routes have no password
+# input and derive every tenant/actor field from the authenticated membership.
+def _suggestion_response(scope, suggestion, viewer_vote=0):
+    return serialize_suggestion(scope, suggestion, viewer_vote)
+
+
+def _suggestion_or_404(suggestion_id, band_id, *, lock=False):
+    return _owned_or_404(SongSuggestion, suggestion_id, band_id, 'Suggestion not found', lock=lock)
+
+
+def _apply_suggestion(suggestion, data):
+    if 'title' in data:
+        suggestion.title = _text(data['title'], 'title', 100, required=True)
+    if 'artist' in data:
+        suggestion.artist = _text(data['artist'], 'artist', 100, required=True)
+    if 'link' in data:
+        suggestion.link = _text(data['link'], 'link', 500, required=True)
+    if 'memo' in data:
+        suggestion.memo = _text(data['memo'], 'memo', 10000)
+    if 'visibility' in data:
+        suggestion.visibility = _visibility(data['visibility'], suggestion.visibility)
+
+
+@content_writes_bp.post('/suggestions')
+@authenticated_write
+def create_suggestion_v2(band_id):
+    data = _payload(); _check_fields(data, _SUGGESTION_FIELDS)
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        suggestion = SongSuggestion(
+            band_id=band.id, created_by_membership_id=membership.id,
+            visibility=_visibility(data.get('visibility'), band.default_visibility),
+            title=_text(data.get('title'), 'title', 100, required=True),
+            artist=_text(data.get('artist'), 'artist', 100, required=True),
+            link=_text(data.get('link'), 'link', 500, required=True),
+        )
+        _apply_suggestion(suggestion, data)
+        db.session.add(suggestion); db.session.flush()
+        audit('content.suggestion.created', user, band, suggestion, {'visibility': suggestion.visibility})
+        return jsonify({'suggestion': _suggestion_response(scope, suggestion)}), 201
+    return _run_write(operation)
+
+
+@content_writes_bp.patch('/suggestions/<int:suggestion_id>')
+@authenticated_write
+def update_suggestion_v2(band_id, suggestion_id):
+    data = _payload(); _check_fields(data, _SUGGESTION_FIELDS)
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
+        if not _can_change_suggestion(suggestion, membership):
+            raise ValidationError('You may only edit your own suggestion.', 403)
+        _apply_suggestion(suggestion, data)
+        audit('content.suggestion.updated', user, band, suggestion,
+              {'fields': sorted(set(data) & _SUGGESTION_FIELDS)})
+        return jsonify({'suggestion': _suggestion_response(scope, suggestion)})
+    return _run_write(operation)
+
+
+@content_writes_bp.delete('/suggestions/<int:suggestion_id>')
+@authenticated_write
+def delete_suggestion_v2(band_id, suggestion_id):
+    def operation():
+        _scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
+        if not _can_change_suggestion(suggestion, membership):
+            raise ValidationError('You may only delete your own suggestion.', 403)
+        audit('content.suggestion.deleted', user, band, suggestion)
+        db.session.delete(suggestion)
+        return jsonify({'deleted': True, 'id': suggestion_id})
+    return _run_write(operation)
+
+
+def _apply_suggestion_vote(band_id, suggestion_id):
+    data = _payload(); value = _vote_value(data)
+    if set(data) != {'value'}:
+        raise ValidationError('Unsupported vote fields.')
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
+        row = SongSuggestionVote.query.filter_by(
+            suggestion_id=suggestion.id, created_by_membership_id=membership.id,
+        ).one_or_none()
+        previous = row.value if row else 0
+        if previous != value:
+            if row is not None and value == 0:
+                db.session.delete(row)
+            elif row is not None:
+                row.value = value
+            elif value:
+                # The locked suggestion serializes ordinary PG callers.  The
+                # savepoint makes direct or stale concurrent inserts converge
+                # on one membership row without double-counting the totals.
+                try:
+                    with db.session.begin_nested():
+                        row = SongSuggestionVote(
+                            band_id=band.id, suggestion_id=suggestion.id,
+                            created_by_membership_id=membership.id, is_legacy=False, value=value,
+                        )
+                        db.session.add(row); db.session.flush()
+                except IntegrityError:
+                    row = SongSuggestionVote.query.filter_by(
+                        suggestion_id=suggestion.id, created_by_membership_id=membership.id,
+                    ).one_or_none()
+                    if row is None:
+                        raise
+                    previous = row.value
+                    if previous != value:
+                        row.value = value
+            suggestion.thumbs_up = max(0, (suggestion.thumbs_up or 0) + int(value == 1) - int(previous == 1))
+            suggestion.thumbs_down = max(0, (suggestion.thumbs_down or 0) + int(value == -1) - int(previous == -1))
+        db.session.flush()
+        audit('content.suggestion_vote.changed', user, band, suggestion,
+              {'value': value, 'changed': previous != value})
+        return jsonify({'suggestion': _suggestion_response(scope, suggestion, value), 'viewer_vote': value})
+    return _run_write(operation)
+
+
+@content_writes_bp.put('/suggestions/<int:suggestion_id>/vote')
+@authenticated_write
+def put_suggestion_vote_v2(band_id, suggestion_id):
+    return _apply_suggestion_vote(band_id, suggestion_id)
+
+
+@content_writes_bp.patch('/suggestions/<int:suggestion_id>/vote')
+@authenticated_write
+def patch_suggestion_vote_v2(band_id, suggestion_id):
+    return _apply_suggestion_vote(band_id, suggestion_id)
+
+
+@content_writes_bp.post('/suggestions/<int:suggestion_id>/proceed')
+@authenticated_write
+def proceed_suggestion_v2(band_id, suggestion_id):
+    data = _payload()
+    # This endpoint accepts only a visibility decision; title/artist/link
+    # always come from the reviewed suggestion and cannot be substituted.
+    _check_fields(data, {'visibility'})
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        if membership.role not in MANAGER_ROLES:
+            raise ValidationError('Insufficient band role.', 403)
+        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
+        song = Song(
+            band_id=band.id, created_by_membership_id=membership.id,
+            visibility=_visibility(data.get('visibility'), suggestion.visibility or band.default_visibility),
+            title=suggestion.title, artist=suggestion.artist, link=suggestion.link,
+            memo=suggestion.memo, status='Practice',
+        )
+        db.session.add(song); db.session.flush()
+        audit('content.suggestion.proceeded', user, band, song, {'suggestion_id': suggestion.id,
+                                                                   'visibility': song.visibility})
+        db.session.delete(suggestion)
+        return jsonify({'song': serialize_song(scope, song), 'proceeded': True}), 201
+    return _run_write(operation)
+
+
+@content_writes_bp.put('/announcement')
+@authenticated_write
+def put_announcement_v2(band_id):
+    data = _payload(); _check_fields(data, _ANNOUNCEMENT_FIELDS)
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        if membership.role not in MANAGER_ROLES:
+            raise ValidationError('Insufficient band role.', 403)
+        query = Announcement.query.filter_by(band_id=band.id)
+        if db.engine.dialect.name != 'sqlite':
+            query = query.with_for_update()
+        rows = query.order_by(Announcement.id.asc()).limit(2).all()
+        if len(rows) > 1:
+            raise NotFoundError('Announcement not found')
+        announcement = rows[0] if rows else Announcement(
+            band_id=band.id, created_by_membership_id=membership.id,
+            visibility=_visibility(data.get('visibility'), band.default_visibility),
+        )
+        if 'content' not in data:
+            raise ValidationError('content is required.')
+        announcement.content = _text(data['content'], 'content', 10000, required=True)
+        if 'visibility' in data:
+            announcement.visibility = _visibility(data['visibility'], announcement.visibility)
+        if not rows:
+            db.session.add(announcement); db.session.flush()
+            audit('content.announcement.created', user, band, announcement,
+                  {'visibility': announcement.visibility})
+        else:
+            audit('content.announcement.updated', user, band, announcement,
+                  {'fields': sorted(set(data) & _ANNOUNCEMENT_FIELDS)})
+        return jsonify({'announcement': serialize_announcement(scope, announcement)})
+    return _run_write(operation)

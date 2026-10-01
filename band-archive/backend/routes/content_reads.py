@@ -11,7 +11,7 @@ from band_access import (
 from errors import NotFoundError
 from extensions import db
 from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
-                    Member, PersonalLog, Rehearsal, Song, SongSuggestion, rehearsal_songs)
+                    Member, PersonalLog, Rehearsal, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
@@ -99,6 +99,20 @@ def _page_viewer_votes(scope, media_page):
         MediaVote.media_id.in_(ids),
     ).all()
     return {row.media_id: row.value for row in rows if row.value in (-1, 1)}
+
+
+def _page_suggestion_viewer_votes(scope, suggestion_page):
+    """Load page vote state in one tenant- and membership-bound query."""
+    if scope.membership is None or not suggestion_page:
+        return {}
+    ids = [item.id for item in suggestion_page]
+    rows = SongSuggestionVote.query.filter(
+        SongSuggestionVote.band_id == scope.band_id,
+        SongSuggestionVote.created_by_membership_id == scope.membership.id,
+        SongSuggestionVote.is_legacy.is_(False),
+        SongSuggestionVote.suggestion_id.in_(ids),
+    ).all()
+    return {row.suggestion_id: row.value for row in rows if row.value in (-1, 1)}
 
 
 def _creator_is_scoped_sql(entity, scope):
@@ -501,5 +515,6 @@ def list_suggestions(band_id):
                           )
     score = (func.coalesce(SongSuggestion.thumbs_up, 0) - func.coalesce(SongSuggestion.thumbs_down, 0))
     page, pagination = _page_query(query, (score.desc(), SongSuggestion.id.asc()), limit, offset)
-    return jsonify({'suggestions': [serialize_suggestion(scope, item) for item in page],
+    viewer_votes = _page_suggestion_viewer_votes(scope, page)
+    return jsonify({'suggestions': [serialize_suggestion(scope, item, viewer_votes.get(item.id, 0)) for item in page],
                     'pagination': pagination})

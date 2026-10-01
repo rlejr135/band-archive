@@ -29,6 +29,7 @@ PHASE3_REVISION = '20260915_03'
 PHASE3_HARDENED_REVISION = '20260916_04'
 PHASE4_REVISION = '20260916_05'
 PHASE6_REVISION = '20260920_06'
+PHASE7_REVISION = '20260927_07'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -185,6 +186,16 @@ def phase6_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _restore_pre_phase7_content_writes(metadata)
+    _restore_pre_phase8_suggestion_votes(metadata)
+    return metadata
+
+
+def phase7_metadata():
+    """Exact revision-07 snapshot before account suggestion votes."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    _restore_pre_phase8_suggestion_votes(metadata)
     return metadata
 
 
@@ -198,6 +209,13 @@ def _restore_pre_phase7_content_writes(metadata):
         index = next((item for item in media_vote.indexes if item.name == 'uq_media_vote_membership'), None)
         if index is not None:
             media_vote.indexes.remove(index)
+
+
+def _restore_pre_phase8_suggestion_votes(metadata):
+    """Remove the v08 table from earlier immutable schema snapshots."""
+    table = metadata.tables.get('song_suggestion_vote')
+    if table is not None:
+        metadata.remove(table)
 
 
 def _restore_pre_phase4_band(metadata):
@@ -1160,6 +1178,8 @@ def metadata_for_recorded_revision(revision):
         return phase4_metadata()
     if revision == PHASE6_REVISION:
         return phase6_metadata()
+    if revision == PHASE7_REVISION:
+        return phase7_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

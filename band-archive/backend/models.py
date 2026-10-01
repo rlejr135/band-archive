@@ -516,6 +516,33 @@ class PersonalLog(db.Model):
         }
 
 
+class SongSuggestionVote(db.Model):
+    """Account-owned vote state for a tenant-scoped song suggestion.
+
+    The nullable membership column deliberately mirrors ``MediaVote`` so the
+    partial unique index has the same safe shape if a future legacy import
+    needs to retain an unauthenticated row.  The v2 route only ever writes an
+    active membership and never accepts a browser/device identity.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
+    suggestion_id = db.Column(db.Integer, db.ForeignKey('song_suggestion.id', ondelete='CASCADE'), nullable=False,
+                              index=True)
+    created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
+    is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    value = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        db.Index('uq_song_suggestion_vote_membership', 'suggestion_id', 'created_by_membership_id', unique=True,
+                 sqlite_where=db.text('created_by_membership_id IS NOT NULL'),
+                 postgresql_where=db.text('created_by_membership_id IS NOT NULL')),
+        db.CheckConstraint('value IN (-1, 1)', name='ck_song_suggestion_vote_value'),
+    )
+
+
 class PersonalLogMultipartUploadSession(db.Model):
     """Server-owned multipart session for a member's personal log."""
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
