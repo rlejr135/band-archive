@@ -1,6 +1,8 @@
 import uuid
 import mimetypes
-from urllib.parse import urlsplit
+import string
+import unicodedata
+from urllib.parse import unquote, urlsplit
 
 from errors import ValidationError
 
@@ -49,20 +51,65 @@ def validate_external_http_url(value, field_name='link', maximum=500):
     normalize dangerous whitespace, credentials, backslashes, or protocol
     relative values that can later be interpreted differently by a client.
     """
+    error = f'{field_name} must be a valid external HTTP(S) URL.'
     if not isinstance(value, str) or not value or len(value) > maximum:
-        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
-    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
-        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
-    if '\\' in value or value.startswith('//'):
-        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
+        raise ValidationError(error)
+
+    # Keep internationalised URLs usable (normal Unicode letters and symbols
+    # are allowed), while rejecting every Unicode ``C`` category: that covers
+    # C0/C1 controls, format characters such as zero-width space, surrogates,
+    # private-use characters, and unassigned code points.  Check each decoded
+    # form too; clients do not all agree about when a URL is decoded.
+    def unsafe_characters(candidate):
+        return any(
+            character.isspace() or character == '\\' or unicodedata.category(character).startswith('C')
+            for character in candidate
+        )
+
+    def malformed_percent(candidate):
+        return any(
+            character == '%' and (
+                position + 2 >= len(candidate)
+                or candidate[position + 1] not in string.hexdigits
+                or candidate[position + 2] not in string.hexdigits
+            )
+            for position, character in enumerate(candidate)
+        )
+
+    if unsafe_characters(value) or malformed_percent(value) or value.startswith('//'):
+        raise ValidationError(error)
+
+    # Unquote only a bounded number of times, but fail closed if another
+    # decode would still change the value.  ``%25`` is a valid literal percent
+    # and is retained: after it becomes a bare percent it is no longer an
+    # encoded escape, rather than being misclassified as malformed input.
+    decoded = value
+    for _ in range(4):
+        if '%' not in decoded:
+            break
+        try:
+            next_decoded = unquote(decoded, encoding='utf-8', errors='strict')
+        except UnicodeDecodeError as exc:
+            raise ValidationError(error) from exc
+        if unsafe_characters(next_decoded):
+            raise ValidationError(error)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    else:
+        try:
+            if unquote(decoded, encoding='utf-8', errors='strict') != decoded:
+                raise ValidationError(error)
+        except UnicodeDecodeError as exc:
+            raise ValidationError(error) from exc
     try:
         parsed = urlsplit(value)
         # Accessing port makes malformed values such as ``:bad`` fail closed.
         _ = parsed.port
-    except ValueError as error:
-        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.') from error
+    except ValueError as url_error:
+        raise ValidationError(error) from url_error
     if parsed.scheme.lower() not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
-        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
+        raise ValidationError(error)
     return value
 
 

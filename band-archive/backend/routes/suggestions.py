@@ -71,11 +71,16 @@ def promote_suggestion(id):
     if not isinstance(data, dict) or data.get('password') != 'admin':
         raise ValidationError("Invalid password")
 
+    # Existing legacy rows predate strict link storage.  Revalidate before
+    # copying so a corrupt row cannot become a song (or be deleted) merely
+    # because an administrator promoted it.
+    link = validate_external_http_url(suggestion.link, 'link', 500)
+
     song = Song(
         band_id=suggestion.band_id,
         title=suggestion.title,
         artist=suggestion.artist,
-        link=suggestion.link,
+        link=link,
         memo=suggestion.memo,
         status='Practice',
     )

@@ -16,6 +16,7 @@ from migration_bootstrap import (
     create_migration_app,
     phase4_metadata,
     phase6_metadata,
+    phase7_metadata,
     schema_contract_differences,
     schema_differences,
 )
@@ -25,6 +26,7 @@ from tenant_backfill import apply
 HEAD05 = '20260916_05'
 READ_SCOPE_REVISION = '20260920_06'
 CONTENT_WRITE_REVISION = '20260927_07'
+SUGGESTION_VOTE_REVISION = '20261002_08'
 
 
 def _url(path):
@@ -189,8 +191,10 @@ def test_content_write_downgrade_fails_before_ddl_when_account_comments_exist(tm
             assert next(column for column in inspect(db.engine).get_columns('comment')
                         if column['name'] == 'password_hash')['nullable'] is True
             assert 'uq_media_vote_membership' in {item['name'] for item in inspect(db.engine).get_indexes('media_vote')}
-            assert schema_differences(db.session.connection()) == []
-            assert schema_contract_differences(db.session.connection()) == []
+            # v08 is not recorded here; compare the immutable v07 snapshot,
+            # never current metadata from a later migration.
+            assert schema_differences(db.session.connection(), metadata=phase7_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase7_metadata()) == []
     finally:
         _dispose(app)
 
@@ -210,8 +214,8 @@ def test_content_write_valid_downgrade_restores_v06_and_can_reupgrade(tmp_path):
             assert 'uq_media_vote_membership' not in {item['name'] for item in inspect(db.engine).get_indexes('media_vote')}
 
             upgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
-            assert schema_differences(db.session.connection()) == []
-            assert schema_contract_differences(db.session.connection()) == []
+            assert schema_differences(db.session.connection(), metadata=phase7_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase7_metadata()) == []
     finally:
         _dispose(app)
 
@@ -233,6 +237,78 @@ def test_content_write_revision_has_postgres_offline_sql_shape(monkeypatch):
     downgrade_sql = _offline_postgres(revision.downgrade)
     assert 'DROP INDEX uq_media_vote_membership' in downgrade_sql
     assert 'ALTER TABLE comment ALTER COLUMN password_hash SET NOT NULL' in downgrade_sql
+
+
+def test_suggestion_vote_revision_sqlite_round_trip_and_nonempty_downgrade_guard(tmp_path):
+    """v08 adds its table once and never drops an existing vote accidentally."""
+    app = _head05_with_valid_backfill(tmp_path / 'suggestion-vote-roundtrip.db')
+    try:
+        with app.app_context():
+            upgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision=SUGGESTION_VOTE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == SUGGESTION_VOTE_REVISION
+            inspector = inspect(db.engine)
+            assert 'song_suggestion_vote' in inspector.get_table_names()
+            assert 'uq_song_suggestion_vote_user' in {
+                item['name'] for item in inspector.get_indexes('song_suggestion_vote')
+            }
+            assert schema_differences(db.session.connection()) == []
+            assert schema_contract_differences(db.session.connection()) == []
+
+            downgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == CONTENT_WRITE_REVISION
+            assert schema_differences(db.session.connection(), metadata=phase7_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase7_metadata()) == []
+
+            upgrade(revision=SUGGESTION_VOTE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            db.session.execute(text(
+                "INSERT INTO song_suggestion_vote "
+                "(band_id, suggestion_id, is_legacy, value, created_at, updated_at) "
+                "VALUES ((SELECT id FROM band LIMIT 1), (SELECT id FROM song_suggestion LIMIT 1), 1, 1, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            db.session.commit()
+            before_indexes = {item['name'] for item in inspect(db.engine).get_indexes('song_suggestion_vote')}
+            with pytest.raises(SystemExit):
+                downgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == SUGGESTION_VOTE_REVISION
+            assert 'song_suggestion_vote' in inspect(db.engine).get_table_names()
+            assert {item['name'] for item in inspect(db.engine).get_indexes('song_suggestion_vote')} == before_indexes
+    finally:
+        _dispose(app)
+
+
+def test_suggestion_vote_revision_rejects_corrupt_creator_before_any_ddl(tmp_path):
+    app = _head05_with_valid_backfill(tmp_path / 'suggestion-vote-corrupt-creator.db')
+    try:
+        with app.app_context():
+            upgrade(revision=READ_SCOPE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            upgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.begin() as connection:
+                connection.exec_driver_sql('PRAGMA foreign_keys = OFF')
+                connection.execute(text('UPDATE song_suggestion SET created_by_membership_id = 999999'))
+                connection.exec_driver_sql('PRAGMA foreign_keys = ON')
+            revision = importlib.import_module('migrations.versions.20261002_08_suggestion_write_contract')
+            with db.engine.connect() as connection:
+                assert any('creator membership' in defect for defect in revision._defects(connection))
+            with pytest.raises(SystemExit):
+                upgrade(revision=SUGGESTION_VOTE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == CONTENT_WRITE_REVISION
+            assert 'song_suggestion_vote' not in inspect(db.engine).get_table_names()
+    finally:
+        _dispose(app)
+
+
+def test_suggestion_vote_revision_has_postgres_offline_partial_unique_shape(monkeypatch):
+    revision = importlib.import_module('migrations.versions.20261002_08_suggestion_write_contract')
+    monkeypatch.setattr(revision.context, 'is_offline_mode', lambda: True)
+    upgrade_sql = _offline_postgres(revision.upgrade)
+    downgrade_sql = _offline_postgres(revision.downgrade)
+    assert 'voter_user_id INTEGER' in upgrade_sql
+    assert 'CREATE UNIQUE INDEX uq_song_suggestion_vote_user ON song_suggestion_vote (suggestion_id, voter_user_id)' in upgrade_sql
+    assert 'WHERE voter_user_id IS NOT NULL' in upgrade_sql
+    assert 'DROP INDEX uq_song_suggestion_vote_user' in downgrade_sql
 
 
 @pytest.mark.parametrize(

@@ -705,6 +705,7 @@ class _PostgresIndexesConnection:
             ('band_creation_request', 'uq_band_creation_request_pending_user_slug', request_predicate),
             ('gallery_image', 'uq_gallery_image_featured_band', gallery_predicate),
             ('media_vote', 'uq_media_vote_membership', '(created_by_membership_id IS NOT NULL)'),
+            ('song_suggestion_vote', 'uq_song_suggestion_vote_user', '(voter_user_id IS NOT NULL)'),
         ]
 
     def execute(self, statement):
@@ -761,6 +762,27 @@ def test_postgres_featured_gallery_partial_index_predicate_is_exact(
             differences = _partial_index_differences(connection, db.metadata)
         gallery_differences = [item for item in differences if item.startswith('gallery_image.')]
         assert bool(gallery_differences) is not valid
+    finally:
+        _dispose(app)
+
+
+def test_postgres_suggestion_vote_partial_index_contract_is_exact(tmp_path):
+    app = _migration_app(tmp_path / 'postgres-suggestion-vote-predicate.db')
+    try:
+        with app.app_context():
+            index = next(item for item in db.metadata.tables['song_suggestion_vote'].indexes
+                         if item.name == 'uq_song_suggestion_vote_user')
+            assert tuple(column.name for column in index.columns) == ('suggestion_id', 'voter_user_id')
+            assert _canonical_postgres_partial_predicate(
+                str(index.dialect_options['postgresql']['where'])
+            ) == ('voter_user_id', 'is_not_null')
+            differences = _partial_index_differences(
+                _PostgresIndexesConnection(
+                    "((role)::text = 'owner'::text) AND ((status)::text = 'active'::text)",
+                    "((status)::text = 'pending'::text)",
+                ), db.metadata,
+            )
+            assert not [item for item in differences if item.startswith('song_suggestion_vote.')]
     finally:
         _dispose(app)
 

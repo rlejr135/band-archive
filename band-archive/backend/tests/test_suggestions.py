@@ -1,3 +1,6 @@
+import pytest
+
+
 def _create_suggestion(client):
     response = client.post('/suggestions', json={
         'title': '새로운 곡',
@@ -29,3 +32,22 @@ def test_promote_suggestion_creates_a_practice_song_and_removes_the_candidate(cl
     assert song['status'] == 'Practice'
     assert client.get('/suggestions').get_json() == []
     assert client.get('/songs').get_json()[0]['id'] == song['id']
+
+
+@pytest.mark.parametrize('corrupt_link', (
+    'https://example.test/%0Aheader', 'https://example.test/%250Aheader',
+    'https://user:password@example.test/', 'https://example.test/%C2%85',
+))
+def test_promote_revalidates_legacy_corrupt_link_before_creating_or_deleting(client, app, corrupt_link):
+    """Promotion must not turn a previously stored unsafe link into a song."""
+    suggestion = _create_suggestion(client)
+    with app.app_context():
+        from extensions import db
+        from models import SongSuggestion
+        db.session.get(SongSuggestion, suggestion['id']).link = corrupt_link
+        db.session.commit()
+
+    response = client.post(f"/suggestions/{suggestion['id']}/promote", json={'password': 'admin'})
+    assert response.status_code == 400
+    assert client.get('/songs').get_json() == []
+    assert [item['id'] for item in client.get('/suggestions').get_json()] == [suggestion['id']]

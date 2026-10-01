@@ -885,7 +885,7 @@ def _partial_index_differences(connection, metadata):
 
 
 def _canonical_postgres_partial_predicate(value):
-    """Parse the deliberately tiny predicate language used by revisions 04/06.
+    """Parse the deliberately tiny predicate language used by revisions 04/06/08.
 
     PostgreSQL's ``pg_get_expr`` adds parentheses and ``::text`` casts, whose
     formatting changes by server version.  Do not use a loose substring test:
@@ -903,8 +903,11 @@ def _canonical_postgres_partial_predicate(value):
     # or ``IS NOT FALSE``.
     if re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?is_featured\s+is\s+true', expression):
         return ('is_featured', 'is_true')
-    if re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?created_by_membership_id\s+is\s+not\s+null', expression):
-        return ('created_by_membership_id', 'is_not_null')
+    nullable_identity = re.fullmatch(
+        r'(?:[a-z_][a-z0-9_]*\.)?(created_by_membership_id|voter_user_id)\s+is\s+not\s+null', expression,
+    )
+    if nullable_identity:
+        return (nullable_identity.group(1), 'is_not_null')
     atoms = _split_postgres_predicate_and(expression)
     if not atoms:
         return None

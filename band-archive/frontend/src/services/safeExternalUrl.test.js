@@ -13,6 +13,8 @@ test('safe external URLs reject unsafe, ambiguous, malformed, and oversized dest
     'javascript:alert(1)', 'data:text/html,boom', 'file:///secret', 'blob:https://example.com/id',
     '//example.com/path', '/relative', 'relative/path', 'https://user:pass@example.com/path',
     'https://example.com/has space', 'https://example.com/%0aheader', 'https://example.com/%250aheader',
+    'https://example.com/%1f', 'https://example.com/%7f', 'https://example.com/%C2%85',
+    'https://example.com/%', 'https://example.com/%2', 'https://example.com/zero\u200Bwidth',
     'https:\\example.com\\path', 'https:////example.com', 'https://', 'https://[bad-host', `https://example.com/${'a'.repeat(2050)}`,
   ];
   rejected.forEach((value) => assert.equal(safeExternalHttpUrl(value), null, value));
