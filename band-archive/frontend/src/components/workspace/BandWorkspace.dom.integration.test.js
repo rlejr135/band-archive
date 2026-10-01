@@ -81,6 +81,36 @@ test('dashboard safely distinguishes an absent announcement from a visible publi
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('suggestions render only sanitized HTTP(S) links as external anchors', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/link-band')) return response({ band: { id: 306, slug: 'link-band', name: '링크 밴드', permissions: {}, membership: null } });
+    if (url.includes('/suggestions?')) return response({ suggestions: [
+      { id: 1, title: 'HTTPS', artist: '밴드', link: 'https://example.com/song' },
+      { id: 2, title: 'HTTP', artist: '밴드', link: 'http://example.com/song' },
+      { id: 3, title: 'Script', artist: '밴드', link: 'javascript:alert(1)' },
+      { id: 4, title: 'Data', artist: '밴드', link: 'data:text/html,boom' },
+      { id: 5, title: 'Protocol relative', artist: '밴드', link: '//example.com/song' },
+      { id: 6, title: 'Credentials', artist: '밴드', link: 'https://user:pass@example.com/song' },
+      { id: 7, title: 'Malformed', artist: '밴드', link: 'https://' },
+    ], pagination: { has_more: false } });
+    return response({});
+  };
+  try {
+    const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} };
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/link-band/suggestions', authValue: visitor }));
+    await view.findByText('HTTPS');
+    const links = view.getAllByRole('link', { name: '참고 링크 열기' });
+    assert.deepEqual(links.map((link) => link.getAttribute('href')), ['https://example.com/song', 'http://example.com/song']);
+    links.forEach((link) => { assert.equal(link.getAttribute('target'), '_blank'); assert.equal(link.getAttribute('rel'), 'noopener noreferrer'); });
+    ['Script', 'Data', 'Protocol relative', 'Credentials', 'Malformed'].forEach((title) => {
+      assert.equal([...view.getByText(title).closest('article').querySelectorAll('a')].length, 0);
+    });
+    assert.equal(view.container.querySelector('a[href^="javascript:"],a[href^="data:"],a[href^="//"]'), null);
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('DOM route navigation drops a genuinely pending A resolution without mutating rendered B state', async () => {
   await load(); const previousFetch = globalThis.fetch; const a = deferred(); const b = deferred(); const calls = []; let aSettled = false; let navigate;
   a.promise.then(() => { aSettled = true; });

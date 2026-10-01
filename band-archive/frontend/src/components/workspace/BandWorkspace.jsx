@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload } from '../../services/bandWorkspaceApi.js';
+import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import { MediaEngagement } from './MediaEngagement.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
 import logo from '../../assets/logo.png';
@@ -391,8 +392,13 @@ export const SuggestionsWorkspace = () => {
   }, [api, band.id]);
   const suggestions = usePagedRead('suggestions', fetchSuggestions);
   return <section className="workspace-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>현재는 밴드가 공개한 추천 목록을 읽기만 할 수 있습니다.</p></div></div>
-    {suggestions.loading && suggestions.entries.length === 0 ? <p aria-live="polite">추천곡을 불러오는 중입니다…</p> : suggestions.error && suggestions.entries.length === 0 ? <ErrorState message={genericError} retry={suggestions.refresh} /> : suggestions.entries.length === 0 ? <div className="workspace-empty"><p>표시할 추천곡이 없습니다.</p></div> : <div className="workspace-cards">{suggestions.entries.map((suggestion) => <article className="workspace-card" key={suggestion.id}><strong>{suggestion.title || '제목 없음'}</strong><span>{suggestion.artist || '아티스트 정보 없음'}</span>{suggestion.memo && <p>{suggestion.memo}</p>}<small>점수 {suggestion.vote_score ?? 0} · {suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</small>{suggestion.link && <a href={suggestion.link} target="_blank" rel="noreferrer">참고 링크 열기</a>}</article>)}</div>}
+    {suggestions.loading && suggestions.entries.length === 0 ? <p aria-live="polite">추천곡을 불러오는 중입니다…</p> : suggestions.error && suggestions.entries.length === 0 ? <ErrorState message={genericError} retry={suggestions.refresh} /> : suggestions.entries.length === 0 ? <div className="workspace-empty"><p>표시할 추천곡이 없습니다.</p></div> : <div className="workspace-cards">{suggestions.entries.map((suggestion) => <SuggestionCard key={suggestion.id} suggestion={suggestion} />)}</div>}
     {suggestions.pagination?.has_more && <button className="secondary-btn" disabled={suggestions.loading} onClick={suggestions.loadMore}>{suggestions.loading ? '추천곡을 불러오는 중…' : '추천곡 더 불러오기'}</button>}
     {suggestions.error && suggestions.entries.length > 0 && <ErrorState message={genericError} retry={suggestions.refresh} />}
   </section>;
+};
+
+const SuggestionCard = ({ suggestion }) => {
+  const safeLink = safeExternalHttpUrl(suggestion.link);
+  return <article className="workspace-card"><strong>{suggestion.title || '제목 없음'}</strong><span>{suggestion.artist || '아티스트 정보 없음'}</span>{suggestion.memo && <p>{suggestion.memo}</p>}<small>점수 {suggestion.vote_score ?? 0} · {suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</small>{safeLink && <a href={safeLink} target="_blank" rel="noopener noreferrer">참고 링크 열기</a>}</article>;
 };
