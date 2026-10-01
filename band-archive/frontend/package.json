@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/services/*.test.js src/context/*.test.js src/components/workspace/*.test.js src/components/bands/*.test.js",
+    "test": "node --test --test-concurrency=1 src/services/*.test.js src/context/*.test.js src/components/workspace/*.test.js src/components/bands/*.test.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "cap:sync": "npm run build && cap sync",

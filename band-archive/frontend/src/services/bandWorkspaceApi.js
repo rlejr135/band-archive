@@ -14,6 +14,14 @@ export const bandWorkspacePaths = {
   mediaComments: (bandId, mediaId, page) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments${pageQuery(page)}`,
   mediaCommentsWrite: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments`,
   comment: (bandId, commentId) => `${bandBase(bandId)}/comments/${Number(commentId)}`,
+  members: (bandId, page) => `${bandBase(bandId)}/members${pageQuery(page)}`,
+  member: (bandId, memberId) => `${bandBase(bandId)}/members/${Number(memberId)}`,
+  memberLogs: (bandId, memberId, page) => `${bandBase(bandId)}/members/${Number(memberId)}/logs${pageQuery(page)}`,
+  personalLogProcessing: (bandId, logId) => `${bandBase(bandId)}/personal-logs/${Number(logId)}/processing`,
+  gallery: (bandId, page) => `${bandBase(bandId)}/gallery${pageQuery(page)}`,
+  featuredGallery: (bandId) => `${bandBase(bandId)}/gallery/featured`,
+  announcement: (bandId) => `${bandBase(bandId)}/announcement`,
+  suggestions: (bandId, page) => `${bandBase(bandId)}/suggestions${pageQuery(page)}`,
 };
 
 // v2 derives author, ownership and band scope from the authenticated

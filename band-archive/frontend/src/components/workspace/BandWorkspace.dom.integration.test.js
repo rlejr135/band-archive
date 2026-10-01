@@ -23,6 +23,63 @@ after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 
 const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null)))));
+const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => createElement(
+  auth.AuthContext.Provider, { value: authValue },
+  createElement(bands.BandContext.Provider, { value: bandValue },
+    createElement(MemoryRouter, { initialEntries: [entry] },
+      createElement(Routes, null,
+        createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
+          createElement(Route, { index: true, element: createElement(workspace.BandDashboard) }),
+          createElement(Route, { path: 'members', element: createElement(workspace.MembersWorkspace) }),
+          createElement(Route, { path: 'members/:memberId', element: createElement(workspace.MemberDetailWorkspace) }),
+          createElement(Route, { path: 'gallery', element: createElement(workspace.GalleryWorkspace) }),
+          createElement(Route, { path: 'suggestions', element: createElement(workspace.SuggestionsWorkspace) }),
+        ),
+      ),
+    ),
+  ),
+);
+
+test('visitor roster denial is non-inferential and does not expose a member navigation link', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url, options = {}) => { calls.push({ url, method: options.method || 'GET' }); if (url.includes('/by-slug/hidden-roster')) return response({ band: { id: 301, slug: 'hidden-roster', name: '공개 밴드', permissions: { can_view_roster: false }, membership: null } }); if (url.includes('/members?')) return response({}, 404); if (url.includes('/gallery?') || url.includes('/suggestions?')) return response({ pagination: { has_more: false } }); return response({}); };
+  try { const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} }; const view = render(createElement(ReadOnlyApp, { entry: '/bands/hidden-roster/members', authValue: visitor })); await view.findByText('요청한 밴드 정보는 현재 표시할 수 없습니다.'); assert.equal(view.queryByRole('link', { name: '멤버' }), null); assert.equal(calls.some((call) => call.method !== 'GET'), false); view.unmount(); } finally { globalThis.fetch = previousFetch; }
+});
+
+test('member logs paginate, play a signed URL, and refresh it once after media failure', async () => {
+  await load(); const previousFetch = globalThis.fetch; let logReads = 0;
+  globalThis.fetch = async (url) => { if (url.includes('/by-slug/log-band')) return response({ band: { id: 302, slug: 'log-band', name: '기록 밴드', permissions: { can_view_roster: true }, membership: { id: 1, status: 'ACTIVE' } } }); if (url.includes('/members/7/logs?')) { if (url.includes('offset=20')) return response({ logs: [{ id: 72, title: '다음 영상', file_type: 'video', playback: { video_url: 'https://media.invalid/next.mp4' } }], pagination: { has_more: false } }); logReads += 1; return response({ logs: [{ id: 71, title: '첫 영상', file_type: 'video', playback: { video_url: 'https://media.invalid/first.mp4' } }], pagination: { has_more: true, next_offset: 20 } }); } if (url.endsWith('/members/7')) return response({ member: { id: 7, name: '드러머', instrument: '드럼' } }); if (url.includes('/personal-logs/71/processing')) return response({ processing: { status: 'completed' } }); if (url.includes('/gallery?') || url.includes('/suggestions?')) return response({ pagination: { has_more: false } }); return response({}); };
+  try { const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} }; const view = render(createElement(ReadOnlyApp, { entry: '/bands/log-band/members/7', authValue: member })); await view.findByText('첫 영상'); await userEvent.click(view.getByText('첫 영상')); const video = await waitFor(() => { const item = view.container.querySelector('video'); assert.ok(item); return item; }); fireEvent.error(video); fireEvent.error(video); await waitFor(() => assert.equal(logReads, 2)); await userEvent.click(view.getByRole('button', { name: '기록 더 불러오기' })); await view.findByText('다음 영상'); view.unmount(); } finally { globalThis.fetch = previousFetch; }
+});
+
+test('gallery and suggestions retain paged safe reads, featured image refresh, and read-only controls', async () => {
+  await load(); const previousFetch = globalThis.fetch; let galleryReads = 0; let featuredReads = 0;
+  globalThis.fetch = async (url) => { if (url.includes('/by-slug/read-band')) return response({ band: { id: 303, slug: 'read-band', name: '읽기 밴드', permissions: { can_view_roster: false }, membership: null } }); if (url.includes('/gallery/featured')) { featuredReads += 1; return response({ gallery: { id: 80, url: `https://media.invalid/featured-${featuredReads}.jpg` } }); } if (url.includes('/gallery?')) { if (url.includes('offset=20')) return response({ gallery: [{ id: 82, url: 'https://media.invalid/two.jpg' }], pagination: { has_more: false } }); galleryReads += 1; return response({ gallery: [{ id: 81, url: 'https://media.invalid/one.jpg' }], pagination: { has_more: true, next_offset: 20 } }); } if (url.includes('/suggestions?')) return response({ suggestions: [{ id: 91, title: '읽기 추천곡', artist: '밴드', vote_score: 4, status: 'pending', memo: '연습용' }], pagination: { has_more: false } }); return response({}); };
+  try { const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} }; const gallery = render(createElement(ReadOnlyApp, { entry: '/bands/read-band/gallery', authValue: visitor })); await gallery.findByRole('heading', { name: '대표 사진' }); const featured = gallery.getByAltText('대표 갤러리 이미지'); fireEvent.error(featured); fireEvent.error(featured); await waitFor(() => assert.equal(featuredReads, 2)); fireEvent.error(gallery.getByAltText('갤러리 이미지')); await waitFor(() => assert.ok(galleryReads >= 2)); await userEvent.click(gallery.getByRole('button', { name: '사진 더 불러오기' })); await waitFor(() => assert.equal(gallery.getAllByAltText('갤러리 이미지').length, 2)); gallery.unmount(); const suggestions = render(createElement(ReadOnlyApp, { entry: '/bands/read-band/suggestions', authValue: visitor })); await suggestions.findByText('읽기 추천곡'); assert.equal(suggestions.queryByRole('button', { name: /추천|투표|추가|생성/ }), null); assert.equal(suggestions.getByText(/점수 4/).textContent.includes('검토 대기'), true); suggestions.unmount(); } finally { globalThis.fetch = previousFetch; }
+});
+
+test('dashboard safely distinguishes an absent announcement from a visible public summary', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/notice-empty')) return response({ band: { id: 304, slug: 'notice-empty', name: '빈 공지 밴드', permissions: {}, membership: null } });
+    if (url.includes('/by-slug/notice-visible')) return response({ band: { id: 305, slug: 'notice-visible', name: '공지 밴드', permissions: {}, membership: null } });
+    if (url.includes('/songs?') || url.includes('/rehearsals?')) return response({ pagination: { total: 0, has_more: false } });
+    if (url.includes('/bands/304/announcement')) return response({}, 404);
+    if (url.includes('/bands/305/announcement')) return response({ announcement: { id: 1, content: '이번 주 합주는 토요일입니다.', email: 'private@example.invalid', object_key: 'private/key' } });
+    return response({});
+  };
+  try {
+    const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} };
+    const empty = render(createElement(ReadOnlyApp, { entry: '/bands/notice-empty', authValue: visitor }));
+    await empty.findByText('현재 공개된 공지사항이 없습니다.');
+    empty.unmount();
+    const visible = render(createElement(ReadOnlyApp, { entry: '/bands/notice-visible', authValue: visitor }));
+    await visible.findByText('이번 주 합주는 토요일입니다.');
+    assert.equal(visible.queryByText('private@example.invalid'), null);
+    assert.equal(visible.queryByText('private/key'), null);
+    visible.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
 
 test('DOM route navigation drops a genuinely pending A resolution without mutating rendered B state', async () => {
   await load(); const previousFetch = globalThis.fetch; const a = deferred(); const b = deferred(); const calls = []; let aSettled = false; let navigate;

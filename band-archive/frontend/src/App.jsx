@@ -20,7 +20,7 @@ import { BandsPage } from './components/bands/BandsPage';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding';
 import AuthStatus from './components/layout/AuthStatus';
 import RequireAuth from './components/layout/RequireAuth';
-import { BandDashboard, BandWorkspaceRoute, RehearsalWorkspace, SongWorkspace } from './components/workspace/BandWorkspace';
+import { BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace';
 import './App.css';
 import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
 // Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
@@ -256,6 +256,10 @@ function App() {
             <Route index element={<BandDashboard />} />
             <Route path="songs" element={<SongWorkspace />} />
             <Route path="rehearsals" element={<RehearsalWorkspace />} />
+            <Route path="members" element={<MembersWorkspace />} />
+            <Route path="members/:memberId" element={<MemberDetailWorkspace />} />
+            <Route path="gallery" element={<GalleryWorkspace />} />
+            <Route path="suggestions" element={<SuggestionsWorkspace />} />
           </Route>
           <Route path="*" element={<LegacyApp />} />
         </Routes>

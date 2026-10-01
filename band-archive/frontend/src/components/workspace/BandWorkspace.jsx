@@ -82,6 +82,9 @@ export const BandWorkspace = () => {
           <NavLink end to={`/bands/${encodeURIComponent(state.band.slug)}`}>대시보드</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/songs`}>곡</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/rehearsals`}>합주</NavLink>
+          {state.band.permissions?.can_view_roster && <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/members`}>멤버</NavLink>}
+          <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/gallery`}>갤러리</NavLink>
+          <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/suggestions`}>추천곡</NavLink>
         </nav>
         <div className="workspace-actions">
           {switchable && <label className="band-switcher">밴드 전환<select value={String(activeBands.some((item) => item.id === state.band.id) ? state.band.id : '')} onChange={switchBand}><option value="" disabled>밴드 선택</option>{activeBands.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
@@ -120,19 +123,26 @@ const useCollection = (kind) => {
 
 export const BandDashboard = () => {
   const { band, api, workspaceKey } = useWorkspace();
-  const [state, setState] = useState({ loading: true, error: '', songs: null, rehearsals: null });
+  const [state, setState] = useState({ loading: true, error: '', songs: null, rehearsals: null, announcement: null });
   useEffect(() => {
     const controller = new AbortController(); let live = true;
-    setState({ loading: true, error: '', songs: null, rehearsals: null });
-    Promise.all([
+    setState({ loading: true, error: '', songs: null, rehearsals: null, announcement: null });
+    Promise.allSettled([
       api.requestJson(bandWorkspacePaths.songs(band.id, { limit: 1, offset: 0 }), requestOptions(controller.signal)),
       api.requestJson(bandWorkspacePaths.rehearsals(band.id, { limit: 1, offset: 0 }), requestOptions(controller.signal)),
-    ]).then(([songs, rehearsals]) => { if (live) setState({ loading: false, error: '', songs: songs.pagination?.total ?? 0, rehearsals: rehearsals.pagination?.total ?? 0 }); })
-      .catch(() => { if (live) setState({ loading: false, error: genericError, songs: null, rehearsals: null }); });
+      api.requestJson(bandWorkspacePaths.announcement(band.id), requestOptions(controller.signal)),
+    ]).then(([songs, rehearsals, announcement]) => {
+      if (!live) return;
+      if (songs.status !== 'fulfilled' || rehearsals.status !== 'fulfilled') {
+        setState({ loading: false, error: genericError, songs: null, rehearsals: null, announcement: null });
+        return;
+      }
+      setState({ loading: false, error: '', songs: songs.value.pagination?.total ?? 0, rehearsals: rehearsals.value.pagination?.total ?? 0, announcement: announcement.status === 'fulfilled' ? announcement.value?.announcement ?? null : null });
+    });
     return () => { live = false; controller.abort(); };
   }, [api, band.id, workspaceKey]);
   return <section className="workspace-page" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p>
-    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div>}
+    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <><div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div><AnnouncementSummary announcement={state.announcement} /></>}
     <WriteGuidance /></section>;
 };
 
@@ -203,4 +213,186 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
   const change = (event) => setValue((previous) => ({ ...previous, [event.target.name]: event.target.value }));
   const save = async (event) => { event.preventDefault(); if (savingRef.current) return; savingRef.current = true; setSaving(true); setError(''); try { const path = kind === 'songs' ? (item ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.songs(band.id)) : (item ? bandWorkspacePaths.rehearsal(band.id, item.id) : bandWorkspacePaths.rehearsals(band.id)); await api.requestJson(path, { method: item ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(kind === 'songs' ? songPayload(value) : rehearsalPayload(value)) }); onDone(); } catch { setError('저장하지 못했습니다. 입력값을 확인하고 다시 시도해 주세요.'); setSaving(false); } finally { savingRef.current = false; } };
   return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2><label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} onChange={change} /></label><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving}>{saving ? '저장 중…' : '저장'}</button></div></form>;
+};
+
+const AnnouncementSummary = ({ announcement }) => (
+  <section className="workspace-announcement" aria-label="공지사항">
+    <h2>공지사항</h2>
+    {announcement?.content ? <p>{announcement.content}</p> : <p className="workspace-muted">현재 공개된 공지사항이 없습니다.</p>}
+  </section>
+);
+
+const dedupeEntries = (entries) => {
+  const seen = new Set();
+  return entries.filter((entry) => {
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
+};
+
+// The route shell keys every workspace by slug and account. This hook adds an
+// abort plus a generation fence for pagination, so a late page cannot paint
+// after either a resource selection or the workspace itself has changed.
+const usePagedRead = (resourceKey, fetchPage) => {
+  const { workspaceKey } = useWorkspace();
+  const [state, setState] = useState({ loading: true, error: '', notFound: false, entries: [], pagination: null });
+  const gate = useRef(createWorkspaceRequestGate());
+  const controllers = useRef(new Set());
+  const readKey = `${workspaceKey}:${resourceKey}`;
+  const load = useCallback(async ({ offset = 0, append = false } = {}) => {
+    const controller = new AbortController();
+    controllers.current.add(controller);
+    const token = gate.current.begin(`${readKey}:${offset}`);
+    setState((previous) => ({ ...previous, loading: true, error: '', notFound: false }));
+    try {
+      const response = await fetchPage({ limit: PAGE_SIZE, offset }, controller.signal);
+      if (controller.signal.aborted || !gate.current.accepts(`${readKey}:${offset}`, token)) return;
+      const next = Array.isArray(response?.entries) ? response.entries : [];
+      setState((previous) => ({ loading: false, error: '', notFound: false, entries: dedupeEntries(append ? [...previous.entries, ...next] : next), pagination: response?.pagination ?? null }));
+    } catch (error) {
+      if (!controller.signal.aborted && gate.current.accepts(`${readKey}:${offset}`, token)) {
+        setState((previous) => ({ ...previous, loading: false, error: genericError, notFound: error?.status === 404 }));
+      }
+    } finally { controllers.current.delete(controller); }
+  }, [fetchPage, readKey]);
+  useEffect(() => {
+    const activeControllers = controllers.current;
+    setState({ loading: true, error: '', notFound: false, entries: [], pagination: null });
+    load();
+    return () => { activeControllers.forEach((controller) => controller.abort()); activeControllers.clear(); };
+  }, [load, readKey]);
+  return {
+    ...state,
+    refresh: useCallback(() => load(), [load]),
+    loadMore: useCallback(() => load({ offset: state.pagination?.next_offset ?? state.entries.length, append: true }), [load, state.entries.length, state.pagination?.next_offset]),
+  };
+};
+
+const RosterUnavailable = () => <section className="workspace-page workspace-empty" role="status"><h1>멤버</h1><p>요청한 밴드 정보는 현재 표시할 수 없습니다.</p></section>;
+
+export const MembersWorkspace = () => {
+  const { band, api } = useWorkspace();
+  const fetchMembers = useCallback(async (page, signal) => {
+    const response = await api.requestJson(bandWorkspacePaths.members(band.id, page), requestOptions(signal));
+    return { entries: response?.members, pagination: response?.pagination };
+  }, [api, band.id]);
+  const { loading, error, notFound, entries, pagination, refresh, loadMore } = usePagedRead('members', fetchMembers);
+  const rosterUnavailable = !loading && notFound;
+  if (rosterUnavailable) return <RosterUnavailable />;
+  return <section className="workspace-page" aria-labelledby="workspace-members-title"><div className="workspace-page-heading"><div><h1 id="workspace-members-title">멤버</h1><p>밴드에서 공개한 멤버와 연습 기록입니다.</p></div></div>
+    {loading && entries.length === 0 ? <p aria-live="polite">멤버를 불러오는 중입니다…</p> : error && entries.length === 0 ? <ErrorState message={genericError} retry={refresh} /> : entries.length === 0 ? <div className="workspace-empty"><p>표시할 멤버가 없습니다.</p></div> : <div className="workspace-cards">{entries.map((member) => <NavLink className="workspace-card workspace-card-link" key={member.id} to={`/bands/${encodeURIComponent(band.slug)}/members/${member.id}`}><strong>{member.name || '멤버'}</strong><span>{member.instrument || '담당 악기 정보 없음'}</span></NavLink>)}</div>}
+    {pagination?.has_more && <button className="secondary-btn" disabled={loading} onClick={loadMore}>{loading ? '멤버를 불러오는 중…' : '멤버 더 불러오기'}</button>}
+    {error && entries.length > 0 && <ErrorState message={genericError} retry={refresh} />}
+  </section>;
+};
+
+export const MemberDetailWorkspace = () => {
+  const { memberId } = useParams();
+  const { workspaceKey } = useWorkspace();
+  return <MemberDetailReadOnly key={`${workspaceKey}:member:${memberId}`} memberId={memberId} />;
+};
+
+const MemberDetailReadOnly = ({ memberId }) => {
+  const { band, api, workspaceKey } = useWorkspace();
+  const [memberState, setMemberState] = useState({ loading: true, error: '', member: null });
+  const memberGate = useRef(createWorkspaceRequestGate());
+  useEffect(() => {
+    const controller = new AbortController();
+    const key = `${workspaceKey}:member:${memberId}`;
+    const token = memberGate.current.begin(key);
+    setMemberState({ loading: true, error: '', member: null });
+    api.requestJson(bandWorkspacePaths.member(band.id, memberId), requestOptions(controller.signal)).then((response) => {
+      if (!controller.signal.aborted && memberGate.current.accepts(key, token)) setMemberState({ loading: false, error: '', member: response?.member ?? null });
+    }).catch(() => {
+      if (!controller.signal.aborted && memberGate.current.accepts(key, token)) setMemberState({ loading: false, error: genericError, member: null });
+    });
+    return () => controller.abort();
+  }, [api, band.id, memberId, workspaceKey]);
+  const fetchLogs = useCallback(async (page, signal) => {
+    const response = await api.requestJson(bandWorkspacePaths.memberLogs(band.id, memberId, page), requestOptions(signal));
+    return { entries: response?.logs, pagination: response?.pagination };
+  }, [api, band.id, memberId]);
+  const logs = usePagedRead(`member-logs:${memberId}`, fetchLogs);
+  const [selectedLogId, setSelectedLogId] = useState(null);
+  // Refreshing a log page also renews its short-lived signed URL. Keep only
+  // the id in local state so a successful refresh replaces the rendered URL,
+  // rather than continuing to play the expired object from a stale snapshot.
+  const selectedLog = logs.entries.find((log) => log.id === selectedLogId) ?? null;
+  if (!memberState.loading && (memberState.error || !memberState.member)) return <RosterUnavailable />;
+  return <section className="workspace-page" aria-labelledby="workspace-member-title">
+    {memberState.loading ? <p aria-live="polite">멤버 정보를 불러오는 중입니다…</p> : <><div className="workspace-page-heading"><div><h1 id="workspace-member-title">{memberState.member.name || '멤버'}</h1><p>{memberState.member.instrument || '담당 악기 정보 없음'}</p></div><NavLink className="secondary-btn workspace-button-link" to={`/bands/${encodeURIComponent(band.slug)}/members`}>목록으로</NavLink></div>
+      <h2>개인 연습 기록</h2>
+      {logs.loading && logs.entries.length === 0 ? <p aria-live="polite">기록을 불러오는 중입니다…</p> : logs.entries.length === 0 ? <p className="workspace-muted">표시할 개인 연습 기록이 없습니다.</p> : <div className="workspace-grid"><div className="workspace-list"><ul>{logs.entries.map((log) => <li key={log.id}><button className={selectedLog?.id === log.id ? 'workspace-row selected' : 'workspace-row'} onClick={() => setSelectedLogId(log.id)}><strong>{log.title || '개인 연습 기록'}</strong><span>{log.created_at ? new Date(log.created_at).toLocaleString() : ''}</span><small>{log.file_type === 'video' ? '영상' : '오디오'}</small></button></li>)}</ul>{logs.pagination?.has_more && <button className="secondary-btn" disabled={logs.loading} onClick={logs.loadMore}>{logs.loading ? '기록을 불러오는 중…' : '기록 더 불러오기'}</button>}</div><div className="workspace-detail">{selectedLog ? <PersonalLogPlayback log={selectedLog} onRefresh={logs.refresh} /> : <p className="workspace-placeholder">기록을 선택하면 재생할 수 있습니다.</p>}</div></div>}
+      {logs.error && <ErrorState message={genericError} retry={logs.refresh} />}</>}
+  </section>;
+};
+
+const PersonalLogPlayback = ({ log, onRefresh }) => {
+  const { band, api, workspaceKey } = useWorkspace();
+  const [processing, setProcessing] = useState(null);
+  const [processingError, setProcessingError] = useState(false);
+  const staleAttempt = useRef(false);
+  useEffect(() => {
+    const controller = new AbortController(); let live = true;
+    setProcessing(null); setProcessingError(false);
+    api.requestJson(bandWorkspacePaths.personalLogProcessing(band.id, log.id), requestOptions(controller.signal)).then((response) => {
+      if (live && !controller.signal.aborted) setProcessing(response?.processing ?? null);
+    }).catch(() => { if (live && !controller.signal.aborted) setProcessingError(true); });
+    return () => { live = false; controller.abort(); };
+  }, [api, band.id, log.id, workspaceKey]);
+  const source = log.file_type === 'video' ? (log.playback?.video_url || log.playback?.url) : (log.playback?.audio_url || log.playback?.url);
+  const refreshExpiredUrl = () => { if (!staleAttempt.current) { staleAttempt.current = true; onRefresh(); } };
+  return <article className="workspace-media"><h3>{log.title || '개인 연습 기록'}</h3>{source ? log.file_type === 'video' ? <video controls preload="metadata" src={source} onError={refreshExpiredUrl}>브라우저가 영상을 지원하지 않습니다.</video> : <audio controls preload="metadata" src={source} onError={refreshExpiredUrl}>브라우저가 오디오를 지원하지 않습니다.</audio> : <p className="workspace-muted">현재 재생 가능한 파일이 없습니다.</p>}
+    {processing?.status && <p className="workspace-muted">처리 상태: {processing.status === 'failed' ? '처리에 실패했습니다.' : processing.status}</p>}{processingError && <p className="workspace-muted">처리 상태를 확인하지 못했습니다.</p>}
+  </article>;
+};
+
+export const GalleryWorkspace = () => {
+  const { band, api, workspaceKey } = useWorkspace();
+  const fetchGallery = useCallback(async (page, signal) => {
+    const response = await api.requestJson(bandWorkspacePaths.gallery(band.id, page), requestOptions(signal));
+    return { entries: response?.gallery, pagination: response?.pagination };
+  }, [api, band.id]);
+  const gallery = usePagedRead('gallery', fetchGallery);
+  const [featured, setFeatured] = useState(null);
+  const staleAttempts = useRef(new Set());
+  const featuredGate = useRef(createWorkspaceRequestGate());
+  const refreshFeatured = useCallback(() => {
+    const controller = new AbortController(); let live = true;
+    const token = featuredGate.current.begin(`${workspaceKey}:featured`);
+    api.requestJson(bandWorkspacePaths.featuredGallery(band.id), requestOptions(controller.signal)).then((response) => {
+      if (live && !controller.signal.aborted && featuredGate.current.accepts(`${workspaceKey}:featured`, token)) setFeatured(response?.gallery ?? null);
+    }).catch(() => {
+      // A missing or no-longer-visible featured image is an ordinary empty state.
+      if (live && !controller.signal.aborted && featuredGate.current.accepts(`${workspaceKey}:featured`, token)) setFeatured(null);
+    });
+    return () => { live = false; controller.abort(); };
+  }, [api, band.id, workspaceKey]);
+  useEffect(() => { setFeatured(null); return refreshFeatured(); }, [refreshFeatured]);
+  const refreshImage = (imageId, kind = 'gallery') => {
+    if (!takeOneStaleRefresh(staleAttempts.current, kind, imageId)) return;
+    if (kind === 'featured') refreshFeatured();
+    else gallery.refresh();
+  };
+  return <section className="workspace-page" aria-labelledby="workspace-gallery-title"><div className="workspace-page-heading"><div><h1 id="workspace-gallery-title">갤러리</h1><p>밴드에서 공개한 사진입니다.</p></div></div>
+    {featured?.url && <section className="workspace-featured"><h2>대표 사진</h2><img src={featured.url} alt="대표 갤러리 이미지" onError={() => refreshImage(featured.id, 'featured')} /></section>}
+    {gallery.loading && gallery.entries.length === 0 ? <p aria-live="polite">갤러리를 불러오는 중입니다…</p> : gallery.error && gallery.entries.length === 0 ? <ErrorState message={genericError} retry={gallery.refresh} /> : gallery.entries.length === 0 ? <div className="workspace-empty"><p>표시할 사진이 없습니다.</p></div> : <div className="workspace-gallery-grid">{gallery.entries.map((image) => image.url ? <img key={image.id} src={image.url} alt="갤러리 이미지" onError={() => refreshImage(image.id)} /> : <div className="workspace-gallery-missing" key={image.id}>표시할 사진이 없습니다.</div>)}</div>}
+    {gallery.pagination?.has_more && <button className="secondary-btn" disabled={gallery.loading} onClick={gallery.loadMore}>{gallery.loading ? '사진을 불러오는 중…' : '사진 더 불러오기'}</button>}
+    {gallery.error && gallery.entries.length > 0 && <ErrorState message={genericError} retry={gallery.refresh} />}
+  </section>;
+};
+
+export const SuggestionsWorkspace = () => {
+  const { band, api } = useWorkspace();
+  const fetchSuggestions = useCallback(async (page, signal) => {
+    const response = await api.requestJson(bandWorkspacePaths.suggestions(band.id, page), requestOptions(signal));
+    return { entries: response?.suggestions, pagination: response?.pagination };
+  }, [api, band.id]);
+  const suggestions = usePagedRead('suggestions', fetchSuggestions);
+  return <section className="workspace-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>현재는 밴드가 공개한 추천 목록을 읽기만 할 수 있습니다.</p></div></div>
+    {suggestions.loading && suggestions.entries.length === 0 ? <p aria-live="polite">추천곡을 불러오는 중입니다…</p> : suggestions.error && suggestions.entries.length === 0 ? <ErrorState message={genericError} retry={suggestions.refresh} /> : suggestions.entries.length === 0 ? <div className="workspace-empty"><p>표시할 추천곡이 없습니다.</p></div> : <div className="workspace-cards">{suggestions.entries.map((suggestion) => <article className="workspace-card" key={suggestion.id}><strong>{suggestion.title || '제목 없음'}</strong><span>{suggestion.artist || '아티스트 정보 없음'}</span>{suggestion.memo && <p>{suggestion.memo}</p>}<small>점수 {suggestion.vote_score ?? 0} · {suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</small>{suggestion.link && <a href={suggestion.link} target="_blank" rel="noreferrer">참고 링크 열기</a>}</article>)}</div>}
+    {suggestions.pagination?.has_more && <button className="secondary-btn" disabled={suggestions.loading} onClick={suggestions.loadMore}>{suggestions.loading ? '추천곡을 불러오는 중…' : '추천곡 더 불러오기'}</button>}
+    {suggestions.error && suggestions.entries.length > 0 && <ErrorState message={genericError} retry={suggestions.refresh} />}
+  </section>;
 };
