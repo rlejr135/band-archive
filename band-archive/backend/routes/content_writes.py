@@ -21,6 +21,7 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from models import (Announcement, Band, BandMembership, Comment, Media, MediaVote, PersonalLog,
                     Rehearsal, Song, SongSuggestion, SongSuggestionVote)
+from validators import validate_external_http_url
 from v2_content_serializers import (
     media_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
@@ -139,6 +140,14 @@ def _visibility(value, default):
     if value not in _VISIBILITIES:
         raise ValidationError('visibility must be PUBLIC or MEMBERS.')
     return value
+
+
+def _external_link(value, *, required=False):
+    if value is None:
+        if required:
+            raise ValidationError('link is required.')
+        return None
+    return validate_external_http_url(value, 'link', 500)
 
 
 def _date(value, field, *, required=False):
@@ -574,6 +583,7 @@ def _apply_media_vote(band_id, media_id):
                     if row is None:
                         raise
                     previous = row.value
+                    row.created_by_membership_id = membership.id
                     if previous != value:
                         row.value = value
             media.upvote_count = max(0, (media.upvote_count or 0) + int(value == 1) - int(previous == 1))
@@ -615,7 +625,7 @@ def _apply_suggestion(suggestion, data):
     if 'artist' in data:
         suggestion.artist = _text(data['artist'], 'artist', 100, required=True)
     if 'link' in data:
-        suggestion.link = _text(data['link'], 'link', 500, required=True)
+        suggestion.link = _external_link(data['link'], required=True)
     if 'memo' in data:
         suggestion.memo = _text(data['memo'], 'memo', 10000)
     if 'visibility' in data:
@@ -633,7 +643,7 @@ def create_suggestion_v2(band_id):
             visibility=_visibility(data.get('visibility'), band.default_visibility),
             title=_text(data.get('title'), 'title', 100, required=True),
             artist=_text(data.get('artist'), 'artist', 100, required=True),
-            link=_text(data.get('link'), 'link', 500, required=True),
+            link=_external_link(data.get('link'), required=True),
         )
         _apply_suggestion(suggestion, data)
         db.session.add(suggestion); db.session.flush()
@@ -680,9 +690,13 @@ def _apply_suggestion_vote(band_id, suggestion_id):
         scope, band, membership, user = _scope_for_write(band_id, lock=True)
         suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
         row = SongSuggestionVote.query.filter_by(
-            suggestion_id=suggestion.id, created_by_membership_id=membership.id,
+            suggestion_id=suggestion.id, voter_user_id=user.id,
         ).one_or_none()
         previous = row.value if row else 0
+        # The account is the vote identity; retain the newest active
+        # membership only as mutable audit context after a leave/rejoin.
+        if row is not None:
+            row.created_by_membership_id = membership.id
         if previous != value:
             if row is not None and value == 0:
                 db.session.delete(row)
@@ -696,12 +710,13 @@ def _apply_suggestion_vote(band_id, suggestion_id):
                     with db.session.begin_nested():
                         row = SongSuggestionVote(
                             band_id=band.id, suggestion_id=suggestion.id,
-                            created_by_membership_id=membership.id, is_legacy=False, value=value,
+                            voter_user_id=user.id, created_by_membership_id=membership.id,
+                            is_legacy=False, value=value,
                         )
                         db.session.add(row); db.session.flush()
                 except IntegrityError:
                     row = SongSuggestionVote.query.filter_by(
-                        suggestion_id=suggestion.id, created_by_membership_id=membership.id,
+                        suggestion_id=suggestion.id, voter_user_id=user.id,
                     ).one_or_none()
                     if row is None:
                         raise
@@ -744,7 +759,8 @@ def proceed_suggestion_v2(band_id, suggestion_id):
         song = Song(
             band_id=band.id, created_by_membership_id=membership.id,
             visibility=_visibility(data.get('visibility'), suggestion.visibility or band.default_visibility),
-            title=suggestion.title, artist=suggestion.artist, link=suggestion.link,
+            title=suggestion.title, artist=suggestion.artist,
+            link=_external_link(suggestion.link, required=True),
             memo=suggestion.memo, status='Practice',
         )
         db.session.add(song); db.session.flush()

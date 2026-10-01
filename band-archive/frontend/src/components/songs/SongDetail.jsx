@@ -9,8 +9,10 @@ import MediaDiscussion from '../common/MediaDiscussion';
 import { sortMediaByScore } from '../../services/mediaVoting.js';
 import { getMediaIcon, getMediaType } from '../../services/mediaPresentation.js';
 import { getYoutubeId } from '../../services/youtube.js';
+import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 
 const SongDetail = ({ song, onEdit, onBack }) => {
+  const safeLink = safeExternalHttpUrl(song?.link);
   const [expandedMediaIds, setExpandedMediaIds] = useState(new Set());
   const { removeMediaFromSong, renameMediaInSong, editSong, refreshSong, voteForMedia, voteStates } = useSongs();
 
@@ -173,16 +175,16 @@ const SongDetail = ({ song, onEdit, onBack }) => {
         <p><strong>상태:</strong> <span className={`status-badge ${song.status?.toLowerCase()}`}>{statusLabel[song.status] || song.status}</span></p>
         <p><strong>장르:</strong> {song.genre || '-'}</p>
         <p><strong>난이도:</strong> {'⭐'.repeat(song.difficulty)}</p>
-        {song.link && (
-          <p><strong>링크:</strong> <a href={song.link} target="_blank" rel="noreferrer">{song.link}</a></p>
+        {safeLink && (
+          <p><strong>링크:</strong> <a href={safeLink} target="_blank" rel="noreferrer">{safeLink}</a></p>
         )}
       </div>
 
-      {song.link && getYoutubeId(song.link) && (
+      {safeLink && getYoutubeId(safeLink) && (
         <div className="youtube-embed">
           <h4>원곡 영상</h4>
           <iframe
-            src={`https://www.youtube.com/embed/${getYoutubeId(song.link)}`}
+            src={`https://www.youtube.com/embed/${getYoutubeId(safeLink)}`}
             title="YouTube video"
             allowFullScreen
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

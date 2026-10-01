@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchSuggestions, createSuggestion, deleteSuggestion, promoteSuggestion, voteSuggestion } from '../../services/api';
 import { getYoutubeId } from '../../services/youtube.js';
+import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import PasswordModal from '../common/PasswordModal';
 import './SongSuggestion.css';
 
@@ -135,8 +136,10 @@ const SongSuggestion = () => {
         </div>
       ) : (
         <div className="suggestion-list">
-          {suggestions.map((s, index) => (
-            <div key={s.id} className="suggestion-card fade-in" style={{ animationDelay: `${index * 0.05}s` }}>
+          {suggestions.map((s, index) => {
+            const safeLink = safeExternalHttpUrl(s.link);
+            const youtubeId = getYoutubeId(safeLink || '');
+            return <div key={s.id} className="suggestion-card fade-in" style={{ animationDelay: `${index * 0.05}s` }}>
               <div className="suggestion-info">
                 <div className="suggestion-rank">#{index + 1}</div>
                 <div className="suggestion-details">
@@ -144,9 +147,9 @@ const SongSuggestion = () => {
                   <p className="suggestion-artist">{s.artist}</p>
                   {s.memo && <p className="suggestion-memo">{s.memo}</p>}
                 </div>
-                {s.link && !getYoutubeId(s.link) && (
+                {safeLink && !youtubeId && (
                   <a
-                    href={s.link}
+                    href={safeLink}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="suggestion-link"
@@ -156,10 +159,10 @@ const SongSuggestion = () => {
                   </a>
                 )}
               </div>
-              {s.link && getYoutubeId(s.link) && (
+              {safeLink && youtubeId && (
                 <div className="suggestion-youtube">
                   <iframe
-                    src={`https://www.youtube.com/embed/${getYoutubeId(s.link)}`}
+                    src={`https://www.youtube.com/embed/${youtubeId}`}
                     title="YouTube video"
                     allowFullScreen
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -199,8 +202,8 @@ const SongSuggestion = () => {
                   이 곡 진행
                 </button>
               </div>
-            </div>
-          ))}
+            </div>;
+          })}
         </div>
       )}
 

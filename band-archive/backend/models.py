@@ -528,17 +528,19 @@ class SongSuggestionVote(db.Model):
     band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     suggestion_id = db.Column(db.Integer, db.ForeignKey('song_suggestion.id', ondelete='CASCADE'), nullable=False,
                               index=True)
+    voter_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
     is_legacy = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     value = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    voter = db.relationship('AppUser', foreign_keys=[voter_user_id])
 
     __table_args__ = (
-        db.Index('uq_song_suggestion_vote_membership', 'suggestion_id', 'created_by_membership_id', unique=True,
-                 sqlite_where=db.text('created_by_membership_id IS NOT NULL'),
-                 postgresql_where=db.text('created_by_membership_id IS NOT NULL')),
+        db.Index('uq_song_suggestion_vote_user', 'suggestion_id', 'voter_user_id', unique=True,
+                 sqlite_where=db.text('voter_user_id IS NOT NULL'),
+                 postgresql_where=db.text('voter_user_id IS NOT NULL')),
         db.CheckConstraint('value IN (-1, 1)', name='ck_song_suggestion_vote_value'),
     )
 

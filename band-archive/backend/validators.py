@@ -1,5 +1,6 @@
 import uuid
 import mimetypes
+from urllib.parse import urlsplit
 
 from errors import ValidationError
 
@@ -39,6 +40,30 @@ def validate_non_empty_string(value, field_name):
 def validate_string_length(value, field_name, max_length):
     if value and len(value) > max_length:
         raise ValidationError(f"{field_name} must be {max_length} characters or less")
+
+
+def validate_external_http_url(value, field_name='link', maximum=500):
+    """Return one strict absolute http(s) URL suitable for outbound links.
+
+    This is intentionally stricter than browser URL parsing: storage must not
+    normalize dangerous whitespace, credentials, backslashes, or protocol
+    relative values that can later be interpreted differently by a client.
+    """
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
+    if '\\' in value or value.startswith('//'):
+        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
+    try:
+        parsed = urlsplit(value)
+        # Accessing port makes malformed values such as ``:bad`` fail closed.
+        _ = parsed.port
+    except ValueError as error:
+        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.') from error
+    if parsed.scheme.lower() not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValidationError(f'{field_name} must be a valid external HTTP(S) URL.')
+    return value
 
 
 def allowed_file(filename):

@@ -152,6 +152,7 @@ def phase4_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _restore_pre_phase7_content_writes(metadata)
+    _restore_pre_phase8_suggestion_votes(metadata)
     for table_name in (
         'song', 'rehearsal', 'media', 'member', 'personal_log', 'gallery_image',
         'announcement', 'song_suggestion', 'comment', 'song_vote', 'media_vote',

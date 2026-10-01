@@ -103,12 +103,12 @@ def _page_viewer_votes(scope, media_page):
 
 def _page_suggestion_viewer_votes(scope, suggestion_page):
     """Load page vote state in one tenant- and membership-bound query."""
-    if scope.membership is None or not suggestion_page:
+    if scope.audience.user_id is None or scope.membership is None or not suggestion_page:
         return {}
     ids = [item.id for item in suggestion_page]
     rows = SongSuggestionVote.query.filter(
         SongSuggestionVote.band_id == scope.band_id,
-        SongSuggestionVote.created_by_membership_id == scope.membership.id,
+        SongSuggestionVote.voter_user_id == scope.audience.user_id,
         SongSuggestionVote.is_legacy.is_(False),
         SongSuggestionVote.suggestion_id.in_(ids),
     ).all()

@@ -5,6 +5,7 @@ from models import Song, SongSuggestion
 from errors import NotFoundError, ValidationError
 from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, validate_legacy_graphs
 from validators import validate_string_length
+from validators import validate_external_http_url
 
 suggestions_bp = Blueprint('suggestions', __name__)
 
@@ -30,7 +31,7 @@ def create_suggestion():
 
     title = data.get('title', '').strip()
     artist = data.get('artist', '').strip()
-    link = data.get('link', '').strip()
+    link = data.get('link', '')
 
     if not title:
         raise ValidationError("Title is required")
@@ -38,9 +39,7 @@ def create_suggestion():
     if not artist:
         raise ValidationError("Artist is required")
     validate_string_length(artist, 'artist', 100)
-    if not link:
-        raise ValidationError("Link is required")
-    validate_string_length(link, 'link', 500)
+    link = validate_external_http_url(link, 'link', 500)
 
     memo = data.get('memo', '').strip() or None
     suggestion = SongSuggestion(
