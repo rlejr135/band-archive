@@ -29,7 +29,7 @@ def _candidate(client, band_id, headers, *, title='candidate'):
 
 
 def test_suggestion_rbac_is_author_scoped_and_never_falls_back_to_password(
-        access_app, write_client, principals):
+        access_app, write_client, principals, signer):
     band_id = _band_id(access_app)
     with access_app.app_context():
         other_user = AppUser(supabase_user_id='88888888-8888-8888-8888-888888888888', email='other@example.com')
