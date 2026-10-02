@@ -424,6 +424,48 @@ class MultipartUploadPart(db.Model):
     __table_args__ = (db.UniqueConstraint('session_id', 'part_number', name='uq_multipart_session_part'),)
 
 
+class DirectUploadSession(db.Model):
+    """One capability-bound v2 presigned PUT reservation.
+
+    Direct uploads have no R2 multipart upload id to recover, so their
+    reservation and completion idempotency must be stored separately from the
+    legacy multipart tables.
+    """
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
+    created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=False,
+                                         index=True)
+    kind = db.Column(db.String(20), nullable=False)
+    object_key = db.Column(db.String(500), nullable=False)
+    original_filename = db.Column(db.String(200), nullable=False)
+    content_type = db.Column(db.String(100), nullable=False)
+    declared_bytes = db.Column(db.BigInteger, nullable=False)
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=True)
+    rehearsal_id = db.Column(db.Integer, db.ForeignKey('rehearsal.id'), nullable=True)
+    member_id = db.Column(db.Integer, db.ForeignKey('member.id'), nullable=True)
+    title = db.Column(db.String(200), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='initiated', server_default='initiated')
+    capability_token_hash = db.Column(db.String(255), nullable=False)
+    media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)
+    personal_log_id = db.Column(db.Integer, db.ForeignKey('personal_log.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(hours=24), nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    completion_started_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint("kind IN ('media', 'personal_log')", name='ck_direct_upload_session_kind'),
+        db.CheckConstraint('declared_bytes > 0', name='ck_direct_upload_session_bytes'),
+        db.CheckConstraint("status IN ('initiated', 'completing', 'completed', 'expired', 'failed')",
+                           name='ck_direct_upload_session_status'),
+        db.CheckConstraint(
+            "(kind = 'media' AND song_id IS NOT NULL AND member_id IS NULL) OR "
+            "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)",
+            name='ck_direct_upload_session_target',
+        ),
+    )
+
+
 class SongSuggestion(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)

@@ -1,8 +1,12 @@
 """Authenticated band multipart-upload contracts for Phase 8."""
 
+from datetime import datetime, timedelta, timezone
+
 from extensions import db
 from multipart_upload_service import recover_sessions
-from models import Band, BandMembership, Media, MultipartUploadSession, Song
+from routes.uploads import recover_multipart_upload_sessions
+from models import (Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
+                    MultipartUploadSession, PersonalLog, Song)
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer
 from tests.test_v2_content_writes import _band_id, principals, write_client
@@ -21,6 +25,12 @@ def _initiate(client, band_id, headers, song_id, bytes=10):
     return client.post(f'/api/v2/bands/{band_id}/uploads/multipart/initiate', headers=headers, json={
         'filename': 'recording.mp4', 'content_type': 'video/mp4',
         'declared_bytes': bytes, 'song_id': song_id,
+    })
+
+
+def _direct_initiate(client, band_id, headers, *, filename='recording.mp4', bytes=10, **target):
+    return client.post(f'/api/v2/bands/{band_id}/uploads/direct/initiate', headers=headers, json={
+        'filename': filename, 'content_type': 'video/mp4', 'declared_bytes': bytes, **target,
     })
 
 
@@ -105,3 +115,143 @@ def test_unrecovered_aborting_session_still_reserves_band_quota(
     # The unknown R2 outcome remains reserved instead of admitting an upload
     # that could exceed the band's quota once recovery succeeds.
     assert _initiate(write_client, band_id, principals['member'], song_id).status_code == 409
+
+
+def test_direct_initiate_requires_membership_scopes_key_and_reserves_quota(
+        access_app, write_client, principals):
+    band_id = _band_id(access_app)
+    song_id, membership_id = _song(access_app, band_id)
+    with access_app.app_context():
+        band = db.session.get(Band, band_id)
+        band.storage_quota_bytes = 15
+        db.session.commit()
+        foreign_song = Song.query.filter_by(title='B public').one().id
+    endpoint = f'/api/v2/bands/{band_id}/uploads/direct/initiate'
+    assert write_client.post(endpoint, json={'filename': 'recording.mp4', 'declared_bytes': 10,
+                                             'song_id': song_id}).status_code == 401
+    assert _direct_initiate(write_client, band_id, principals['outsider'], song_id=song_id).status_code == 403
+    assert _direct_initiate(write_client, band_id, principals['member'], song_id=foreign_song).status_code == 404
+
+    started = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    assert started.status_code == 201
+    payload = started.get_json()
+    assert payload['upload_url'].endswith(f'bands/{band_id}/media/{payload["filename"]}')
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, payload['session_id'])
+        assert session.band_id == band_id and session.created_by_membership_id == membership_id
+        assert session.object_key == f'bands/{band_id}/media/{payload["filename"]}'
+        assert session.status == 'initiated'
+    # The direct reservation is accounted together with the existing multipart
+    # reservation pool, so a second 10-byte PUT cannot oversubscribe 15 bytes.
+    assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 409
+
+
+def test_direct_complete_requires_capability_and_current_membership_is_idempotent(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    song_id, membership_id = _song(access_app, band_id)
+    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 10})
+    started = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    payload = started.get_json()
+    complete = f'/api/v2/bands/{band_id}/uploads/direct/{payload["session_id"]}/complete'
+    capability = {payload['capability_header']: payload['upload_capability_token']}
+    assert write_client.post(complete, headers=principals['member'], json={}).status_code == 403
+    with access_app.app_context():
+        db.session.get(BandMembership, membership_id).status = 'left'
+        db.session.commit()
+    assert write_client.post(complete, headers={**principals['member'], **capability}, json={}).status_code == 403
+    with access_app.app_context():
+        db.session.get(BandMembership, membership_id).status = 'active'
+        db.session.commit()
+    completed = write_client.post(complete, headers={**principals['member'], **capability}, json={})
+    assert completed.status_code == 201
+    repeated = write_client.post(complete, headers={**principals['member'], **capability}, json={})
+    assert repeated.status_code == 200
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, payload['session_id'])
+        media = db.session.get(Media, session.media_id)
+        assert session.status == 'completed' and media.band_id == band_id
+        assert media.object_key == f'bands/{band_id}/media/{payload["filename"]}'
+        assert Media.query.filter_by(band_id=band_id).count() == 1
+
+
+def test_expired_direct_reservation_is_released_before_the_next_quota_check(
+        access_app, write_client, principals):
+    band_id = _band_id(access_app)
+    song_id, _membership_id = _song(access_app, band_id)
+    with access_app.app_context():
+        db.session.get(Band, band_id).storage_quota_bytes = 10
+        db.session.commit()
+    first = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    assert first.status_code == 201
+    with access_app.app_context():
+        db.session.get(DirectUploadSession, first.get_json()['session_id']).expires_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        )
+        db.session.commit()
+    second = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    assert second.status_code == 201
+    with access_app.app_context():
+        assert db.session.get(DirectUploadSession, first.get_json()['session_id']).status == 'expired'
+
+
+def test_startup_recovers_interrupted_direct_completion_without_touching_the_object(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    song_id, _membership_id = _song(access_app, band_id)
+    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 10})
+    started = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    payload = started.get_json()
+    with access_app.app_context():
+        db.session.get(DirectUploadSession, payload['session_id']).status = 'completing'
+        db.session.commit()
+    recover_multipart_upload_sessions(access_app)
+    with access_app.app_context():
+        assert db.session.get(DirectUploadSession, payload['session_id']).status == 'initiated'
+    complete = f'/api/v2/bands/{band_id}/uploads/direct/{payload["session_id"]}/complete'
+    headers = {**principals['member'], payload['capability_header']: payload['upload_capability_token']}
+    assert write_client.post(complete, headers=headers, json={}).status_code == 201
+    # A later crash after record creation is terminalized from its stored ID,
+    # not by repeating object work or creating a duplicate media row.
+    with access_app.app_context():
+        db.session.get(DirectUploadSession, payload['session_id']).status = 'completing'
+        db.session.commit()
+    recover_multipart_upload_sessions(access_app)
+    with access_app.app_context():
+        assert db.session.get(DirectUploadSession, payload['session_id']).status == 'completed'
+        assert Media.query.filter_by(band_id=band_id).count() == 1
+
+
+def test_direct_personal_logs_isolate_member_scope_and_completed_gallery_counts_toward_quota(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    with access_app.app_context():
+        membership = BandMembership.query.filter_by(band_id=band_id, role='member', status='active').one()
+        member = Member(band_id=band_id, name='direct log member', instrument='drums')
+        gallery = GalleryImage(band_id=band_id, created_by_membership_id=membership.id,
+                               visibility='MEMBERS', filename='existing.jpg', file_size=6)
+        db.session.add_all((member, gallery))
+        db.session.flush()
+        foreign_member = Member(band_id=Band.query.filter_by(slug='band-b').one().id,
+                                name='foreign member', instrument='bass')
+        db.session.add(foreign_member)
+        db.session.get(Band, band_id).storage_quota_bytes = 15
+        db.session.commit()
+        member_id, foreign_member_id = member.id, foreign_member.id
+    # 6 completed gallery bytes are part of the same band quota, leaving only 9.
+    assert _direct_initiate(write_client, band_id, principals['member'], bytes=10,
+                            member_id=member_id).status_code == 409
+    assert _direct_initiate(write_client, band_id, principals['member'], filename='take.m4a', bytes=8,
+                            member_id=foreign_member_id).status_code == 404
+    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 8})
+    started = _direct_initiate(write_client, band_id, principals['member'], filename='take.m4a', bytes=8,
+                               member_id=member_id, title='Take')
+    assert started.status_code == 201
+    payload = started.get_json()
+    complete = f'/api/v2/bands/{band_id}/uploads/direct/{payload["session_id"]}/complete'
+    completed = write_client.post(complete, headers={**principals['member'], payload['capability_header']:
+                                                      payload['upload_capability_token']}, json={})
+    assert completed.status_code == 201
+    with access_app.app_context():
+        log = db.session.get(PersonalLog, db.session.get(DirectUploadSession, payload['session_id']).personal_log_id)
+        assert log.member_id == member_id and log.object_key == f'bands/{band_id}/personal_logs/{payload["filename"]}'

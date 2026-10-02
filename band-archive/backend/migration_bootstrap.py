@@ -30,6 +30,7 @@ PHASE3_HARDENED_REVISION = '20260916_04'
 PHASE4_REVISION = '20260916_05'
 PHASE6_REVISION = '20260920_06'
 PHASE7_REVISION = '20260927_07'
+PHASE8_REVISION = '20261002_08'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -153,6 +154,7 @@ def phase4_metadata():
         table.to_metadata(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
+    _restore_pre_phase9_direct_upload_sessions(metadata)
     for table_name in (
         'song', 'rehearsal', 'media', 'member', 'personal_log', 'gallery_image',
         'announcement', 'song_suggestion', 'comment', 'song_vote', 'media_vote',
@@ -188,6 +190,7 @@ def phase6_metadata():
         table.to_metadata(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
+    _restore_pre_phase9_direct_upload_sessions(metadata)
     return metadata
 
 
@@ -197,6 +200,16 @@ def phase7_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
+    _restore_pre_phase9_direct_upload_sessions(metadata)
+    return metadata
+
+
+def phase8_metadata():
+    """Exact revision-08 snapshot before direct-upload reservations existed."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    _restore_pre_phase9_direct_upload_sessions(metadata)
     return metadata
 
 
@@ -215,6 +228,13 @@ def _restore_pre_phase7_content_writes(metadata):
 def _restore_pre_phase8_suggestion_votes(metadata):
     """Remove the v08 table from earlier immutable schema snapshots."""
     table = metadata.tables.get('song_suggestion_vote')
+    if table is not None:
+        metadata.remove(table)
+
+
+def _restore_pre_phase9_direct_upload_sessions(metadata):
+    """Remove the v09 table from immutable snapshots of earlier revisions."""
+    table = metadata.tables.get('direct_upload_session')
     if table is not None:
         metadata.remove(table)
 
@@ -1184,6 +1204,8 @@ def metadata_for_recorded_revision(revision):
         return phase6_metadata()
     if revision == PHASE7_REVISION:
         return phase7_metadata()
+    if revision == PHASE8_REVISION:
+        return phase8_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

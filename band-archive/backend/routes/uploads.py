@@ -8,7 +8,11 @@ from band_service import ACTIVE
 from extensions import db
 from models import (Band, BandMembership, Media, Song, Rehearsal, Member,
                     PersonalLog, GalleryImage, MultipartUploadSession,
-                    PersonalLogMultipartUploadSession)
+                    PersonalLogMultipartUploadSession, DirectUploadSession)
+from direct_upload_service import (
+    complete_direct_session, create_direct_session, expire_direct_session_if_needed,
+    expire_direct_sessions_for_band, recover_direct_sessions, require_direct_capability,
+)
 from legacy_scope import legacy_band_id, legacy_get_or_404, validate_legacy_graph
 from errors import ValidationError, NotFoundError
 from storage import storage
@@ -105,10 +109,12 @@ def _v2_session_or_404(session_id, band_id, *, recover_aborting=True):
 
 
 def _v2_used_and_reserved_bytes(band_id):
-    """Logical object usage plus every still-live multipart reservation."""
+    """Logical object usage plus every still-live upload reservation."""
+    expire_direct_sessions_for_band(band_id)
     used = sum((
         db.session.query(func.coalesce(func.sum(Media.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
         db.session.query(func.coalesce(func.sum(PersonalLog.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
+        db.session.query(func.coalesce(func.sum(GalleryImage.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
     ))
     reserved = sum((
         db.session.query(func.coalesce(func.sum(MultipartUploadSession.declared_bytes), 0)).filter(
@@ -118,6 +124,10 @@ def _v2_used_and_reserved_bytes(band_id):
         db.session.query(func.coalesce(func.sum(PersonalLogMultipartUploadSession.declared_bytes), 0)).filter(
             PersonalLogMultipartUploadSession.band_id == band_id,
             PersonalLogMultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
+        ).scalar() or 0,
+        db.session.query(func.coalesce(func.sum(DirectUploadSession.declared_bytes), 0)).filter(
+            DirectUploadSession.band_id == band_id,
+            DirectUploadSession.status.in_(('initiated', 'completing')),
         ).scalar() or 0,
     ))
     return int(used), int(reserved)
@@ -141,6 +151,14 @@ def _v2_personal_log_target(band_id, member_id):
     if Member.query.filter_by(id=member_id, band_id=band_id).one_or_none() is None:
         raise NotFoundError('Member not found')
     return member_id
+
+
+def _v2_direct_session_or_404(session_id, band_id):
+    session = DirectUploadSession.query.filter_by(id=session_id, band_id=band_id).one_or_none()
+    if session is None:
+        raise NotFoundError('Upload session not found')
+    expire_direct_session_if_needed(session)
+    return db.session.get(DirectUploadSession, session.id)
 
 
 def _legacy_session_or_404(session_id, *, recover_aborting=True):
@@ -221,6 +239,8 @@ def recover_multipart_upload_sessions(app):
         if 'band_id' not in columns:
             return
         recover_sessions()
+        if inspect(db.engine).has_table('direct_upload_session'):
+            recover_direct_sessions()
 
 
 def _v2_multipart_item(session, actual_size):
@@ -247,6 +267,101 @@ def _v2_multipart_item(session, actual_size):
         save_record=save_media_and_start, app=current_app._get_current_object(),
         song_id=session.song_id, rehearsal_id=session.rehearsal_id, **fields,
     )
+
+
+def _v2_direct_item(session, actual_size):
+    """Materialize a verified direct object only within its original band."""
+    band = db.session.get(Band, session.band_id)
+    filename = session.object_key.rsplit('/', 1)[1]
+    fields = {
+        'band_id': session.band_id,
+        'created_by_membership_id': session.created_by_membership_id,
+        'visibility': band.default_visibility,
+        'object_key': session.object_key,
+    }
+    if session.kind == 'personal_log':
+        return create_uploaded_record(
+            filename=filename, original_filename=session.original_filename, actual_size=actual_size,
+            max_video_bytes=MAX_VIDEO_BYTES, create_record=create_personal_log,
+            save_record=save_personal_log_and_start, app=current_app._get_current_object(),
+            member_id=session.member_id, title=session.title, **fields,
+        )
+    return create_uploaded_record(
+        filename=filename, original_filename=session.original_filename, actual_size=actual_size,
+        max_video_bytes=MAX_VIDEO_BYTES, create_record=create_media,
+        save_record=save_media_and_start, app=current_app._get_current_object(),
+        song_id=session.song_id, rehearsal_id=session.rehearsal_id, **fields,
+    )
+
+
+@uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/direct/initiate', methods=['POST'])
+@_v2_upload_write
+def v2_initiate_direct_upload(band_id):
+    """Reserve a small direct upload before issuing its tenant-scoped PUT URL."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ValidationError('A JSON object is required.')
+    filename = data.get('filename', '').strip() if isinstance(data.get('filename'), str) else ''
+    if not filename or not allowed_file(filename):
+        raise ValidationError('A supported filename is required.')
+    declared_bytes = _require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1,
+                                  maximum=MAX_VIDEO_BYTES)
+    has_member = data.get('member_id') is not None
+    has_song_target = data.get('song_id') is not None or data.get('rehearsal_id') is not None
+    if has_member == has_song_target:
+        raise ValidationError('Exactly one media or personal-log target is required.')
+    content_type = data.get('content_type', '').strip() if isinstance(data.get('content_type'), str) else ''
+    secure_name = generate_secure_filename(filename)
+
+    def operation():
+        band, membership = _v2_active_membership(band_id, lock=True)
+        used, reserved = _v2_used_and_reserved_bytes(band.id)
+        if used + reserved + declared_bytes > band.storage_quota_bytes:
+            raise ValidationError('Band storage quota exceeded.', status_code=409)
+        common = {
+            'band_id': band.id, 'created_by_membership_id': membership.id,
+            'original_filename': filename, 'content_type': content_type or guess_content_type(filename),
+            'declared_bytes': declared_bytes, 'status': 'initiated', 'commit': False,
+        }
+        if has_member:
+            if detect_file_type(filename) not in ('audio', 'video'):
+                raise ValidationError('Personal logs support audio and video files only.')
+            title = data.get('title', '').strip() if isinstance(data.get('title'), str) else ''
+            if len(title or filename) > 200:
+                raise ValidationError('title must be 200 characters or less')
+            return create_direct_session(
+                kind='personal_log', object_key=f'bands/{band.id}/personal_logs/{secure_name}',
+                member_id=_v2_personal_log_target(band.id, data.get('member_id')),
+                title=title or filename, **common,
+            )
+        song_id, rehearsal_id = _v2_media_target(band.id, data)
+        return create_direct_session(
+            kind='media', object_key=f'bands/{band.id}/media/{secure_name}',
+            song_id=song_id, rehearsal_id=rehearsal_id, **common,
+        )
+
+    session, capability_token = _v2_write(operation)
+    return jsonify({
+        'session_id': session.id, 'filename': secure_name,
+        'upload_url': storage.generate_upload_url(session.object_key, content_type=session.content_type),
+        'expires_at': session.expires_at.isoformat(),
+        'upload_capability_token': capability_token, 'capability_header': UPLOAD_CAPABILITY_HEADER,
+    }), 201
+
+
+@uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/direct/<session_id>/complete', methods=['POST'])
+@_v2_upload_write
+def v2_complete_direct_upload(band_id, session_id):
+    def operation():
+        _v2_active_membership(band_id, lock=True)  # Recheck before materializing an uploaded object.
+        session = _v2_direct_session_or_404(session_id, band_id)
+        require_direct_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+        return complete_direct_session(session, _object_size, _v2_direct_item)
+
+    item, status = _v2_write(operation)
+    session = db.session.get(DirectUploadSession, session_id)
+    result_key = 'personal_log' if session.kind == 'personal_log' else 'media'
+    return jsonify({'session_id': session.id, 'status': 'completed', result_key: item.to_dict() if item else None}), status
 
 
 @uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/multipart/initiate', methods=['POST'])
