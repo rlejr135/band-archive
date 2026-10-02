@@ -127,7 +127,7 @@ def _v2_used_and_reserved_bytes(band_id):
         ).scalar() or 0,
         db.session.query(func.coalesce(func.sum(DirectUploadSession.declared_bytes), 0)).filter(
             DirectUploadSession.band_id == band_id,
-            DirectUploadSession.status.in_(('initiated', 'completing')),
+            DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
         ).scalar() or 0,
     ))
     return int(used), int(reserved)

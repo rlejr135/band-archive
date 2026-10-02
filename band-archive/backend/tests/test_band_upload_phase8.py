@@ -2,9 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 
+from botocore.exceptions import ClientError
+import pytest
+
+from direct_upload_service import complete_direct_session, expire_direct_session_if_needed
 from extensions import db
 from multipart_upload_service import recover_sessions
-from routes.uploads import recover_multipart_upload_sessions
+from routes.uploads import _v2_direct_item, recover_multipart_upload_sessions
+from errors import ValidationError
 from models import (Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
                     MultipartUploadSession, PersonalLog, Song)
 from storage import storage
@@ -176,7 +181,7 @@ def test_direct_complete_requires_capability_and_current_membership_is_idempoten
 
 
 def test_expired_direct_reservation_is_released_before_the_next_quota_check(
-        access_app, write_client, principals):
+        access_app, write_client, principals, monkeypatch):
     band_id = _band_id(access_app)
     song_id, _membership_id = _song(access_app, band_id)
     with access_app.app_context():
@@ -189,10 +194,93 @@ def test_expired_direct_reservation_is_released_before_the_next_quota_check(
             datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
         )
         db.session.commit()
+    deleted = []
+    monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
     second = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
     assert second.status_code == 201
     with access_app.app_context():
+        session = db.session.get(DirectUploadSession, first.get_json()['session_id'])
+        assert session.status == 'expired'
+        assert deleted == [session.object_key]
+
+
+def test_missing_expired_direct_object_releases_reservation_idempotently(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    song_id, _membership_id = _song(access_app, band_id)
+    with access_app.app_context():
+        db.session.get(Band, band_id).storage_quota_bytes = 10
+        db.session.commit()
+    first = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    with access_app.app_context():
+        db.session.get(DirectUploadSession, first.get_json()['session_id']).expires_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        )
+        db.session.commit()
+    monkeypatch.setattr(storage, 'delete', lambda key: (_ for _ in ()).throw(
+        ClientError({'Error': {'Code': 'NoSuchKey'}}, 'DeleteObject')
+    ))
+    assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 201
+    with access_app.app_context():
         assert db.session.get(DirectUploadSession, first.get_json()['session_id']).status == 'expired'
+
+
+def test_transient_expiry_cleanup_keeps_reservation_until_startup_retry_succeeds(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    song_id, _membership_id = _song(access_app, band_id)
+    with access_app.app_context():
+        db.session.get(Band, band_id).storage_quota_bytes = 10
+        db.session.commit()
+    first = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    with access_app.app_context():
+        db.session.get(DirectUploadSession, first.get_json()['session_id']).expires_at = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        )
+        db.session.commit()
+    monkeypatch.setattr(storage, 'delete', lambda key: (_ for _ in ()).throw(RuntimeError('R2 unavailable')))
+    assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 409
+    with access_app.app_context():
+        assert db.session.get(DirectUploadSession, first.get_json()['session_id']).status == 'expiring'
+    deleted = []
+    monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
+    recover_multipart_upload_sessions(access_app)
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, first.get_json()['session_id'])
+        assert session.status == 'expired' and deleted == [session.object_key]
+    assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 201
+
+
+def test_direct_complete_and_expiry_claims_allow_exactly_one_terminal_path(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    song_id, _membership_id = _song(access_app, band_id)
+    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 10})
+    deleted = []
+    monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
+
+    complete_wins = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, complete_wins.get_json()['session_id'])
+        session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        db.session.commit()
+        # This models a complete request that read initiated before the expiry
+        # worker claimed it: only its conditional initiated -> completing wins.
+        item, status = complete_direct_session(session, lambda key: 10, _v2_direct_item)
+        assert status == 201 and item.id
+        assert expire_direct_session_if_needed(db.session.get(DirectUploadSession, session.id)) is False
+        assert db.session.get(DirectUploadSession, session.id).status == 'completed'
+
+    expiry_wins = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, expiry_wins.get_json()['session_id'])
+        session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        db.session.commit()
+        assert expire_direct_session_if_needed(session) is True
+        assert db.session.get(DirectUploadSession, session.id).status == 'expired'
+        with pytest.raises(ValidationError):
+            complete_direct_session(db.session.get(DirectUploadSession, session.id), lambda key: 10, _v2_direct_item)
+    assert len(deleted) == 1
 
 
 def test_startup_recovers_interrupted_direct_completion_without_touching_the_object(

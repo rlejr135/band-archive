@@ -3,11 +3,13 @@
 from datetime import datetime, timezone
 import secrets
 
+from botocore.exceptions import ClientError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from extensions import db
 from errors import ValidationError
 from models import DirectUploadSession, Media, PersonalLog
+from storage import storage
 
 
 def now():
@@ -42,36 +44,64 @@ def expires_at_utc_naive(session):
 
 
 def expire_direct_session_if_needed(session):
+    if session.status == 'expiring':
+        return False
     if session.status != 'initiated' or expires_at_utc_naive(session) > now():
         return False
-    DirectUploadSession.query.filter_by(id=session.id, status='initiated').update({
-        'status': 'expired', 'completion_started_at': None,
+    claimed = DirectUploadSession.query.filter_by(id=session.id, status='initiated').update({
+        'status': 'expiring', 'completion_started_at': now(),
     })
     db.session.commit()
-    return True
+    if not claimed:
+        return False
+    return recover_expiring_session(db.session.get(DirectUploadSession, session.id))
 
 
 def expire_direct_sessions_for_band(band_id=None):
-    """Release only expired PUT reservations before calculating a band quota."""
+    """Clean expired direct PUTs before releasing their quota reservations."""
     query = DirectUploadSession.query.filter(
         DirectUploadSession.status == 'initiated',
         DirectUploadSession.expires_at <= now(),
     )
     if band_id is not None:
         query = query.filter(DirectUploadSession.band_id == band_id)
-    expired = query.update({'status': 'expired', 'completion_started_at': None})
-    if expired:
-        db.session.flush()
-    return expired
+    sessions = query.all()
+    return sum(expire_direct_session_if_needed(session) for session in sessions)
+
+
+def _missing_object(error):
+    """Treat R2/S3's idempotent missing-object responses as cleaned up."""
+    if not isinstance(error, ClientError):
+        return False
+    code = str(error.response.get('Error', {}).get('Code', '')).lower()
+    http_status = error.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+    return code in {'nosuchkey', 'nosuchobject', 'notfound', '404'} or http_status == 404
+
+
+def recover_expiring_session(session):
+    """Retry cleanup of a session-owned direct object before releasing quota."""
+    if session.status != 'expiring':
+        return session.status == 'expired'
+    try:
+        storage.delete(session.object_key)
+    except Exception as exc:
+        if not _missing_object(exc):
+            return False
+    DirectUploadSession.query.filter_by(id=session.id, status='expiring').update({
+        'status': 'expired', 'completion_started_at': None,
+    })
+    db.session.commit()
+    return True
 
 
 def recover_direct_sessions():
-    """Repair a process-interrupted local completion without touching R2.
+    """Repair interrupted completion and expiration claims.
 
     A direct PUT is already durable before the API completion claim, so unlike
-    multipart recovery this must never delete or recreate an object.  An
-    existing materialized row proves completion; otherwise an interrupted
-    claim is safely made retryable again.
+    multipart completion recovery this never recreates an object. An existing
+    materialized row proves completion; otherwise the claim is retryable.
+    Expiring rows are the exception: their session-owned object is deleted
+    before quota can be released.
     """
     for session in DirectUploadSession.query.filter_by(status='completing').all():
         item = completed_item(session)
@@ -82,6 +112,8 @@ def recover_direct_sessions():
                 'status': 'initiated', 'completion_started_at': None,
             })
     expire_direct_sessions_for_band(None)
+    for session in DirectUploadSession.query.filter_by(status='expiring').all():
+        recover_expiring_session(session)
     db.session.commit()
 
 

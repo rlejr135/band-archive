@@ -61,3 +61,31 @@ def test_direct_upload_session_sqlite_roundtrip(monkeypatch):
             assert 'direct_upload_session' not in inspect(connection).get_table_names()
     finally:
         engine.dispose()
+
+
+def test_direct_upload_expiry_cleanup_status_migrates_on_sqlite_and_postgres(monkeypatch):
+    session_revision = importlib.import_module('migrations.versions.20261002_09_direct_upload_session')
+    expiry_revision = importlib.import_module('migrations.versions.20261003_10_direct_upload_expiry_cleanup')
+    monkeypatch.setattr(session_revision.context, 'is_offline_mode', lambda: False)
+    engine = create_engine('sqlite://')
+    try:
+        with engine.begin() as connection:
+            # SQLite batch recreation reflects every referenced table.
+            for table in ('band', 'band_membership', 'song', 'rehearsal', 'member', 'media', 'personal_log'):
+                connection.exec_driver_sql(f'CREATE TABLE {table} (id INTEGER PRIMARY KEY)')
+            _run_revision(connection, session_revision.upgrade)
+            _run_revision(connection, expiry_revision.upgrade)
+            checks = inspect(connection).get_check_constraints('direct_upload_session')
+            assert any('expiring' in (check['sqltext'] or '') for check in checks)
+            _run_revision(connection, expiry_revision.downgrade)
+            checks = inspect(connection).get_check_constraints('direct_upload_session')
+            assert all('expiring' not in (check['sqltext'] or '') for check in checks)
+            _run_revision(connection, session_revision.downgrade)
+    finally:
+        engine.dispose()
+
+    upgrade_sql = _offline_postgres_sql(expiry_revision.upgrade)
+    downgrade_sql = _offline_postgres_sql(expiry_revision.downgrade)
+    assert 'DROP CONSTRAINT ck_direct_upload_session_status' in upgrade_sql
+    assert 'expiring' in upgrade_sql
+    assert 'DROP CONSTRAINT ck_direct_upload_session_status' in downgrade_sql

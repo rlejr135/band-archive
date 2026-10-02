@@ -16,7 +16,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from flask import current_app
-from sqlalchemy import Boolean, Integer, BigInteger, SmallInteger, MetaData, inspect, text
+from sqlalchemy import Boolean, CheckConstraint, Integer, BigInteger, SmallInteger, MetaData, inspect, text
 from sqlalchemy.dialects import postgresql
 
 from extensions import db
@@ -31,6 +31,7 @@ PHASE4_REVISION = '20260916_05'
 PHASE6_REVISION = '20260920_06'
 PHASE7_REVISION = '20260927_07'
 PHASE8_REVISION = '20261002_08'
+PHASE9_REVISION = '20261002_09'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -213,6 +214,15 @@ def phase8_metadata():
     return metadata
 
 
+def phase9_metadata():
+    """Exact revision-09 snapshot before expiring became a cleanup claim."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    _restore_pre_phase10_direct_expiry_state(metadata)
+    return metadata
+
+
 def _restore_pre_phase7_content_writes(metadata):
     """Remove v07-only nullability/indexes from older immutable snapshots."""
     comment = metadata.tables.get('comment')
@@ -237,6 +247,21 @@ def _restore_pre_phase9_direct_upload_sessions(metadata):
     table = metadata.tables.get('direct_upload_session')
     if table is not None:
         metadata.remove(table)
+
+
+def _restore_pre_phase10_direct_expiry_state(metadata):
+    """Restore the v09 direct-session status constraint in older snapshots."""
+    table = metadata.tables.get('direct_upload_session')
+    if table is None:
+        return
+    constraint = next((item for item in table.constraints
+                       if item.name == 'ck_direct_upload_session_status'), None)
+    if constraint is not None:
+        table.constraints.remove(constraint)
+    table.append_constraint(CheckConstraint(
+        "status IN ('initiated', 'completing', 'completed', 'expired', 'failed')",
+        name='ck_direct_upload_session_status',
+    ))
 
 
 def _restore_pre_phase4_band(metadata):
@@ -1206,6 +1231,8 @@ def metadata_for_recorded_revision(revision):
         return phase7_metadata()
     if revision == PHASE8_REVISION:
         return phase8_metadata()
+    if revision == PHASE9_REVISION:
+        return phase9_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

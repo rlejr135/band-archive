@@ -456,7 +456,7 @@ class DirectUploadSession(db.Model):
     __table_args__ = (
         db.CheckConstraint("kind IN ('media', 'personal_log')", name='ck_direct_upload_session_kind'),
         db.CheckConstraint('declared_bytes > 0', name='ck_direct_upload_session_bytes'),
-        db.CheckConstraint("status IN ('initiated', 'completing', 'completed', 'expired', 'failed')",
+        db.CheckConstraint("status IN ('initiated', 'completing', 'expiring', 'completed', 'expired', 'failed')",
                            name='ck_direct_upload_session_status'),
         db.CheckConstraint(
             "(kind = 'media' AND song_id IS NOT NULL AND member_id IS NULL) OR "
