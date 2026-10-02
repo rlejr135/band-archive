@@ -12,10 +12,12 @@ export const getUploadTransport = () => runtimeTransport.get();
 // Call after an explicit Capacitor host/plugin availability transition.
 export const invalidateUploadTransport = () => runtimeTransport.invalidate();
 
-// Processing endpoints return { status, error, audio_url, ... }, while regular
-// media endpoints use transcoding_status. Keep both endpoint shapes usable by UI.
+// v2 processing reads wrap that compact payload as { processing: { status,
+// error, audio_url, ... } }, while v1 returns it directly and normal media
+// reads use { media } / { personal_log } plus transcoding_status.  Normalize
+// all of those boundary shapes into the fields used by the common poller.
 export const normalizeMedia = (response) => {
-  const media = response?.media || response?.personal_log || response;
+  const media = response?.media || response?.personal_log || response?.processing || response;
   if (!media || typeof media !== 'object') return media;
   const status = media.status || media.transcoding_status;
   if (!status) return media;
