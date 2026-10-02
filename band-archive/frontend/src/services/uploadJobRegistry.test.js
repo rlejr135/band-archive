@@ -64,6 +64,14 @@ test('native task identity includes its target and source ownership rejects conc
   assert.equal(registry.claimNativeSource('picked-file', second), second);
 });
 
+test('task identity includes its originating band so a route switch cannot join another band upload', () => {
+  const file = { id: 'picked-file' };
+  assert.notEqual(
+    createUploadTaskId({ file, target: { bandId: 1, songId: 4 } }),
+    createUploadTaskId({ file, target: { bandId: 2, songId: 4 } }),
+  );
+});
+
 test('a raw route native id resolves its qualified task without creating a ghost task', () => {
   const qualified = 'picked-file:media:song:4:rehearsal:9';
   const tasks = [{ id: qualified, nativeId: 'picked-file', target: { songId: 4, rehearsalId: 9 } }];

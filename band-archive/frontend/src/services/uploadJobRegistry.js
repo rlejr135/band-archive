@@ -2,9 +2,9 @@ const idPart = (value) => value === undefined || value === null || value === '' 
 const sameId = (left, right) => left !== undefined && left !== null && right !== undefined && right !== null && String(left) === String(right);
 
 export const uploadTargetKey = (target = {}) => (
-  target.memberId !== undefined && target.memberId !== null && target.memberId !== ''
+  `${idPart(target.bandId)}:${target.memberId !== undefined && target.memberId !== null && target.memberId !== ''
     ? `personal_log:member:${idPart(target.memberId)}`
-    : `media:song:${idPart(target.songId)}:rehearsal:${idPart(target.rehearsalId)}`
+    : `media:song:${idPart(target.songId)}:rehearsal:${idPart(target.rehearsalId)}`}`
 );
 
 // Native queue ids identify the picked file, not its destination. Keep the
@@ -14,6 +14,7 @@ export const createUploadTaskId = ({ key, file, target }) => file?.id
   : key;
 
 export const uploadTaskMatchesTarget = (taskTarget = {}, target = {}) => {
+  if (target.bandId !== undefined && target.bandId !== null && !sameId(taskTarget.bandId, target.bandId)) return false;
   if (target.memberId !== undefined && target.memberId !== null) return sameId(taskTarget.memberId, target.memberId);
   if (taskTarget.memberId !== undefined && taskTarget.memberId !== null) return false;
   if (target.songId !== undefined && target.songId !== null && !sameId(taskTarget.songId, target.songId)) return false;

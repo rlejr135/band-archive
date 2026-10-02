@@ -1,11 +1,12 @@
-import { API_URL } from './api';
-import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport';
-import { initiateMultipartSession } from './multipartSession';
+import { API_URL } from './api.js';
+import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
+import { initiateMultipartSession } from './multipartSession.js';
 
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
 const MAX_PART_RETRIES = 3;
 const webTransport = createWebUploadTransport({ apiUrl: API_URL });
+export const getWebUploadTransport = () => webTransport;
 const runtimeTransport = createTransportCache(() => resolveUploadTransport({ apiUrl: API_URL }));
 export const getUploadTransport = () => runtimeTransport.get();
 // Call after an explicit Capacitor host/plugin availability transition.
@@ -96,12 +97,14 @@ const uploadSingle = async ({ file, target, onProgress, registerXhr, isCancelled
 
 const acknowledgedParts = (session) => session?.acknowledged_parts || session?.ack_parts || session?.parts || [];
 
-const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession, isCancelled }) => {
+const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession, isCancelled, transport = webTransport }) => {
   throwIfCancelled(isCancelled);
   const { initiated, session } = await initiateMultipartSession({
-    initiate: () => webTransport.initiateMultipart(initiatePayload(target, file)), setSession, isCancelled, abort: (current) => webTransport.abort(current),
+    initiate: () => transport.initiateMultipart(initiatePayload(target, file)),
+    setSession: (session) => setSession?.({ ...session, uploadMode: 'multipart' }),
+    isCancelled, abort: (current) => transport.abort(current),
   });
-  const serverSession = await webTransport.getSession(session);
+  const serverSession = await transport.getSession(session);
   const totalParts = Math.ceil(file.size / initiated.part_size);
   if (totalParts > initiated.max_parts) throw new Error('파일이 multipart 업로드 제한을 초과합니다.');
   const completed = new Map();
@@ -124,13 +127,13 @@ const uploadMultipart = async ({ file, target, onProgress, onUploadState, regist
       throwIfCancelled(isCancelled);
       inFlight.set(partNumber, 0); updateAggregate();
       try {
-        if (!uploadUrl) uploadUrl = (await webTransport.requestPart(session, partNumber)).upload_url;
+        if (!uploadUrl) uploadUrl = (await transport.requestPart(session, partNumber)).upload_url;
         throwIfCancelled(isCancelled);
-        const etag = await webTransport.putPart(uploadUrl, blob, file.type || 'application/octet-stream', (loaded) => {
+        const etag = await transport.putPart(uploadUrl, blob, file.type || 'application/octet-stream', (loaded) => {
           inFlight.set(partNumber, loaded); updateAggregate();
         }, registerXhr);
         if (!etag) throw new Error('R2가 ETag를 노출하지 않았습니다. CORS expose headers를 확인하세요.');
-        await webTransport.acknowledgePart(session, partNumber, { etag, bytes: blob.size });
+        await transport.acknowledgePart(session, partNumber, { etag, bytes: blob.size });
         throwIfCancelled(isCancelled);
         inFlight.delete(partNumber); completed.set(partNumber, blob.size); updateAggregate();
         return;
@@ -160,7 +163,7 @@ const uploadMultipart = async ({ file, target, onProgress, onUploadState, regist
   await Promise.all(Array.from({ length: Math.min(3, totalParts) }, worker));
   throwIfCancelled(isCancelled);
   onUploadState?.(mapUploadState('completing'));
-  return webTransport.complete(session);
+  return transport.complete(session);
 };
 
 export const uploadMediaFile = async (options) => {
@@ -168,6 +171,22 @@ export const uploadMediaFile = async (options) => {
   if (isVideo(options.file) && options.file.size > MAX_VIDEO_BYTES) throw new Error('영상 파일은 1GiB를 초과할 수 없습니다.');
   if (isVideo(options.file) && options.file.size >= MULTIPART_THRESHOLD_BYTES) return uploadMultipart({ ...options, target });
   return uploadSingle({ ...options, target });
+};
+
+// Direct v2 sessions reserve quota before their presigned PUT. The threshold
+// remains identical to the established browser multipart threshold.
+export const uploadBandMediaFile = async ({ transport, ...options }) => {
+  const target = options.target || createUploadTarget(options);
+  const { file, onProgress, registerXhr, setSession, isCancelled } = options;
+  if (isVideo(file) && file.size > MAX_VIDEO_BYTES) throw new Error('영상 파일은 1GiB를 초과할 수 없습니다.');
+  if (isVideo(file) && file.size >= MULTIPART_THRESHOLD_BYTES) return uploadMultipart({ ...options, target, transport });
+  throwIfCancelled(isCancelled);
+  const session = await transport.initiateDirect(initiatePayload(target, file));
+  setSession?.({ ...session, uploadMode: 'direct' });
+  if (isCancelled?.()) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
+  await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => onProgress(loaded, file.size), registerXhr);
+  throwIfCancelled(isCancelled);
+  return transport.completeDirect(session);
 };
 
 export const uploadGalleryImageFile = async ({ file, onProgress }) => {
