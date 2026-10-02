@@ -778,6 +778,32 @@ def _parent_band(connection, table, record_id):
 
 def _assign_legacy_scope(mapper, connection, target):
     """Central dual-write guard for legacy v1 ORM writers after backfill."""
+    # Authenticated v2 writers explicitly bind the active membership that
+    # owns the operation.  Permit that narrower contract before resolving the
+    # immutable legacy-import tenant, while retaining a database-side check
+    # that both the membership and any parent belong to the same band.
+    membership_id = getattr(target, 'created_by_membership_id', None)
+    if membership_id is not None:
+        membership_band = connection.execute(text(
+            'SELECT band_id FROM band_membership WHERE id = :id'
+        ), {'id': membership_id}).scalar_one_or_none()
+        if membership_band is None or target.band_id != membership_band:
+            raise TenantScopeUnavailable('Authenticated writer membership is outside the target tenant.')
+        parent = None
+        if isinstance(target, (Media, MultipartUploadSession, SongVote)):
+            parent = _parent_band(connection, 'song', target.song_id)
+        elif isinstance(target, (PersonalLog, PersonalLogMultipartUploadSession)):
+            parent = _parent_band(connection, 'member', target.member_id)
+        elif isinstance(target, MediaVote):
+            parent = _parent_band(connection, 'media', target.media_id)
+        elif isinstance(target, Comment):
+            parent = _parent_band(connection, 'media', target.media_id) if target.media_id is not None else (
+                _parent_band(connection, 'personal_log', target.personal_log_id)
+                if target.personal_log_id is not None else _parent_band(connection, 'comment', target.parent_id)
+            )
+        if parent is not None and parent != target.band_id:
+            raise TenantScopeUnavailable('Authenticated writer parent is outside the target tenant.')
+        return
     legacy_band_id = _legacy_band_id(connection)
     if legacy_band_id is None:
         return

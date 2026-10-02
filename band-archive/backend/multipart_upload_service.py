@@ -121,9 +121,10 @@ def require_capability(session, token):
         raise ValidationError('A valid upload capability is required.', status_code=403)
 
 
-def create_session(spec, *, original_filename, content_type, declared_bytes, **target_values):
+def create_session(spec, *, original_filename, content_type, declared_bytes, object_key=None,
+                   commit=True, **target_values):
     filename = target_values.pop('filename')
-    object_key = f'{spec.key_prefix}/{filename}'
+    object_key = object_key or f'{spec.key_prefix}/{filename}'
     try:
         r2_upload_id = storage.create_multipart_upload(object_key, content_type)
     except Exception as exc:
@@ -139,7 +140,10 @@ def create_session(spec, *, original_filename, content_type, declared_bytes, **t
         **target_values,
     )
     db.session.add(session)
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     return session, capability_token
 
 
