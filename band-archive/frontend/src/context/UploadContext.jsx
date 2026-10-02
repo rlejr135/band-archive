@@ -6,6 +6,8 @@ import { createUploadJobRegistry, createUploadTaskId, resolveNativeUploadCancell
 import { createUploadCompletionStore } from '../services/uploadCompletionStore';
 import { getAudioRetryResult } from '../services/uploadRetryResult';
 import { retainUploadTaskHistory } from '../services/uploadTaskRetention';
+import { persistBandUploadTasks, restoreBandUploadTasks } from '../services/bandUploadTaskStore';
+import { useAuth } from './AuthContext';
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const UploadContext = createContext(null);
@@ -17,12 +19,20 @@ const targetLabel = (target = {}) => {
 };
 
 export const UploadProvider = ({ children }) => {
+  const { user } = useAuth();
+  return <UploadTaskProvider key={user?.id || 'anonymous'} userId={user?.id}>{children}</UploadTaskProvider>;
+};
+
+const UploadTaskProvider = ({ children, userId }) => {
   const controller = useUploadController();
   const { upload: controllerUpload, cancel: controllerCancel, retryAudio: controllerRetryAudio, nativePending } = controller;
-  const [tasks, setTasks] = useState([]);
+  const [tasks, setTasks] = useState(() => retainUploadTaskHistory(restoreBandUploadTasks(userId)));
   const registry = useRef(createUploadJobRegistry());
   const dismissedNative = useRef(new Set());
   const completions = useRef(createUploadCompletionStore());
+  useEffect(() => {
+    persistBandUploadTasks(userId, tasks);
+  }, [tasks, userId]);
 
   const publishCompletion = useCallback((target, media, nativeId = null) => (
     completions.current.publish({ target, media, nativeId })
@@ -45,8 +55,9 @@ export const UploadProvider = ({ children }) => {
   }, []);
 
   const upload = useCallback((options) => {
-    const { key, file, songId, rehearsalId, memberId, title } = options;
-    const target = { songId, rehearsalId, memberId, title };
+    const { key, file, songId, rehearsalId, memberId, title, band } = options;
+    const target = { songId, rehearsalId, memberId, title, bandId: band?.id };
+    const bandTask = band?.id ? { bandId: Number(band.id), bandName: band.name || `밴드 #${band.id}`, bandSlug: band.slug || null } : {};
     const id = createUploadTaskId({ key, file, target });
     // Native plugins key durable work by the picked-file id. We intentionally
     // permit duplicate requests for one target to join, while rejecting the
@@ -54,7 +65,7 @@ export const UploadProvider = ({ children }) => {
     if (registry.current.hasStarted(id)) return registry.current.runningFor(id);
     if (file?.id && registry.current.claimNativeSource(file.id, id) !== id) {
       const error = '이 파일은 다른 대상에서 이미 업로드 중입니다. 완료 또는 취소 후 다시 시도하세요.';
-      updateTask(id, { name: file?.name || '업로드 파일', target, targetLabel: targetLabel(target), status: 'failed', nativeId: file.id, error });
+      updateTask(id, { name: file?.name || '업로드 파일', target, targetLabel: targetLabel(target), ...bandTask, status: 'failed', nativeId: file.id, error });
       return Promise.reject(new Error(error));
     }
     const nativeAlreadyQueued = file?.id && nativePending.some((item) => (
@@ -68,7 +79,7 @@ export const UploadProvider = ({ children }) => {
     if (registry.current.isCancelled(id)) {
       return Promise.reject(new DOMException('업로드가 취소되었습니다.', 'AbortError'));
     }
-    updateTask(id, { name: file?.name || '업로드 파일', target, targetLabel: targetLabel(target), progress: 0, status: 'preparing', file, nativeId: file?.id || null, mediaId: null, error: null, retryUnavailable: false });
+    updateTask(id, { name: file?.name || '업로드 파일', target, targetLabel: targetLabel(target), ...bandTask, progress: 0, status: 'preparing', file, nativeId: file?.id || null, mediaId: null, error: null, retryUnavailable: false });
     return registry.current.startOnce(id, (attempt) => controllerUpload({
       ...options,
       key: id,
@@ -153,16 +164,16 @@ export const UploadProvider = ({ children }) => {
   // change cannot stop later selected files from being submitted.
   const uploadBatch = useCallback(async ({ items }) => {
     items.forEach((item) => {
-      const { key, file, songId, rehearsalId, memberId, title } = item.options;
-      const target = { songId, rehearsalId, memberId, title };
+      const { key, file, songId, rehearsalId, memberId, title, band } = item.options;
+      const target = { songId, rehearsalId, memberId, title, bandId: band?.id };
       const id = createUploadTaskId({ key, file, target });
       registry.current.registerSource(id, { ...item.options, key: id });
       if (file?.id) registry.current.claimNativeSource(file.id, id);
-      updateTask(id, { name: file?.name || '업로드 파일', target, targetLabel: targetLabel(target), progress: 0, status: 'pending', file, nativeId: file?.id || null, mediaId: null, error: null, retryUnavailable: false });
+      updateTask(id, { name: file?.name || '업로드 파일', target, targetLabel: targetLabel(target), bandId: band?.id ? Number(band.id) : undefined, bandName: band?.name, bandSlug: band?.slug || null, progress: 0, status: 'pending', file, nativeId: file?.id || null, mediaId: null, error: null, retryUnavailable: false });
     });
     const results = [];
     for (const item of items) {
-      const target = { songId: item.options.songId, rehearsalId: item.options.rehearsalId, memberId: item.options.memberId, title: item.options.title };
+      const target = { songId: item.options.songId, rehearsalId: item.options.rehearsalId, memberId: item.options.memberId, title: item.options.title, bandId: item.options.band?.id };
       const id = createUploadTaskId({ key: item.options.key, file: item.options.file, target });
       if (registry.current.isCancelled(id)) {
         results.push({ ...item, taskId: id, error: new DOMException('업로드가 취소되었습니다.', 'AbortError') });

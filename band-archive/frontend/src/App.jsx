@@ -232,9 +232,7 @@ const MainContent = () => {
 const LegacyApp = () => {
   return (
     <SongProvider>
-      <UploadProvider>
-        <MainContent />
-      </UploadProvider>
+      <MainContent />
     </SongProvider>
   );
 };
@@ -243,6 +241,7 @@ function App() {
   return (
     <AuthProvider>
       <BandProvider>
+        <UploadProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
@@ -263,6 +262,7 @@ function App() {
           </Route>
           <Route path="*" element={<LegacyApp />} />
         </Routes>
+        </UploadProvider>
       </BandProvider>
     </AuthProvider>
   );

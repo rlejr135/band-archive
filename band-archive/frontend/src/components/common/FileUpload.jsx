@@ -8,6 +8,7 @@ const FileUpload = ({
   songId,
   rehearsalId,
   memberId,
+  band,
   onMediaComplete,
   onUpload,
   accept = "audio/*,video/*,image/*,.pdf,.mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp",
@@ -63,7 +64,7 @@ const FileUpload = ({
         const media = onUpload
           ? await onUpload(file, (percent) => updateProgress(percent, 100))
           : await upload({
-            key: fileId, file, songId, rehearsalId, memberId,
+            key: fileId, file, songId, rehearsalId, memberId, band,
             onProgress: updateProgress,
             onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
           });
@@ -77,7 +78,7 @@ const FileUpload = ({
         if (error.name !== 'AbortError') setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'failed', error: error.message } }));
       }
     }
-  }, [memberId, onUpload, rehearsalId, songId, upload]);
+  }, [band, memberId, onUpload, rehearsalId, songId, upload]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();

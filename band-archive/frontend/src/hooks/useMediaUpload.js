@@ -1,8 +1,11 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { UploadContext } from '../context/UploadContext';
+import { useAuth } from '../context/AuthContext';
 import { API_URL } from '../services/api';
-import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadMediaFile } from '../services/mediaUploadManager';
+import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, getWebUploadTransport, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadBandMediaFile, uploadMediaFile } from '../services/mediaUploadManager';
 import { isNativeDurableVideo, mapUploadState } from '../services/uploadTransport';
+import { createBandUploadTransport } from '../services/bandUploadTransport';
+import { createAuthenticatedApiClient } from '../services/authApiClient';
 import { claimNativeProcessingRecovery, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -11,6 +14,8 @@ const processingChanged = (previous, next) => ['transcoding_status', 'audio_url'
   .some((field) => previous?.[field] !== next?.[field]);
 
 export function useUploadController() {
+  const { getAccessToken, refreshSession } = useAuth();
+  const authenticatedApi = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const activeRef = useRef(new Map());
   const recoveryRef = useRef(new Map());
   const [nativePending, setNativePending] = useState([]);
@@ -23,7 +28,9 @@ export function useUploadController() {
     active.rejectNative?.(new DOMException('업로드가 취소되었습니다.', 'AbortError'));
     if (active.nativeId) active.transport?.cancel({ id: active.nativeId }).catch(() => {});
     active.onStatus?.(mapUploadState('cancelled'));
-    abortMultipartUpload(active.session).catch(() => {});
+    if (active.session?.uploadMode !== 'direct') {
+      (active.transport?.abort ? active.transport.abort(active.session) : abortMultipartUpload(active.session)).catch(() => {});
+    }
   }, []);
   // This controller is mounted once by UploadProvider. User-started transfers must
   // outlive route components; only explicit cancel actions stop them.
@@ -34,14 +41,14 @@ export function useUploadController() {
   }, []);
   useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
 
-  const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media') => {
+  const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media', readProcessing = fetchMediaProcessing) => {
     let failures = 0;
     while (!active.cancelled && media?.id && processingStates.has(media.transcoding_status)) {
       onStatus(media.transcoding_status === 'processing' ? 'processing' : 'queued', media);
       await wait(Math.min(8000, 1000 * (2 ** failures)));
       if (active.cancelled) return media;
       try {
-        const next = normalizeMedia(await fetchMediaProcessing(media.id, kind));
+        const next = normalizeMedia(await readProcessing(media.id, kind));
         const updated = normalizeMedia({ ...media, ...next });
         failures = 0;
         if (processingChanged(media, updated)) onMediaUpdate?.(updated);
@@ -76,14 +83,16 @@ export function useUploadController() {
     });
   }, [nativePending,poll]);
 
-  const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, onProgress, onStatus, onMediaUpdate }) => {
+  const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, band, onProgress, onStatus, onMediaUpdate }) => {
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
     activeRef.current.set(key, active);
     try {
       const target = createUploadTarget({ songId, rehearsalId, memberId, title });
       onStatus(mapUploadState('preparing'));
       const transport = getUploadTransport();
-      if (transport.kind === 'native' && isNativeDurableVideo(file)) {
+      const bandId = Number(band?.id);
+      const isBandUpload = Number.isInteger(bandId) && bandId > 0;
+      if (!isBandUpload && transport.kind === 'native' && isNativeDurableVideo(file)) {
         active.transport = transport; active.nativeId = file.id;
         return await new Promise((resolve, reject) => {
           active.rejectNative = reject;
@@ -143,17 +152,24 @@ export function useUploadController() {
           begin();
         });
       }
-      const media = normalizeMedia(await uploadMediaFile({ file, target, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, isCancelled: () => active.cancelled, registerXhr: (xhr) => { if (active.cancelled) xhr.abort(); else active.xhrs.add(xhr); } }));
+      const bandTransport = isBandUpload
+        ? createBandUploadTransport({ bandId, api: authenticatedApi, putPart: getWebUploadTransport().putPart })
+        : null;
+      active.transport = bandTransport || transport;
+      const media = normalizeMedia(await (isBandUpload ? uploadBandMediaFile : uploadMediaFile)({ file, target, transport: bandTransport || undefined, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, isCancelled: () => active.cancelled, registerXhr: (xhr) => { if (active.cancelled) xhr.abort(); else active.xhrs.add(xhr); } }));
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       onProgress(file.size, file.size); onStatus('queued', media); onMediaUpdate?.(media);
-      const result = await poll(media, active, onStatus, onMediaUpdate, target.kind);
+      const readProcessing = isBandUpload
+        ? (mediaId, kind) => authenticatedApi.requestJson(`/api/v2/bands/${bandId}/${kind === 'personal_log' ? 'personal-logs' : 'media'}/${mediaId}/processing`)
+        : fetchMediaProcessing;
+      const result = await poll(media, active, onStatus, onMediaUpdate, target.kind, readProcessing);
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       return result;
     } catch (error) {
       if (!active.cancelled) onStatus('failed', { error: error.message });
       throw error;
     } finally { activeRef.current.delete(key); }
-  }, [poll]);
+  }, [authenticatedApi, poll]);
 
   const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media', taskKey = null) => {
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };

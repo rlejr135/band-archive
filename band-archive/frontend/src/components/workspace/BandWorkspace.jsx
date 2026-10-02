@@ -6,6 +6,9 @@ import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload, suggestionPayload, votePayload } from '../../services/bandWorkspaceApi.js';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import { MediaEngagement } from './MediaEngagement.jsx';
+import UploadCenter from '../common/UploadCenter.jsx';
+import FileUpload from '../common/FileUpload.jsx';
+import { UploadContext } from '../../context/UploadContext.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
 import logo from '../../assets/logo.png';
 import './BandWorkspace.css';
@@ -23,6 +26,11 @@ const useWorkspace = () => {
   if (!value) throw new Error('useWorkspace must be used in BandWorkspace');
   return value;
 };
+
+// The application shell always supplies this context. Keeping this boundary
+// inert without it also lets read-only embedded/SSR workspace surfaces remain
+// genuinely read-only instead of creating an unscoped upload task.
+const BandUploadInput = (props) => useContext(UploadContext) ? <FileUpload {...props} /> : null;
 
 const requestOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
 const genericError = '정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
@@ -88,6 +96,7 @@ export const BandWorkspace = () => {
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/suggestions`}>추천곡</NavLink>
         </nav>
         <div className="workspace-actions">
+          <UploadCenter />
           {switchable && <label className="band-switcher">밴드 전환<select value={String(activeBands.some((item) => item.id === state.band.id) ? state.band.id : '')} onChange={switchBand}><option value="" disabled>밴드 선택</option>{activeBands.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
           <button className="nav-btn" onClick={() => navigate('/bands')}>내 밴드</button>
           {user ? <button className="nav-btn" onClick={async () => { await signOut(); navigate('/', { replace: true }); }}>로그아웃</button> : <button className="nav-btn" onClick={() => navigate('/login')}>로그인</button>}
@@ -200,6 +209,7 @@ const ContentDetail = ({ kind, item, onEdit, onDeleted }) => {
   const remove = async () => { if (!window.confirm(`이 ${kind === 'songs' ? '곡' : '합주'}을 삭제할까요?`)) return; setDeleting(true); setDeleteError(''); try { await api.requestJson(kind === 'songs' ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.rehearsal(band.id, item.id), { method: 'DELETE' }); onDeleted(); } catch { setDeleting(false); setDeleteError('삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.'); } };
   return <article><div className="detail-heading"><div><h2>{item.title}</h2><p>{kind === 'songs' ? item.artist : `${item.date}${item.time ? ` · ${item.time}` : ''}`}</p></div>{item.can_edit && <button className="secondary-btn" onClick={onEdit}>수정</button>}{item.can_delete && <button className="danger-btn" disabled={deleting} onClick={remove}>{deleting ? '삭제 중…' : '삭제'}</button>}</div>
     {deleteError && <p className="workspace-error" role="alert">{deleteError}</p>}{kind === 'songs' ? <dl><dt>상태</dt><dd>{item.status || '-'}</dd><dt>장르</dt><dd>{item.genre || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl> : <dl><dt>장소</dt><dd>{item.location || '-'}</dd><dt>연결된 곡</dt><dd>{item.songs?.map((song) => song.title).join(', ') || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl>}
+    {kind === 'songs' && band.membership && <BandUploadInput band={band} songId={item.id} onMediaComplete={refreshAuthoritativeMedia} />}
     <h3>재생 미디어</h3>{mediaState.loading && mediaState.pages.length === 0 ? <p>미디어를 불러오는 중입니다…</p> : mediaState.error && mediaState.pages.length === 0 ? <p className="workspace-muted">{mediaState.error}</p> : mediaState.pages.length === 0 ? <p className="workspace-muted">표시할 미디어가 없습니다. 업로드는 준비 중입니다.</p> : <><div className="media-list">{mediaState.pages.flatMap((page) => page.media.map((media) => <PlaybackMedia key={media.id} media={media} band={band} api={api} onMediaUpdate={updateMedia} onAuthoritativeRefresh={refreshAuthoritativeMedia} onStale={() => { if (takeOneStaleRefresh(staleAttempts.current, page.offset, media.id)) loadMedia(page.offset); }} />))}</div>{mediaState.pagination?.has_more && <button className="secondary-btn" disabled={mediaState.loading} onClick={() => loadMedia(mediaState.pagination.next_offset)}>{mediaState.loading ? '미디어를 불러오는 중…' : '미디어 더 불러오기'}</button>}{mediaState.error && <p className="workspace-muted" role="alert">{mediaState.error}</p>}</>}
   </article>;
 };

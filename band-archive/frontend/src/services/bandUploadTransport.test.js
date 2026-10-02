@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBandUploadTransport } from './bandUploadTransport.js';
 import { MULTIPART_THRESHOLD_BYTES, uploadBandMediaFile } from './mediaUploadManager.js';
+import { createAuthenticatedApiClient } from './authApiClient.js';
 
 test('band upload transport keeps direct and multipart capability requests under its immutable v2 band URL', async () => {
   const calls = [];
@@ -46,4 +47,23 @@ test('small band files use direct presign PUT then authenticated completion with
   ]);
   assert.deepEqual(progress, [[MULTIPART_THRESHOLD_BYTES - 1, MULTIPART_THRESHOLD_BYTES - 1]]);
   assert.equal(result.media.id, 9);
+});
+
+test('band initiate refreshes a rejected bearer and retries the same immutable endpoint once', async () => {
+  const headers = [];
+  const api = createAuthenticatedApiClient({
+    apiUrl: 'https://api.example', getAccessToken: async () => 'expired', refreshSession: async () => 'fresh',
+    fetchImpl: async (url, options) => {
+      headers.push({ url, authorization: options.headers.Authorization });
+      return headers.length === 1
+        ? { ok: false, status: 401, json: async () => ({}) }
+        : { ok: true, status: 201, json: async () => ({ session_id: 'd2', upload_capability_token: 'cap', upload_url: 'https://r2/direct' }) };
+    },
+  });
+  const transport = createBandUploadTransport({ bandId: 5, api, putPart: async () => {} });
+  await transport.initiateDirect({ filename: 'refresh.mp3', declared_bytes: 4, song_id: 3 });
+  assert.deepEqual(headers, [
+    { url: 'https://api.example/api/v2/bands/5/uploads/direct/initiate', authorization: 'Bearer expired' },
+    { url: 'https://api.example/api/v2/bands/5/uploads/direct/initiate', authorization: 'Bearer fresh' },
+  ]);
 });
