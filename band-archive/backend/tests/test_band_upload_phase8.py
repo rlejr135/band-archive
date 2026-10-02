@@ -1,17 +1,22 @@
 """Authenticated band multipart-upload contracts for Phase 8."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
 
 from botocore.exceptions import ClientError
 import pytest
 
-from direct_upload_service import complete_direct_session, expire_direct_session_if_needed
+from app import create_app
+from config import TestingConfig
+from direct_upload_service import (complete_direct_session, create_direct_session,
+                                   expire_direct_session_if_needed)
 from extensions import db
 from multipart_upload_service import recover_sessions
 from routes.uploads import _v2_direct_item, recover_multipart_upload_sessions
 from errors import ValidationError
-from models import (Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
-                    MultipartUploadSession, PersonalLog, Song)
+from models import (AppUser, Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
+                    MultipartUploadSession, PersonalLog, Song, TenantBackfillState)
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer
 from tests.test_v2_content_writes import _band_id, principals, write_client
@@ -281,6 +286,117 @@ def test_direct_complete_and_expiry_claims_allow_exactly_one_terminal_path(
         with pytest.raises(ValidationError):
             complete_direct_session(db.session.get(DirectUploadSession, session.id), lambda key: 10, _v2_direct_item)
     assert len(deleted) == 1
+
+
+def test_file_sqlite_direct_complete_and_expiry_claims_are_mutually_exclusive(tmp_path, monkeypatch):
+    """Each terminal winner is exercised with an independent SQLite connection."""
+    db_path = tmp_path / 'direct-complete-expiry-race.db'
+
+    class FileConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path.as_posix()}'
+
+    app = create_app(FileConfig, start_worker=False)
+    try:
+        with app.app_context():
+            db.drop_all(); db.create_all()
+            user = AppUser(supabase_user_id='44444444-4444-4444-4444-444444444444',
+                           email='direct-race@example.com')
+            band = Band(name='direct race', slug='direct-race', default_visibility='PUBLIC')
+            db.session.add_all((user, band)); db.session.flush()
+            membership = BandMembership(band_id=band.id, user_id=user.id, role='member', status='active')
+            db.session.add(membership); db.session.flush()
+            db.session.add(TenantBackfillState(key='phase4_tenant_scope', status='validated'))
+            song = Song(band_id=band.id, created_by_membership_id=membership.id,
+                        visibility='PUBLIC', title='direct race', artist='band')
+            db.session.add(song); db.session.commit()
+            band_id, membership_id, song_id = band.id, membership.id, song.id
+
+        def start_expired_session(suffix):
+            with app.app_context():
+                session, _ = create_direct_session(
+                    band_id=band_id, created_by_membership_id=membership_id,
+                    kind='media', object_key=f'bands/{band_id}/media/{suffix}.mp4',
+                    original_filename=f'{suffix}.mp4', content_type='video/mp4', declared_bytes=10,
+                    song_id=song_id, status='initiated',
+                )
+                session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+                db.session.commit()
+                return session.id
+
+        def create_item(session, actual_size):
+            item = Media(
+                band_id=session.band_id, created_by_membership_id=session.created_by_membership_id,
+                visibility='PUBLIC', song_id=session.song_id,
+                filename=session.object_key.rsplit('/', 1)[1], original_filename=session.original_filename,
+                object_key=session.object_key, file_type='video', file_size=actual_size,
+            )
+            db.session.add(item); db.session.flush()
+            return item
+
+        # Completion claims first, then the expiry worker observes `completing`.
+        complete_id = start_expired_session('complete-wins')
+        complete_claimed, release_complete = Event(), Event()
+
+        def blocking_object_size(_key):
+            complete_claimed.set()
+            assert release_complete.wait(5)
+            return 10
+
+        def complete_request():
+            with app.app_context():
+                session = db.session.get(DirectUploadSession, complete_id)
+                return complete_direct_session(session, blocking_object_size, create_item)[1]
+
+        def expiry_request(session_id):
+            with app.app_context():
+                return expire_direct_session_if_needed(db.session.get(DirectUploadSession, session_id))
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            complete_future = pool.submit(complete_request)
+            assert complete_claimed.wait(5)
+            expiry_future = pool.submit(expiry_request, complete_id)
+            assert expiry_future.result(timeout=5) is False
+            release_complete.set()
+            assert complete_future.result(timeout=5) == 201
+        with app.app_context():
+            assert db.session.get(DirectUploadSession, complete_id).status == 'completed'
+            assert Media.query.filter_by(band_id=band_id).count() == 1
+
+        # Expiry claims first and blocks at object deletion; completion must get a 409.
+        expiry_id = start_expired_session('expiry-wins')
+        expiry_claimed, release_expiry = Event(), Event()
+        deleted = []
+
+        def blocking_delete(key):
+            deleted.append(key)
+            expiry_claimed.set()
+            assert release_expiry.wait(5)
+
+        monkeypatch.setattr(storage, 'delete', blocking_delete)
+
+        def rejected_complete_request():
+            with app.app_context():
+                session = db.session.get(DirectUploadSession, expiry_id)
+                try:
+                    complete_direct_session(session, lambda _key: 10, create_item)
+                except ValidationError as exc:
+                    return exc.status_code
+                return 201
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            expiry_future = pool.submit(expiry_request, expiry_id)
+            assert expiry_claimed.wait(5)
+            complete_future = pool.submit(rejected_complete_request)
+            assert complete_future.result(timeout=5) == 409
+            release_expiry.set()
+            assert expiry_future.result(timeout=5) is True
+        with app.app_context():
+            assert db.session.get(DirectUploadSession, expiry_id).status == 'expired'
+            assert Media.query.filter_by(band_id=band_id).count() == 1
+        assert deleted == [f'bands/{band_id}/media/expiry-wins.mp4']
+    finally:
+        with app.app_context():
+            db.session.remove(); db.drop_all()
 
 
 def test_startup_recovers_interrupted_direct_completion_without_touching_the_object(

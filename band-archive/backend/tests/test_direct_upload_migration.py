@@ -5,6 +5,7 @@ import importlib
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+import pytest
 from sqlalchemy import create_engine, inspect
 
 
@@ -77,6 +78,22 @@ def test_direct_upload_expiry_cleanup_status_migrates_on_sqlite_and_postgres(mon
             _run_revision(connection, expiry_revision.upgrade)
             checks = inspect(connection).get_check_constraints('direct_upload_session')
             assert any('expiring' in (check['sqltext'] or '') for check in checks)
+            connection.exec_driver_sql("""
+                INSERT INTO direct_upload_session (
+                    id, band_id, created_by_membership_id, kind, object_key,
+                    original_filename, content_type, declared_bytes, song_id,
+                    status, capability_token_hash, created_at, expires_at
+                ) VALUES (
+                    'cleanup-in-progress', 1, 1, 'media', 'bands/1/media/cleanup.mp4',
+                    'cleanup.mp4', 'video/mp4', 10, 1,
+                    'expiring', 'capability', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+            """)
+            with pytest.raises(RuntimeError, match='expiry cleanup is in progress'):
+                _run_revision(connection, expiry_revision.downgrade)
+            connection.exec_driver_sql(
+                "DELETE FROM direct_upload_session WHERE id = 'cleanup-in-progress'"
+            )
             _run_revision(connection, expiry_revision.downgrade)
             checks = inspect(connection).get_check_constraints('direct_upload_session')
             assert all('expiring' not in (check['sqltext'] or '') for check in checks)

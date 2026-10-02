@@ -36,5 +36,19 @@ def upgrade():
     _replace_status_check(_OLD_STATUS, _NEW_STATUS)
 
 
+def _assert_downgrade_safe():
+    """Do not recreate the v09 check while an in-flight cleanup remains."""
+    if op.get_context().as_sql:
+        return
+    count = op.get_bind().execute(sa.text(
+        "SELECT count(*) FROM direct_upload_session WHERE status = 'expiring'"
+    )).scalar_one()
+    if count:
+        raise RuntimeError(
+            'Direct-upload expiry cleanup is in progress; retry downgrade after it completes.'
+        )
+
+
 def downgrade():
+    _assert_downgrade_safe()
     _replace_status_check(_NEW_STATUS, _OLD_STATUS)
