@@ -327,12 +327,35 @@ def complete_session(session, object_size, create_item):
 def abort_session(session):
     if session.status in ('aborted', 'completed', 'expired'):
         return session.status
-    if session.status != 'initiated':
-        raise ValidationError(f'Upload session is {session.status}.', status_code=409)
+    # Claim the abort before touching R2.  A separate complete request may
+    # have loaded this session while it was still ``initiated``; the
+    # conditional transition makes that stale read lose instead of letting an
+    # R2 abort race a later completed record.
+    spec = spec_for_session(session)
+    claimed = spec.session_model.query.filter_by(id=session.id, status='initiated').update({
+        'status': 'aborting',
+    })
+    db.session.commit()
+    if not claimed:
+        current = db.session.get(spec.session_model, session.id)
+        if current and current.status in ('aborted', 'completed', 'expired'):
+            return current.status
+        status = current.status if current else 'missing'
+        raise ValidationError(f'Upload session is {status}.', status_code=409)
+    session = db.session.get(spec.session_model, session.id)
     try:
         storage.abort_multipart_upload(session.object_key, session.r2_upload_id)
     except Exception as exc:
+        # Preserve the pre-existing retry behavior: a failed R2 abort never
+        # consumes the session.  Guard the reset so no future state can be
+        # overwritten by this error path.
+        spec.session_model.query.filter_by(id=session.id, status='aborting').update({
+            'status': 'initiated',
+        })
+        db.session.commit()
         raise ValidationError('Multipart upload could not be aborted.') from exc
-    session.status = 'aborted'
+    spec.session_model.query.filter_by(id=session.id, status='aborting').update({
+        'status': 'aborted',
+    })
     db.session.commit()
-    return session.status
+    return 'aborted'

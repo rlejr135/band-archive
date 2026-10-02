@@ -1,7 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
 
+from app import create_app
+from config import TestingConfig
 from extensions import db
-from models import Media, MultipartUploadSession
+from models import Band, Media, MultipartUploadSession, Song, TenantBackfillState
 from routes.uploads import MAX_VIDEO_BYTES, MULTIPART_PART_SIZE, recover_multipart_upload_sessions
 from storage import storage
 
@@ -136,6 +140,18 @@ def test_abort_is_idempotent_and_expired_session_rejects_parts(client, app, monk
     assert client.post(f'/uploads/multipart/{expiring_id}/abort', headers=expiring_headers).get_json()['status'] == 'expired'
 
 
+def test_failed_r2_abort_restores_the_retryable_initiated_state(client, app, monkeypatch):
+    song_id = _song(client)
+    session, headers = _session(client, song_id)
+    monkeypatch.setattr(storage, 'abort_multipart_upload',
+                        lambda *args: (_ for _ in ()).throw(RuntimeError('temporary R2 failure')))
+    assert client.post(f"/uploads/multipart/{session['session_id']}/abort", headers=headers).status_code == 400
+    with app.app_context():
+        assert db.session.get(MultipartUploadSession, session['session_id']).status == 'initiated'
+    monkeypatch.setattr(storage, 'abort_multipart_upload', lambda *args: None)
+    assert client.post(f"/uploads/multipart/{session['session_id']}/abort", headers=headers).status_code == 200
+
+
 def test_session_status_returns_target_acknowledgements_and_rejects_wrong_token(client):
     song_id = _song(client)
     session, headers = _session(client, song_id, declared_bytes=32)
@@ -182,3 +198,64 @@ def test_single_complete_uses_head_size_not_client_metadata(client, app, monkeyp
     assert mismatch.status_code == 400
     with app.app_context():
         assert Media.query.count() == 0
+
+
+def test_file_sqlite_abort_claim_blocks_a_racing_complete(tmp_path, monkeypatch):
+    """One atomic claim wins even when independent clients overlap at R2."""
+    db_path = tmp_path / 'abort-complete-race.db'
+
+    class FileConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path.as_posix()}'
+
+    app = create_app(FileConfig, start_worker=False)
+    try:
+        with app.app_context():
+            db.drop_all(); db.create_all()
+            band = Band(name='legacy', slug='legacy-race', default_visibility='PUBLIC',
+                        storage_quota_bytes=1024, is_legacy_import=True)
+            db.session.add(band); db.session.flush()
+            db.session.add(TenantBackfillState(key='phase4_tenant_scope', status='validated'))
+            song = Song(band_id=band.id, visibility='PUBLIC', title='race', artist='band')
+            db.session.add(song); db.session.commit()
+            song_id = song.id
+        with app.test_client() as setup_client:
+            started = _initiate(setup_client, song_id, declared_bytes=32).get_json()
+            headers = {started['capability_header']: started['upload_capability_token']}
+            _issue_and_ack(setup_client, started['session_id'], headers, bytes=32)
+
+        abort_entered, release_abort = Event(), Event()
+        r2_calls = []
+
+        def abort_r2(key, upload_id):
+            r2_calls.append(('abort', key))
+            abort_entered.set()
+            assert release_abort.wait(5)
+
+        monkeypatch.setattr(storage, 'abort_multipart_upload', abort_r2)
+        monkeypatch.setattr(storage, 'complete_multipart_upload',
+                            lambda *args: r2_calls.append(('complete', args[0])))
+        monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 32})
+
+        def abort_request():
+            with app.test_client() as race_client:
+                return race_client.post(f"/uploads/multipart/{started['session_id']}/abort", headers=headers).status_code
+
+        def complete_request():
+            with app.test_client() as race_client:
+                return race_client.post(f"/uploads/multipart/{started['session_id']}/complete", headers=headers).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            abort_future = pool.submit(abort_request)
+            assert abort_entered.wait(5)
+            complete_future = pool.submit(complete_request)
+            assert complete_future.result(timeout=5) == 409
+            release_abort.set()
+            assert abort_future.result(timeout=5) == 200
+        assert r2_calls == [('abort', f"media/{started['filename']}")]
+        with app.app_context():
+            session = db.session.get(MultipartUploadSession, started['session_id'])
+            assert session.status == 'aborted'
+            assert Media.query.count() == 0
+    finally:
+        with app.app_context():
+            db.session.remove(); db.drop_all()
