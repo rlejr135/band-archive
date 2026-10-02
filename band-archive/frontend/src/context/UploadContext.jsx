@@ -125,6 +125,13 @@ const UploadTaskProvider = ({ children, userId }) => {
       return { outcome: 'resumed', media: null };
     }
     if (task.mediaId && task.status === 'processing_failed') {
+      // The legacy retry route is deliberately not a fallback for a band-scoped
+      // task: it has no v2 band URL to preserve this task's immutable scope.
+      if (task.bandId) {
+        const error = '이 밴드 업로드의 오디오 재시도는 아직 밴드 범위 API를 지원하지 않습니다. 기존 v1 경로로 전환하지 않았습니다.';
+        updateTask(id, { status: 'processing_failed', error, retryUnavailable: true });
+        return { outcome: 'failed', media: null, error };
+      }
       updateTask(id, { status: 'queued', error: null });
       try {
         const media = await controllerRetryAudio(task.mediaId,

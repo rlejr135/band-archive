@@ -51,7 +51,7 @@ const UploadCenter = () => {
         {tasks.length === 0 ? <div className="upload-center-empty">진행하거나 최근 완료된 업로드가 없습니다.</div> : <ul className="upload-center-list">
           {tasks.slice().reverse().map((task) => <li key={task.id} className={`upload-center-item ${task.status}`}>
             <div className="upload-center-main"><strong>{task.name}</strong><span>{task.bandName ? `${task.bandName} · ${task.targetLabel}` : task.targetLabel}</span><span>{getUploadStatusLabel(task.status, task.progress)}{task.status === 'uploading' ? ` (${task.progress || 0}%)` : ''}</span>{task.status === 'uploading' && <progress value={task.progress || 0} max="100" aria-label={`${task.name} 업로드 ${task.progress || 0}%`} />}{task.error && <span className="upload-center-error">{task.error}</span>}</div>
-            <div className="upload-center-actions">{isUploadCancellable(task.status) && <button type="button" onClick={() => cancel(task.id)}>취소</button>}{['failed', 'processing_failed'].includes(task.status) && <button type="button" onClick={() => retryTask(task.id)}>재시도</button>}{task.mediaId && <button type="button" onClick={() => goToTarget(task)}>대상 열기</button>}</div>
+            <div className="upload-center-actions">{isUploadCancellable(task.status) && <button type="button" onClick={() => cancel(task.id)}>취소</button>}{['failed', 'processing_failed'].includes(task.status) && !task.retryUnavailable && <button type="button" onClick={() => retryTask(task.id)}>재시도</button>}{task.mediaId && <button type="button" onClick={() => goToTarget(task)}>대상 열기</button>}</div>
           </li>)}
         </ul>}
         {tasks.some((task) => !isUploadInProgress(task.status)) && <button type="button" className="upload-center-clear" onClick={clearHistory}>완료·실패 기록 지우기</button>}
