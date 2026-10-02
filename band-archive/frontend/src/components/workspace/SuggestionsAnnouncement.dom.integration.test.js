@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/globals */
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -13,6 +12,7 @@ Object.assign(globalThis, { window: dom.window, document: dom.window.document, H
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
+const user = userEvent.setup({ document: dom.window.document });
 
 let vite; let workspace; let auth; let bands;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
@@ -30,8 +30,8 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
   globalThis.fetch = async (url, options = {}) => {
     const method = options.method || 'GET';
     if (url.includes('/by-slug/team')) return response({ band: { id: 41, slug: 'team', name: '팀', default_visibility: 'MEMBERS', membership: { id: 4, role: 'member', status: 'active' } } });
-    if (url.includes('/suggestions?')) return response({ suggestions: entries, pagination: { has_more: false } });
-    if (url.endsWith('/suggestions') && method === 'POST') { const body = JSON.parse(options.body); writes.push({ method, body }); entries = [{ id: 9, ...body, status: 'pending', vote_score: 0, viewer_vote: 0, can_edit: true, can_delete: true, can_manage: false }]; return response({ suggestion: entries[0] }, 201); }
+    if (url.includes('/suggestions?') && method === 'GET') return response({ suggestions: entries, pagination: { has_more: false } });
+    if (url.includes('/suggestions?') && method === 'POST') { const body = JSON.parse(options.body); writes.push({ method, body }); entries = [{ id: 9, ...body, status: 'pending', vote_score: 0, viewer_vote: 0, can_edit: true, can_delete: true, can_manage: false }]; return response({ suggestion: entries[0] }, 201); }
     if (url.endsWith('/suggestions/9') && method === 'PATCH') { const body = JSON.parse(options.body); writes.push({ method, body }); entries = [{ ...entries[0], ...body }]; return response({ suggestion: entries[0] }); }
     if (url.endsWith('/suggestions/9') && method === 'DELETE') { writes.push({ method }); entries = []; return response({ deleted: true, id: 9 }); }
     throw new Error(`unexpected ${method} ${url}`);
@@ -39,14 +39,14 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
   try {
     const view = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member() }));
     await view.findByText('표시할 추천곡이 없습니다.');
-    await userEvent.click(view.getByRole('button', { name: '추천곡 추가' }));
-    await userEvent.type(view.getByLabelText('제목'), '새 곡'); await userEvent.type(view.getByLabelText('아티스트'), '연주자'); await userEvent.type(view.getByLabelText('참고 링크'), 'https://example.test/song'); await userEvent.type(view.getByLabelText('메모'), '연습용');
-    await userEvent.click(view.getByRole('button', { name: '저장' })); await view.findByText('새 곡');
+    await user.click(view.getByRole('button', { name: '추천곡 추가' }));
+    await user.type(view.getByLabelText('제목'), '새 곡'); await user.type(view.getByLabelText('아티스트'), '연주자'); await user.type(view.getByLabelText('참고 링크'), 'https://example.test/song'); await user.type(view.getByLabelText('메모'), '연습용');
+    await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('새 곡');
     assert.deepEqual(writes[0], { method: 'POST', body: { title: '새 곡', artist: '연주자', link: 'https://example.test/song', memo: '연습용', visibility: 'MEMBERS' } });
-    await userEvent.click(view.getByRole('button', { name: '수정' }));
-    const title = view.getByLabelText('제목'); await userEvent.clear(title); await userEvent.type(title, '수정 곡'); await userEvent.click(view.getByRole('button', { name: '저장' })); await view.findByText('수정 곡');
+    await user.click(view.getByRole('button', { name: '수정' }));
+    const title = view.getByLabelText('제목'); await user.clear(title); await user.type(title, '수정 곡'); await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('수정 곡');
     assert.equal(writes[1].method, 'PATCH'); assert.equal(writes[1].body.title, '수정 곡');
-    await userEvent.click(view.getByRole('button', { name: '삭제' })); await view.findByText('표시할 추천곡이 없습니다.'); assert.equal(writes[2].method, 'DELETE');
+    await user.click(view.getByRole('button', { name: '삭제' })); await view.findByText('표시할 추천곡이 없습니다.'); assert.equal(writes[2].method, 'DELETE');
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
 });
 
@@ -66,7 +66,7 @@ test('suggestion voting refetches authoritative viewer state, blocks double clic
     const up = view.getByRole('button', { name: '추천' }); fireEvent.click(up); fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 1)); assert.deepEqual(writes[0], { method: 'PUT', body: { value: 1 } });
     await act(async () => { firstVote.resolve(response({}, 500)); }); await view.findByRole('alert'); assert.equal(up.disabled, false);
     fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 2)); await waitFor(() => assert.equal(view.getByRole('button', { name: '추천' }).getAttribute('aria-pressed'), 'true'));
-    await userEvent.click(view.getByRole('button', { name: '곡으로 진행' })); await waitFor(() => assert.deepEqual(writes[2], { method: 'POST', body: { visibility: 'MEMBERS' } })); assert.ok(reads >= 3);
+    await user.click(view.getByRole('button', { name: '곡으로 진행' })); await waitFor(() => assert.deepEqual(writes[2], { method: 'POST', body: { visibility: 'MEMBERS' } })); assert.ok(reads >= 3);
     view.unmount(); manager = false;
     const nonManager = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('other') })); await nonManager.findByText('투표 곡'); assert.equal(nonManager.queryByRole('button', { name: '곡으로 진행' }), null); nonManager.unmount();
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
@@ -83,7 +83,7 @@ test('announcement save prevents double submits, exposes retryable failure, and 
     throw new Error(`unexpected ${method} ${url}`);
   };
   try {
-    const view = render(createElement(RouteApp, { entry: '/bands/notices', authValue: member(), dashboard: true })); await view.findByText('기존 공지'); await userEvent.click(view.getByRole('button', { name: '공지 수정' })); const content = view.getByLabelText('공지 내용'); await userEvent.clear(content); await userEvent.type(content, '바뀐 공지'); const save = view.getByRole('button', { name: '저장' }); fireEvent.click(save); fireEvent.click(save); await waitFor(() => assert.equal(writes.length, 1)); await act(async () => { firstSave.resolve(response({}, 500)); }); await view.findByRole('alert'); fireEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 2)); await view.findByText('서버 확정 공지'); assert.deepEqual(writes, [{ content: '바뀐 공지', visibility: 'PUBLIC' }, { content: '바뀐 공지', visibility: 'PUBLIC' }]);
+    const view = render(createElement(RouteApp, { entry: '/bands/notices', authValue: member(), dashboard: true })); await view.findByText('기존 공지'); await user.click(view.getByRole('button', { name: '공지 수정' })); const content = view.getByLabelText('공지 내용'); await user.clear(content); await user.type(content, '바뀐 공지'); const save = view.getByRole('button', { name: '저장' }); fireEvent.click(save); fireEvent.click(save); await waitFor(() => assert.equal(writes.length, 1)); await act(async () => { firstSave.resolve(response({}, 500)); }); await view.findByRole('alert'); fireEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 2)); await view.findByText('서버 확정 공지'); assert.deepEqual(writes, [{ content: '바뀐 공지', visibility: 'PUBLIC' }, { content: '바뀐 공지', visibility: 'PUBLIC' }]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
