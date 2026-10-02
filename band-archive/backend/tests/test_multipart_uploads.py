@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event
 
+from botocore.exceptions import ClientError
 from app import create_app
 from config import TestingConfig
 from extensions import db
@@ -152,6 +153,31 @@ def test_failed_r2_abort_restores_the_retryable_initiated_state(client, app, mon
     assert client.post(f"/uploads/multipart/{session['session_id']}/abort", headers=headers).status_code == 200
 
 
+def test_startup_recovers_aborting_sessions_without_reviving_their_upload_ids(client, app, monkeypatch):
+    song_id = _song(client)
+    session, _headers = _session(client, song_id)
+    with app.app_context():
+        db.session.get(MultipartUploadSession, session['session_id']).status = 'aborting'
+        db.session.commit()
+    calls = []
+    monkeypatch.setattr(storage, 'abort_multipart_upload', lambda key, upload_id: calls.append((key, upload_id)))
+    recover_multipart_upload_sessions(app)
+    with app.app_context():
+        assert db.session.get(MultipartUploadSession, session['session_id']).status == 'aborted'
+    assert calls == [(f"media/{session['filename']}", 'mock-upload-id')]
+
+    second, _headers = _session(client, song_id)
+    with app.app_context():
+        db.session.get(MultipartUploadSession, second['session_id']).status = 'aborting'
+        db.session.commit()
+    monkeypatch.setattr(storage, 'abort_multipart_upload', lambda *args: (_ for _ in ()).throw(
+        ClientError({'Error': {'Code': 'NoSuchUpload'}}, 'AbortMultipartUpload')
+    ))
+    recover_multipart_upload_sessions(app)
+    with app.app_context():
+        assert db.session.get(MultipartUploadSession, second['session_id']).status == 'aborted'
+
+
 def test_session_status_returns_target_acknowledgements_and_rejects_wrong_token(client):
     song_id = _song(client)
     session, headers = _session(client, song_id, declared_bytes=32)
@@ -256,6 +282,65 @@ def test_file_sqlite_abort_claim_blocks_a_racing_complete(tmp_path, monkeypatch)
             session = db.session.get(MultipartUploadSession, started['session_id'])
             assert session.status == 'aborted'
             assert Media.query.count() == 0
+    finally:
+        with app.app_context():
+            db.session.remove(); db.drop_all()
+
+
+def test_file_sqlite_complete_claim_blocks_a_racing_abort(tmp_path, monkeypatch):
+    """The opposite winner also leaves one terminal operation and one 409."""
+    db_path = tmp_path / 'complete-abort-race.db'
+
+    class FileConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path.as_posix()}'
+
+    app = create_app(FileConfig, start_worker=False)
+    try:
+        with app.app_context():
+            db.drop_all(); db.create_all()
+            band = Band(name='legacy complete', slug='legacy-complete-race', default_visibility='PUBLIC',
+                        storage_quota_bytes=1024, is_legacy_import=True)
+            db.session.add(band); db.session.flush()
+            db.session.add(TenantBackfillState(key='phase4_tenant_scope', status='validated'))
+            song = Song(band_id=band.id, visibility='PUBLIC', title='complete race', artist='band')
+            db.session.add(song); db.session.commit(); song_id = song.id
+        with app.test_client() as setup_client:
+            started = _initiate(setup_client, song_id, declared_bytes=32).get_json()
+            headers = {started['capability_header']: started['upload_capability_token']}
+            _issue_and_ack(setup_client, started['session_id'], headers, bytes=32)
+
+        complete_entered, release_complete = Event(), Event()
+        r2_calls = []
+
+        def complete_r2(key, upload_id, parts):
+            r2_calls.append(('complete', key))
+            complete_entered.set()
+            assert release_complete.wait(5)
+
+        monkeypatch.setattr(storage, 'complete_multipart_upload', complete_r2)
+        monkeypatch.setattr(storage, 'abort_multipart_upload',
+                            lambda key, upload_id: r2_calls.append(('abort', key)))
+        monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 32})
+
+        def complete_request():
+            with app.test_client() as race_client:
+                return race_client.post(f"/uploads/multipart/{started['session_id']}/complete", headers=headers).status_code
+
+        def abort_request():
+            with app.test_client() as race_client:
+                return race_client.post(f"/uploads/multipart/{started['session_id']}/abort", headers=headers).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            complete_future = pool.submit(complete_request)
+            assert complete_entered.wait(5)
+            abort_future = pool.submit(abort_request)
+            assert abort_future.result(timeout=5) == 409
+            release_complete.set()
+            assert complete_future.result(timeout=5) == 201
+        assert r2_calls == [('complete', f"media/{started['filename']}")]
+        with app.app_context():
+            assert db.session.get(MultipartUploadSession, started['session_id']).status == 'completed'
+            assert Media.query.count() == 1
     finally:
         with app.app_context():
             db.session.remove(); db.drop_all()

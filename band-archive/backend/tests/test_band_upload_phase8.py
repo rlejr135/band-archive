@@ -1,6 +1,7 @@
 """Authenticated band multipart-upload contracts for Phase 8."""
 
 from extensions import db
+from multipart_upload_service import recover_sessions
 from models import Band, BandMembership, Media, MultipartUploadSession, Song
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer
@@ -82,3 +83,25 @@ def test_capability_continues_parts_but_complete_rechecks_current_membership(
         media = Media.query.filter_by(band_id=band_id).one()
         assert media.created_by_membership_id == membership_id
         assert media.object_key == f'bands/{band_id}/media/{session["filename"]}'
+
+
+def test_unrecovered_aborting_session_still_reserves_band_quota(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    song_id, _membership_id = _song(access_app, band_id)
+    with access_app.app_context():
+        db.session.get(Band, band_id).storage_quota_bytes = 15
+        db.session.commit()
+    monkeypatch.setattr(storage, 'create_multipart_upload', lambda key, content_type: 'phase8')
+    started = _initiate(write_client, band_id, principals['member'], song_id)
+    assert started.status_code == 201
+    with access_app.app_context():
+        db.session.get(MultipartUploadSession, started.get_json()['session_id']).status = 'aborting'
+        db.session.commit()
+        monkeypatch.setattr(storage, 'abort_multipart_upload',
+                            lambda *args: (_ for _ in ()).throw(RuntimeError('R2 unavailable')))
+        recover_sessions()
+        assert db.session.get(MultipartUploadSession, started.get_json()['session_id']).status == 'aborting'
+    # The unknown R2 outcome remains reserved instead of admitting an upload
+    # that could exceed the band's quota once recovery succeeds.
+    assert _initiate(write_client, band_id, principals['member'], song_id).status_code == 409

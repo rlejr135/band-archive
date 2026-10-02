@@ -95,8 +95,10 @@ def _v2_write(operation):
         raise
 
 
-def _v2_session_or_404(session_id, band_id):
-    session = get_session_or_404(session_id, band_id=band_id)
+def _v2_session_or_404(session_id, band_id, *, recover_aborting=True):
+    session = get_session_or_404(
+        session_id, band_id=band_id, recover_aborting=recover_aborting,
+    )
     if session.is_legacy:
         raise NotFoundError('Upload session not found')
     return session
@@ -111,11 +113,11 @@ def _v2_used_and_reserved_bytes(band_id):
     reserved = sum((
         db.session.query(func.coalesce(func.sum(MultipartUploadSession.declared_bytes), 0)).filter(
             MultipartUploadSession.band_id == band_id,
-            MultipartUploadSession.status.in_(('initiated', 'completing')),
+            MultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
         ).scalar() or 0,
         db.session.query(func.coalesce(func.sum(PersonalLogMultipartUploadSession.declared_bytes), 0)).filter(
             PersonalLogMultipartUploadSession.band_id == band_id,
-            PersonalLogMultipartUploadSession.status.in_(('initiated', 'completing')),
+            PersonalLogMultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
         ).scalar() or 0,
     ))
     return int(used), int(reserved)
@@ -141,10 +143,12 @@ def _v2_personal_log_target(band_id, member_id):
     return member_id
 
 
-def _legacy_session_or_404(session_id):
+def _legacy_session_or_404(session_id, *, recover_aborting=True):
     """Load an upload capability only after both tenant and parent are proven."""
     band_id = _legacy_upload_band_id()
-    session = get_session_or_404(session_id, band_id=band_id, expire=False)
+    session = get_session_or_404(
+        session_id, band_id=band_id, expire=False, recover_aborting=recover_aborting,
+    )
     validate_legacy_graph(session, 'Upload session not found')
     expire_session_if_needed(session)
     return session
@@ -341,7 +345,7 @@ def v2_acknowledge_multipart_part(band_id, session_id, part_number):
 def v2_complete_multipart_upload(band_id, session_id):
     def operation():
         _v2_active_membership(band_id, lock=True)  # Recheck at materialization time.
-        session = _v2_session_or_404(session_id, band_id)
+        session = _v2_session_or_404(session_id, band_id, recover_aborting=False)
         require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
         return complete_session(session, _object_size, _v2_multipart_item)
     item, status = _v2_write(operation)
@@ -557,7 +561,7 @@ def _create_multipart_item(session, actual_size):
 
 @uploads_bp.route('/uploads/multipart/<session_id>/complete', methods=['POST'])
 def complete_multipart_media(session_id):
-    session = _legacy_session_or_404(session_id)
+    session = _legacy_session_or_404(session_id, recover_aborting=False)
     require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     item, status = complete_session(session, _object_size, _create_multipart_item)
     return jsonify(completion_payload(session, item)), status

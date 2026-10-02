@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import secrets
 
+from botocore.exceptions import ClientError
 from flask import current_app
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -88,13 +89,37 @@ def expire_session_if_needed(session):
     return True
 
 
-def get_session_or_404(session_id, *, band_id=None, expire=True):
+def _no_such_upload(error):
+    """S3/R2 reports an already-aborted multipart upload as success-equivalent."""
+    return isinstance(error, ClientError) and error.response.get('Error', {}).get('Code') == 'NoSuchUpload'
+
+
+def recover_aborting_session(session):
+    """Finish a crash-interrupted abort without ever reviving its upload id."""
+    if session.status != 'aborting':
+        return session.status == 'aborted'
+    spec = spec_for_session(session)
+    try:
+        storage.abort_multipart_upload(session.object_key, session.r2_upload_id)
+    except Exception as exc:
+        if not _no_such_upload(exc):
+            current_app.logger.exception('Failed to recover multipart abort %s', session.id)
+            return False
+    spec.session_model.query.filter_by(id=session.id, status='aborting').update({'status': 'aborted'})
+    db.session.commit()
+    return True
+
+
+def get_session_or_404(session_id, *, band_id=None, expire=True, recover_aborting=True):
     for spec in MULTIPART_TARGETS:
         query = spec.session_model.query.filter(spec.session_model.id == session_id)
         if band_id is not None:
             query = query.filter(spec.session_model.band_id == band_id)
         session = query.one_or_none()
         if session:
+            if recover_aborting and session.status == 'aborting':
+                recover_aborting_session(session)
+                session = db.session.get(spec.session_model, session.id)
             if expire:
                 expire_session_if_needed(session)
             return session
@@ -104,6 +129,8 @@ def get_session_or_404(session_id, *, band_id=None, expire=True):
 def recover_sessions():
     """Reset interrupted completions and expire stale R2 upload IDs."""
     for spec in MULTIPART_TARGETS:
+        for session in spec.session_model.query.filter_by(status='aborting').all():
+            recover_aborting_session(session)
         for session in spec.session_model.query.filter_by(status='completing').all():
             if expires_at_utc_naive(session) > now():
                 session.status = 'initiated'
@@ -338,6 +365,9 @@ def abort_session(session):
     db.session.commit()
     if not claimed:
         current = db.session.get(spec.session_model, session.id)
+        if current and current.status == 'aborting':
+            recover_aborting_session(current)
+            current = db.session.get(spec.session_model, session.id)
         if current and current.status in ('aborted', 'completed', 'expired'):
             return current.status
         status = current.status if current else 'missing'
@@ -346,14 +376,19 @@ def abort_session(session):
     try:
         storage.abort_multipart_upload(session.object_key, session.r2_upload_id)
     except Exception as exc:
-        # Preserve the pre-existing retry behavior: a failed R2 abort never
-        # consumes the session.  Guard the reset so no future state can be
-        # overwritten by this error path.
-        spec.session_model.query.filter_by(id=session.id, status='aborting').update({
-            'status': 'initiated',
-        })
-        db.session.commit()
-        raise ValidationError('Multipart upload could not be aborted.') from exc
+        if _no_such_upload(exc):
+            # An earlier R2 abort can have succeeded before its caller lost
+            # the response; terminalize this idempotent retry safely.
+            pass
+        else:
+            # Preserve the pre-existing retry behavior: a failed R2 abort never
+            # consumes the session.  Guard the reset so no future state can be
+            # overwritten by this error path.
+            spec.session_model.query.filter_by(id=session.id, status='aborting').update({
+                'status': 'initiated',
+            })
+            db.session.commit()
+            raise ValidationError('Multipart upload could not be aborted.') from exc
     spec.session_model.query.filter_by(id=session.id, status='aborting').update({
         'status': 'aborted',
     })
