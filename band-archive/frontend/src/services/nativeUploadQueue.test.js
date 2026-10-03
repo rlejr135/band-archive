@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, mergeNativeUploadState, nativeTargetMatches, resetNativeUploadQueueForTest, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus } from './nativeUploadQueue.js';
+import { captureNativeUploadScope, consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, isNativeUploadScopeCurrent, mergeNativeUploadState, nativeTargetMatches, resetNativeUploadQueueForTest, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from './nativeUploadQueue.js';
 
 test('native queue hydrates once and fans out one listener snapshot', async () => {
   resetNativeUploadQueueForTest(); let list = 0; let nativeListener; const acked = [];
@@ -40,6 +40,25 @@ test('a retained v2 event from account B is dropped after switching the JS scope
   const snapshots=[]; const stop=subscribeNativeUploadQueue((items)=>snapshots.push(items.map((item)=>item.id)));
   assert.deepEqual(snapshots.at(-1),[]);
   stop(); resetNativeUploadQueueForTest();
+});
+
+test('delayed B processing recovery is fenced after switching to A and cannot sync or recreate a row', async () => {
+  resetNativeUploadQueueForTest(); let resolve; const delayed=new Promise((done)=>{resolve=done;}); const synced=[];
+  const transport={kind:'native',listPending:async()=>({items:[{id:'b-processing',protocol:'v2',accountId:'account-b',state:'processing',target:{song_id:1}}]}),addListener:async()=>()=>{},syncStatus:async(value)=>synced.push(value)};
+  setNativeUploadAccountScope('account-b'); await hydrateNativeUploadQueue(transport); const scope=captureNativeUploadScope('b-processing');
+  const recovery=delayed.then(async()=>{if(!isNativeUploadScopeCurrent(scope))return; updateNativeUpload({id:'b-processing',state:'completed',result:'{}'}); if(isNativeUploadScopeCurrent(scope))await syncNativeProcessingStatus(transport,'b-processing','completed',{id:1,transcoding_status:'completed'});});
+  setNativeUploadAccountScope('account-a'); resolve(); await recovery;
+  assert.deepEqual(filterNativeUploads({songId:1}),[]); assert.deepEqual(synced,[]); resetNativeUploadQueueForTest();
+});
+
+test('partial callbacks cannot create unknown rows but full legacy and active v2 events can', async () => {
+  resetNativeUploadQueueForTest(); setNativeUploadAccountScope('account-a');
+  assert.equal(updateNativeUpload({id:'partial',state:'completed'}),false);
+  assert.equal(updateNativeUpload({id:'wrong-v2',protocol:'v2',accountId:'account-b',state:'queued',target:{song_id:1}}),false);
+  assert.equal(updateNativeUpload({id:'legacy',protocol:'v1',state:'queued',target:{song_id:2}}),true);
+  assert.equal(updateNativeUpload({id:'active-v2',protocol:'v2',accountId:'account-a',state:'queued',target:{song_id:3}}),true);
+  assert.deepEqual(filterNativeUploads({songId:2}).map((item)=>item.id),['legacy']); assert.deepEqual(filterNativeUploads({songId:3}).map((item)=>item.id),['active-v2']);
+  resetNativeUploadQueueForTest();
 });
 
 test('target filters keep song, rehearsal, and member uploads isolated', async () => {

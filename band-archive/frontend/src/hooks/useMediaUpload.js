@@ -7,7 +7,7 @@ import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUplo
 import { isNativeDurableVideo, mapUploadState, shouldUseNativeUpload } from '../services/uploadTransport';
 import { createBandUploadTransport } from '../services/bandUploadTransport';
 import { createAuthenticatedApiClient } from '../services/authApiClient';
-import { claimNativeProcessingRecovery, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
+import { captureNativeUploadScope, claimNativeProcessingRecovery, hydrateNativeUploadQueue, isNativeUploadScopeCurrent, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const processingStates = new Set(['queued', 'pending', 'processing']);
@@ -43,10 +43,12 @@ export function useUploadController() {
   useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
   useEffect(() => {
     const transport = getUploadTransport(); let mounted = true;
+    recoveryRef.current.forEach((recovery) => { recovery.cancelled = true; });
     setNativeUploadAccountScope(user?.id);
     hydrateNativeUploadQueue(transport, { refresh:true }).then((items) => { if (mounted) setNativePending(items); }).catch(() => {});
     return () => { mounted = false; };
   }, [user?.id]);
+  useEffect(() => () => { recoveryRef.current.forEach((recovery) => { recovery.cancelled = true; }); }, []);
   useEffect(() => {
     const transport = getUploadTransport();
     if (!['android', 'ios'].includes(Capacitor.getPlatform()) || transport.kind !== 'native' || !transport.refreshCredentials) return undefined;
@@ -58,16 +60,17 @@ export function useUploadController() {
     return undefined;
   }, [user?.id]);
 
-  const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media', readProcessing = fetchMediaProcessing) => {
+  const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media', readProcessing = fetchMediaProcessing, isCurrent = () => true) => {
     let failures = 0;
-    while (!active.cancelled && media?.id && processingStates.has(media.transcoding_status)) {
+    while (!active.cancelled && isCurrent() && media?.id && processingStates.has(media.transcoding_status)) {
       onStatus(media.transcoding_status === 'processing' ? 'processing' : 'queued', media);
       await wait(Math.min(8000, 1000 * (2 ** failures)));
-      if (active.cancelled) return media;
+      if (active.cancelled || !isCurrent()) return media;
       try {
         const next = normalizeMedia(await readProcessing(media.id, kind));
         const updated = normalizeMedia({ ...media, ...next });
         failures = 0;
+        if (!isCurrent()) return media;
         if (processingChanged(media, updated)) onMediaUpdate?.(updated);
         media = updated;
       } catch {
@@ -86,20 +89,22 @@ export function useUploadController() {
     const transport=getUploadTransport();
     nativePending.filter((item) => item.state === 'processing' && nativeUploadResult(item)?.id).forEach((item) => {
       if(!claimNativeProcessingRecovery(item.id))return;
+      const scope=captureNativeUploadScope(item.id); if(!scope){releaseNativeProcessingRecovery(item.id);return;}
       const recovery={ cancelled:false, xhrs:new Set(), session:null };
+      const current=()=>!recovery.cancelled&&isNativeUploadScopeCurrent(scope);
       recoveryRef.current.set(item.id,recovery);
       const media=normalizeMedia(nativeUploadResult(item));
       const bandId=Number(item.bandId ?? item.target?.band_id);
       const readProcessing=Number.isInteger(bandId)&&bandId>0
         ? (mediaId,kind)=>authenticatedApi.requestJson(`/api/v2/bands/${bandId}/${kind === 'personal_log' ? 'personal-logs' : 'media'}/${mediaId}/processing`)
         : fetchMediaProcessing;
-      poll(media,recovery,(state,current) => updateNativeUpload({ id:item.id, state, result:current?JSON.stringify(current):item.result, error:current?.error || item.error }),
-        (current) => updateNativeUpload({ id:item.id, state:'processing', result:JSON.stringify(current), error:current?.error || item.error }),nativeUploadKind(item),readProcessing)
-        .then(async (current) => {
-          if(recovery.cancelled)return;
-          const state=current?.transcoding_status === 'failed' ? 'failed' : current?.audio_url ? 'completed' : 'processing';
-          updateNativeUpload({ id:item.id, state, result:current?JSON.stringify(current):item.result, error:current?.error || item.error });
-          if(state !== 'processing') await syncNativeProcessingStatus(transport,item.id,state,current);
+      poll(media,recovery,(state,currentMedia) => { if(current())updateNativeUpload({ id:item.id, state, result:currentMedia?JSON.stringify(currentMedia):item.result, error:currentMedia?.error || item.error }); },
+        (currentMedia) => { if(current())updateNativeUpload({ id:item.id, state:'processing', result:JSON.stringify(currentMedia), error:currentMedia?.error || item.error }); },nativeUploadKind(item),readProcessing,current)
+        .then(async (result) => {
+          if(!current())return;
+          const state=result?.transcoding_status === 'failed' ? 'failed' : result?.audio_url ? 'completed' : 'processing';
+          updateNativeUpload({ id:item.id, state, result:result?JSON.stringify(result):item.result, error:result?.error || item.error });
+          if(state !== 'processing' && current()) await syncNativeProcessingStatus(transport,item.id,state,result);
         }).catch(() => {}).finally(() => { releaseNativeProcessingRecovery(item.id); recoveryRef.current.delete(item.id); });
     });
   }, [authenticatedApi,nativePending,poll]);

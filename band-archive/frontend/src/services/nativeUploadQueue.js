@@ -7,6 +7,7 @@ let started = false;
 let remove = null;
 let hydration = null;
 let accountScope = null;
+let accountGeneration = 0;
 const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 const snapshot = () => [...items.values()];
@@ -14,6 +15,7 @@ const notify = () => { const value = snapshot(); listeners.forEach((listener) =>
 const sameValue = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const visibleToAccount = (item) => item?.protocol !== 'v2' || (!!accountScope && item.accountId === accountScope);
 const publish = (item) => { if (!item?.id || !visibleToAccount(item) || sameValue(items.get(item.id), item)) return; items.set(item.id, item); notify(); };
+const isFullScopedTask = (item) => item?.protocol === 'v1' || (item?.protocol === 'v2' && visibleToAccount(item));
 const numeric = (value) => value === undefined || value === null || value === '' ? null : Number(value);
 
 export const nativeTargetMatches = (item, target = {}) => {
@@ -48,12 +50,32 @@ export const mergeNativeUploadState = (previous, matching, project = (item) => i
   });
   return next;
 };
-export const updateNativeUpload = (item) => publish({ ...items.get(item.id), ...item });
+// Pollers may only patch a retained row. Never infer protocol/account scope from
+// a partial callback after an account switch; a new row needs complete immutable scope.
+export const updateNativeUpload = (item) => {
+  if (!item?.id) return false;
+  const existing = items.get(item.id);
+  if (!existing) { if (!isFullScopedTask(item)) return false; publish(item); return true; }
+  if (!visibleToAccount(existing)) return false;
+  publish({ ...existing, ...item }); return true;
+};
 export const setNativeUploadAccountScope = (accountId) => {
-  accountScope = accountId || null;
+  const next = accountId || null;
+  if (next !== accountScope) accountGeneration += 1;
+  accountScope = next;
   let changed = false;
   for (const [id, item] of items) if (!visibleToAccount(item)) { items.delete(id); changed = true; }
   if (changed) notify();
+};
+export const captureNativeUploadScope = (id) => {
+  const item = items.get(id);
+  if (!item || !visibleToAccount(item)) return null;
+  return { id, protocol:item.protocol, accountId:item.accountId, generation:accountGeneration };
+};
+export const isNativeUploadScopeCurrent = (scope) => {
+  const item = scope && items.get(scope.id);
+  if (!item || !visibleToAccount(item)) return false;
+  return item.protocol !== 'v2' || (scope.protocol === 'v2' && scope.generation === accountGeneration && scope.accountId === accountScope && item.accountId === scope.accountId);
 };
 export const claimNativeProcessingRecovery = (id) => { if (recovered.has(id)) return false; recovered.add(id); return true; };
 export const releaseNativeProcessingRecovery = (id) => recovered.delete(id);
@@ -105,4 +127,4 @@ export const syncNativeProcessingStatus = async (transport, id, state, media) =>
   publish(updated); await transport.syncStatus?.({ id, state, result, error: updated.error }); return updated;
 };
 
-export const resetNativeUploadQueueForTest = () => { remove?.(); remove = null; started = false; hydration = null; accountScope = null; items.clear(); listeners.clear(); acknowledging.clear(); recovered.clear(); };
+export const resetNativeUploadQueueForTest = () => { remove?.(); remove = null; started = false; hydration = null; accountScope = null; accountGeneration = 0; items.clear(); listeners.clear(); acknowledging.clear(); recovered.clear(); };
