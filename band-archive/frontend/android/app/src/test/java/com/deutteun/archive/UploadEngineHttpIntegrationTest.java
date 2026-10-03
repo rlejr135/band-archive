@@ -54,10 +54,23 @@ public class UploadEngineHttpIntegrationTest {
     assertRequest("POST", "/uploads/multipart/session/parts", true, server.takeRequest());
   }
 
+  @Test public void v2InitiateAndCompleteCarryBearerWhileCapabilityContinuationDoesNotNeedIt() throws Exception {
+    server.enqueue(json("{\"session_id\":\"s2\"}"));
+    server.enqueue(json("{\"status\":\"completed\"}"));
+    postAuthenticated(server.url("/api/v2/bands/41/uploads/multipart/initiate").toString(), new JSONObject().put("song_id", 7), null, "member-bearer");
+    postAuthenticated(server.url("/api/v2/bands/41/uploads/multipart/s2/complete").toString(), new JSONObject(), "capability", "member-bearer");
+    RecordedRequest initiate = server.takeRequest(), complete = server.takeRequest();
+    assertEquals("/api/v2/bands/41/uploads/multipart/initiate", initiate.getPath());
+    assertEquals("Bearer member-bearer", initiate.getHeader("Authorization")); assertNull(initiate.getHeader("X-Upload-Capability"));
+    assertEquals("/api/v2/bands/41/uploads/multipart/s2/complete", complete.getPath());
+    assertEquals("Bearer member-bearer", complete.getHeader("Authorization")); assertEquals("capability", complete.getHeader("X-Upload-Capability"));
+  }
+
   private static MockResponse json(String body) { return new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(body); }
   private static void assertRequest(String method, String path, boolean capability, RecordedRequest request) { assertEquals(method, request.getMethod()); assertEquals(path, request.getPath()); assertEquals(capability ? "capability" : null, request.getHeader("X-Upload-Capability")); }
   @SuppressWarnings("unchecked") private static Set<Integer> acked(JSONObject value) throws Exception { Method method=UploadEngine.class.getDeclaredMethod("ackedParts",JSONObject.class);method.setAccessible(true);return (Set<Integer>)method.invoke(null,value); }
   private static JSONObject get(String url,String capability)throws Exception{Method method=UploadEngine.class.getDeclaredMethod("get",String.class,String.class);method.setAccessible(true);return (JSONObject)method.invoke(null,url,capability);}
   private static JSONObject post(String url,JSONObject body,String capability)throws Exception{Method method=UploadEngine.class.getDeclaredMethod("post",String.class,JSONObject.class,String.class);method.setAccessible(true);return (JSONObject)method.invoke(null,url,body,capability);}
+  private static JSONObject postAuthenticated(String url,JSONObject body,String capability,String bearer)throws Exception{Method method=UploadEngine.class.getDeclaredMethod("post",String.class,JSONObject.class,String.class,String.class);method.setAccessible(true);return (JSONObject)method.invoke(null,url,body,capability,bearer);}
   private static String put(String url,File file,long offset,long length,String mime)throws Exception{Class<?> progress=Class.forName("com.deutteun.archive.UploadEngine$Progress");Object callback=Proxy.newProxyInstance(progress.getClassLoader(),new Class<?>[]{progress},(proxy,method,args)->null);Method method=UploadEngine.class.getDeclaredMethod("put",String.class,File.class,long.class,long.class,String.class,progress);method.setAccessible(true);return (String)method.invoke(null,url,file,offset,length,mime,callback);}
 }

@@ -16,10 +16,16 @@ const numeric = (value) => value === undefined || value === null || value === ''
 
 export const nativeTargetMatches = (item, target = {}) => {
   const value = item?.target || {};
+  const taskBandId = numeric(item?.bandId ?? value.band_id ?? value.bandId);
+  const bandId = numeric(target.bandId ?? target.band_id);
   const songId = numeric(target.songId ?? target.song_id);
   const rehearsalId = numeric(target.rehearsalId ?? target.rehearsal_id);
   const memberId = numeric(target.memberId ?? target.member_id);
   const expectsRehearsal = Object.hasOwn(target,'rehearsalId') || Object.hasOwn(target,'rehearsal_id');
+  // A native v2 task is bound to its enqueue-time band. An old surface that
+  // has no band context must never consume or display it by a coincident ID.
+  if (taskBandId !== null && (bandId === null || taskBandId !== bandId)) return false;
+  if (bandId !== null && taskBandId !== bandId) return false;
   if (memberId !== null) return numeric(value.member_id) === memberId && numeric(value.song_id) === null && numeric(value.rehearsal_id) === null;
   if (numeric(value.member_id) !== null) return false;
   if (songId !== null && numeric(value.song_id) !== songId) return false;

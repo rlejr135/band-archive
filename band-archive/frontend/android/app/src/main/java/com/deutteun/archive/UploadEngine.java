@@ -9,7 +9,7 @@ import java.security.MessageDigest;
 import java.util.*;
 import org.json.*;
 
-/** Executes the capability-protected multipart contract without exposing its token. */
+/** Executes immutable legacy or v2 band-scoped uploads without exposing secrets to bridge events. */
 public final class UploadEngine {
   public enum Outcome { SUCCESS, RETRY, FAILURE }
   private static final int MAX_ATTEMPTS = 4;
@@ -29,11 +29,13 @@ public final class UploadEngine {
     execution.attach(Thread.currentThread()); if (!store.acquire(id, execution.owner)) { UploadExecutionRegistry.unregister(execution); return Outcome.SUCCESS; }
     EXECUTION.set(execution);
     try { try {
+      validateProtocol(task);
       File file = durableFile(context, task); verifyFile(file, task);
       task.state = "preparing"; update(context, store, task, execution);
+      if ("direct".equals(task.mode)) return runDirect(context, task, store, file, execution);
       Session session = openOrResume(context, task, store, execution);
       requireLease(store, task, execution);
-      JSONObject remote = get(task.api + "/uploads/multipart/" + session.id, session.capability);
+      JSONObject remote = get(multipartPath(task, "/" + session.id), session.capability);
       String remoteState = remote.optString("status");
       if ("completed".equals(remoteState)) { task.result = minimalResult(remote); task.progress = 100; task.state = queueState(remote); update(context, store, task, execution); if(UploadRetentionPolicy.deleteSourceImmediately(task.state))deleteSource(context, task); return "failed".equals(task.state) ? Outcome.FAILURE : Outcome.SUCCESS; }
       if ("expired".equals(remoteState) || "aborted".equals(remoteState) || "failed".equals(remoteState)) throw new TerminalException("업로드 세션이 " + remoteState + " 상태입니다.");
@@ -44,12 +46,14 @@ public final class UploadEngine {
       for (int part = 1; part <= parts; part++) if (!acked.contains(part)) uploadPart(context, task, store, file, session, part, partSize, execution);
       task.state = "completing"; update(context, store, task, execution);
       requireLease(store, task, execution);
-      JSONObject result = post(task.api + "/uploads/multipart/" + session.id + "/complete", new JSONObject(), session.capability);
+      JSONObject result = post(multipartPath(task, "/" + session.id + "/complete"), new JSONObject(), session.capability, completionAuth(context, task));
       task.result = minimalResult(result); task.progress = 100;
       task.state = queueState(result);
       // "processing" deliberately remains nonterminal: upload ownership ends here and UI polling owns status observation.
       update(context, store, task, execution); if(UploadRetentionPolicy.deleteSourceImmediately(task.state))deleteSource(context, task); return Outcome.SUCCESS;
     } catch (UploadExecutionRegistry.UploadStoppedException lost) { return Outcome.SUCCESS; }
+      catch (AuthRequiredException error) { return authRequired(context, store, task, execution, error); }
+      catch (HttpException error) { if (isV2(task) && error.status == 401) return authRequired(context, store, task, execution, new AuthRequiredException()); return fail(context, store, task, execution, error, true); }
       catch (TerminalException error) { return fail(context, store, task, execution, error, false); }
       catch (Exception error) { return fail(context, store, task, execution, error, true); }
     } finally { store.release(id, execution.owner); UploadExecutionRegistry.unregister(execution); EXECUTION.remove(); }
@@ -57,7 +61,7 @@ public final class UploadEngine {
 
   public static void abort(Context context, String id) {
     UploadStore store = new UploadStore(context); store.cancel(id); UploadExecutionRegistry.cancel(id); UploadStore.Task task = store.get(id); if (task == null) return; UploadEvents.emit(context,task);
-    try { if (task.session != null && task.capability != null) post(task.api + "/uploads/multipart/" + task.session + "/abort", new JSONObject(), task.capability); }
+    try { if (task.session != null && task.capability != null && !"direct".equals(task.mode)) post(multipartPath(task, "/" + task.session + "/abort"), new JSONObject(), task.capability); }
     catch (Exception ignored) { /* server abort is idempotent; local cancellation still stops the job */ }
     deleteSource(context, task);
   }
@@ -69,6 +73,11 @@ public final class UploadEngine {
     task.state = retryable && task.attempts < MAX_ATTEMPTS ? "retry_wait" : "failed";
     try { update(context, store, task, execution); } catch (UploadExecutionRegistry.UploadStoppedException lost) { return Outcome.SUCCESS; }
     return "retry_wait".equals(task.state) ? Outcome.RETRY : Outcome.FAILURE;
+  }
+  private static Outcome authRequired(Context context, UploadStore store, UploadStore.Task task, UploadExecutionRegistry.Handle execution, Exception error) {
+    task.state="auth_required"; task.error="로그인 세션을 갱신한 뒤 업로드를 다시 시작하세요.";
+    try { update(context,store,task,execution); } catch (UploadExecutionRegistry.UploadStoppedException lost) { return Outcome.SUCCESS; }
+    return Outcome.SUCCESS; // The next bridge credential refresh schedules this task explicitly.
   }
   private static void update(Context context, UploadStore s, UploadStore.Task t, UploadExecutionRegistry.Handle execution) throws UploadExecutionRegistry.UploadStoppedException { if(!s.updateForOwner(t,execution.owner)) lost(execution); UploadEvents.emit(context,t); }
   private static void requireLease(UploadStore s, UploadStore.Task t, UploadExecutionRegistry.Handle execution) throws UploadExecutionRegistry.UploadStoppedException { if(!s.renew(t.id,execution.owner)) lost(execution); }
@@ -92,8 +101,8 @@ public final class UploadEngine {
   private static Session openOrResume(Context context, UploadStore.Task t, UploadStore s, UploadExecutionRegistry.Handle execution) throws Exception {
     if (t.session != null && t.capability != null) return new Session(t.session, t.capability, 0);
     if (t.session != null && "credential_lost".equals(t.error)) throw new TerminalException("업로드 인증 정보를 복구하지 못했습니다. 파일을 다시 선택하세요.");
-    requireLease(s,t,execution); JSONObject init = post(t.api + "/uploads/multipart/initiate", new JSONObject(t.target)
-        .put("filename", t.name).put("content_type", t.mime).put("declared_bytes", t.bytes), null);
+    requireLease(s,t,execution); JSONObject init = post(multipartPath(t, "/initiate"), new JSONObject(t.target)
+        .put("filename", t.name).put("content_type", t.mime).put("declared_bytes", t.bytes), null, completionAuth(context, t));
     String capability = init.optString("upload_capability_token"); if (capability.isEmpty()) throw new TerminalException("업로드 권한 토큰을 받지 못했습니다.");
     t.session = init.getString("session_id"); t.capability = capability; update(context, s, t, execution);
     return new Session(t.session, capability, init.getLong("part_size"));
@@ -108,14 +117,14 @@ public final class UploadEngine {
   private static void uploadPart(Context context, UploadStore.Task t, UploadStore s, File f, Session session, int number, long partSize, UploadExecutionRegistry.Handle execution) throws Exception {
     long offset = UploadProtocol.partStart(number, partSize), length = UploadProtocol.partLength(t.bytes, number, partSize); Exception last = null;
     for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) try {
-      requireLease(s,t,execution); JSONObject issued = post(t.api + "/uploads/multipart/" + session.id + "/parts", new JSONObject().put("part_number", number), session.capability);
+      requireLease(s,t,execution); JSONObject issued = post(multipartPath(t, "/" + session.id + "/parts"), new JSONObject().put("part_number", number), session.capability);
       final long[] lastReported = { -1 };
       String etag = put(issued.getString("upload_url"), f, offset, length, t.mime, sent -> {
         int progress = (int) Math.min(99, ((offset + sent) * 100) / t.bytes);
         if (progress != lastReported[0]) { lastReported[0] = progress; t.state = "uploading"; t.progress = progress; update(context, s, t, execution); }
       });
       requireLease(s,t,execution);
-      post(t.api + "/uploads/multipart/" + session.id + "/parts/" + number + "/ack", new JSONObject().put("etag", etag).put("bytes", length), session.capability);
+      post(multipartPath(t, "/" + session.id + "/parts/" + number + "/ack"), new JSONObject().put("etag", etag).put("bytes", length), session.capability);
       t.state = "uploading"; t.progress = (int) Math.min(99, ((offset + length) * 100) / t.bytes); update(context, s, t, execution); return;
     } catch (UploadExecutionRegistry.UploadStoppedException e) { throw e;
     } catch (HttpException e) {
@@ -127,14 +136,60 @@ public final class UploadEngine {
     throw last == null ? new IOException("분할 업로드에 실패했습니다.") : last;
   }
   private static void retry(Context context, UploadStore.Task t, UploadStore s, int attempt, UploadExecutionRegistry.Handle execution) throws InterruptedException, UploadExecutionRegistry.UploadStoppedException { t.state = "retry_wait"; update(context, s, t, execution); Thread.sleep(UploadProtocol.retryDelayMs(attempt)); }
-  private static JSONObject get(String url, String cap) throws Exception { HttpURLConnection c = connection(url, "GET", cap); try{return json(c);}finally{close(c);} }
+  private static boolean isV2(UploadStore.Task t) { return "v2".equals(t.protocol); }
+  private static void validateProtocol(UploadStore.Task t) throws TerminalException {
+    if ("v1".equals(t.protocol)) return;
+    if (!isV2(t) || t.bandId <= 0 || t.accountId == null || t.accountId.isEmpty()) {
+      throw new TerminalException("밴드 범위 정보가 없는 업로드는 현재 밴드로 재지정할 수 없습니다. 파일을 다시 선택하세요.");
+    }
+    if (!"direct".equals(t.mode) && !"multipart".equals(t.mode)) throw new TerminalException("업로드 방식 정보가 올바르지 않습니다. 파일을 다시 선택하세요.");
+  }
+  private static String uploadsBase(UploadStore.Task t) { return isV2(t) ? t.api + "/api/v2/bands/" + t.bandId + "/uploads" : t.api + "/uploads"; }
+  private static String multipartPath(UploadStore.Task t, String suffix) { return uploadsBase(t) + "/multipart" + suffix; }
+  private static String directPath(UploadStore.Task t, String suffix) { return uploadsBase(t) + "/direct" + suffix; }
+  private static String completionAuth(Context context, UploadStore.Task t) throws AuthRequiredException {
+    if (!isV2(t)) return null;
+    try { String token=new SecureAuthSessionStore(context).accessTokenFor(t.accountId); if(token!=null&&!token.isEmpty())return token; }
+    catch (Exception ignored) { }
+    throw new AuthRequiredException();
+  }
+  private static Outcome runDirect(Context context, UploadStore.Task t, UploadStore s, File file, UploadExecutionRegistry.Handle execution) throws Exception {
+    DirectSession session=openOrResumeDirect(context,t,s,execution);
+    try {
+      if (!"completing".equals(t.state)) {
+        t.state="uploading"; update(context,s,t,execution);
+        put(session.url,file,0,t.bytes,t.mime,sent->{ int progress=(int)Math.min(99,(sent*100)/t.bytes); if(progress!=t.progress){t.progress=progress;update(context,s,t,execution);} });
+        t.state="completing"; t.progress=99; update(context,s,t,execution);
+      }
+    } catch (HttpException error) {
+      if (error.status == 403) { t.session=null; t.capability=null; t.directUrl=null; t.state="retry_wait"; update(context,s,t,execution); }
+      throw error;
+    }
+    requireLease(s,t,execution);
+    JSONObject result=post(directPath(t,"/"+session.id+"/complete"),new JSONObject(),session.capability,completionAuth(context,t));
+    t.result=minimalResult(result);t.progress=100;t.state=queueState(result);update(context,s,t,execution);
+    if(UploadRetentionPolicy.deleteSourceImmediately(t.state))deleteSource(context,t);return Outcome.SUCCESS;
+  }
+  private static DirectSession openOrResumeDirect(Context context, UploadStore.Task t, UploadStore s, UploadExecutionRegistry.Handle execution) throws Exception {
+    if(t.session!=null&&t.capability!=null&&t.directUrl!=null)return new DirectSession(t.session,t.capability,t.directUrl);
+    if(t.session!=null&&"credential_lost".equals(t.error))throw new TerminalException("업로드 인증 정보를 복구하지 못했습니다. 파일을 다시 선택하세요.");
+    requireLease(s,t,execution);JSONObject init=post(directPath(t,"/initiate"),new JSONObject(t.target).put("filename",t.name).put("content_type",t.mime).put("declared_bytes",t.bytes),null,completionAuth(context,t));
+    String capability=init.optString("upload_capability_token"),url=init.optString("upload_url");if(capability.isEmpty()||url.isEmpty())throw new TerminalException("업로드 권한 정보를 받지 못했습니다.");
+    t.session=init.getString("session_id");t.capability=capability;t.directUrl=url;update(context,s,t,execution);return new DirectSession(t.session,capability,url);
+  }
+  private static JSONObject get(String url, String cap) throws Exception { return get(url,cap,null); }
+  private static JSONObject get(String url, String cap, String auth) throws Exception { HttpURLConnection c = connection(url, "GET", cap, auth); try{return json(c);}finally{close(c);} }
   private static JSONObject post(String url, JSONObject body, String cap) throws Exception {
-    HttpURLConnection c = connection(url, "POST", cap); c.setDoOutput(true); c.setRequestProperty("Content-Type", "application/json");
+    return post(url,body,cap,null);
+  }
+  private static JSONObject post(String url, JSONObject body, String cap, String auth) throws Exception {
+    HttpURLConnection c = connection(url, "POST", cap, auth); c.setDoOutput(true); c.setRequestProperty("Content-Type", "application/json");
     try { try (OutputStream out = c.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); } return json(c); } finally { close(c); }
   }
-  private static HttpURLConnection connection(String url, String method, String cap) throws Exception {
+  private static HttpURLConnection connection(String url, String method, String cap) throws Exception { return connection(url,method,cap,null); }
+  private static HttpURLConnection connection(String url, String method, String cap, String auth) throws Exception {
     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(); c.setRequestMethod(method); c.setConnectTimeout(20_000); c.setReadTimeout(60_000);
-    if (cap != null) c.setRequestProperty("X-Upload-Capability", cap); UploadExecutionRegistry.Handle execution=EXECUTION.get(); if(execution!=null)execution.track(c); return c;
+    if (cap != null) c.setRequestProperty("X-Upload-Capability", cap); if(auth!=null)c.setRequestProperty("Authorization","Bearer "+auth); UploadExecutionRegistry.Handle execution=EXECUTION.get(); if(execution!=null)execution.track(c); return c;
   }
   private interface Progress { void onBytes(long sent) throws Exception; }
   private static String put(String url, File f, long offset, long length, String mime, Progress progress) throws Exception {
@@ -158,6 +213,8 @@ public final class UploadEngine {
     return new JSONObject().put("id", item.opt("id")).put("status", status).put("transcoding_status", status).toString();
   }
   private static final class Session { final String id, capability; final long partSize; Session(String i, String c, long p) { id=i; capability=c; partSize=p; } }
+  private static final class DirectSession { final String id,capability,url; DirectSession(String id,String capability,String url){this.id=id;this.capability=capability;this.url=url;} }
   private static final class TerminalException extends Exception { TerminalException(String message) { super(message); } }
-  private static final class HttpException extends IOException { final boolean retryable; HttpException(int status, String message) { super(message); retryable=status==401 || status==403 || status==408 || status==429 || status>=500; } }
+  private static final class AuthRequiredException extends Exception { AuthRequiredException() { super("로그인 세션 갱신이 필요합니다."); } }
+  private static final class HttpException extends IOException { final int status; final boolean retryable; HttpException(int status, String message) { super(message); this.status=status; retryable=status==401 || status==403 || status==408 || status==429 || status>=500; } }
 }

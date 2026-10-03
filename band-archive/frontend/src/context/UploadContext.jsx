@@ -70,7 +70,7 @@ const UploadTaskProvider = ({ children, userId }) => {
     }
     const nativeAlreadyQueued = file?.id && nativePending.some((item) => (
       String(item.id) === String(file.id)
-      && nativeTargetMatches(item, { songId, rehearsalId, memberId })
+      && nativeTargetMatches(item, { songId, rehearsalId, memberId, bandId: band?.id })
       && isUploadInProgress(item.state)
     ));
     if (nativeAlreadyQueued) return Promise.reject(new Error('이미 대기 중인 네이티브 업로드입니다.'));
@@ -223,14 +223,15 @@ const UploadTaskProvider = ({ children, userId }) => {
         if (isUploadInProgress(item.state)) dismissedNative.current.delete(item.id);
         else return;
       }
-      const target = item.target?.member_id ? { memberId: item.target.member_id } : { songId: item.target?.song_id, rehearsalId: item.target?.rehearsal_id };
+      const bandId = item.bandId ?? item.target?.band_id;
+      const target = item.target?.member_id ? { memberId: item.target.member_id, bandId } : { songId: item.target?.song_id, rehearsalId: item.target?.rehearsal_id, bandId };
       const media = nativeUploadResult(item);
       const id = createUploadTaskId({ key: item.id, file: { id: item.id }, target });
       registry.current.claimNativeSource(item.id, id);
       const status = item.state === 'failed' && media?.id && media?.transcoding_status === 'failed'
         ? 'processing_failed'
         : item.state;
-      updateTask(id, { name: item.name || '업로드 파일', target, targetLabel: targetLabel(target), progress: item.progress || 0, status, nativeId: item.id, mediaId: media?.id || null, error: item.error || media?.processing_error || null, native: true });
+      updateTask(id, { name: item.name || '업로드 파일', target, targetLabel: targetLabel(target), bandId: bandId ? Number(bandId) : undefined, bandName: item.bandName, bandSlug: item.bandSlug || null, progress: item.progress || 0, status, nativeId: item.id, mediaId: media?.id || null, error: item.error || media?.processing_error || null, native: true });
     });
   }, [nativePending, updateTask]);
 
@@ -238,9 +239,10 @@ const UploadTaskProvider = ({ children, userId }) => {
   // widgets only observe task snapshots, eliminating consume/ack races.
   useEffect(() => {
     nativePending.filter((item) => item.state === 'completed').forEach((item) => {
+      const bandId = item.bandId ?? item.target?.band_id;
       const target = item.target?.member_id
-        ? { memberId: item.target.member_id }
-        : { songId: item.target?.song_id, rehearsalId: item.target?.rehearsal_id };
+        ? { memberId: item.target.member_id, bandId }
+        : { songId: item.target?.song_id, rehearsalId: item.target?.rehearsal_id, bandId };
       const taskId = createUploadTaskId({ key: item.id, file: { id: item.id }, target });
       const media = nativeUploadResult(item);
       // Record before durable ACK. A target mounting later can see this version

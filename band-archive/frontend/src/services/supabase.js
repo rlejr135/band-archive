@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
+import { Capacitor } from '@capacitor/core';
+import { getBackgroundUploadPlugin } from './uploadTransport.js';
 
 const config = {
   url: import.meta.env.VITE_SUPABASE_URL,
@@ -6,6 +8,28 @@ const config = {
 };
 
 let client;
+const BackgroundUpload = getBackgroundUploadPlugin();
+const isAndroid = () => Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+const isSessionKey = (key) => String(key || '').endsWith('-auth-token');
+
+// Supabase permits promise-based storage. On Android only, its refresh token
+// stays behind the plugin's Keystore-backed storage; PKCE verifier state is
+// short-lived sessionStorage and never contains the persisted auth session.
+const androidAuthStorage = {
+  getItem: async (key) => {
+    if (!isSessionKey(key)) return window.sessionStorage.getItem(key);
+    const value = await BackgroundUpload.getSecureAuthSession();
+    return value?.value ?? null;
+  },
+  setItem: async (key, value) => {
+    if (!isSessionKey(key)) { window.sessionStorage.setItem(key, value); return; }
+    await BackgroundUpload.setSecureAuthSession({ value, supabaseUrl: config.url, anonKey: config.anonKey });
+  },
+  removeItem: async (key) => {
+    if (!isSessionKey(key)) { window.sessionStorage.removeItem(key); return; }
+    await BackgroundUpload.removeSecureAuthSession();
+  },
+};
 
 export const getSupabaseConfigError = () => {
   if (!config.url || !config.anonKey) {
@@ -28,7 +52,7 @@ export const getSupabaseClient = () => {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
-        storage: window.localStorage,
+        storage: isAndroid() ? androidAuthStorage : window.localStorage,
       },
     });
   }

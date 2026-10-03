@@ -1,5 +1,5 @@
 export const UPLOAD_QUEUE_STATES = Object.freeze([
-  'preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing', 'completed', 'failed', 'cancelled',
+  'preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing', 'auth_required', 'completed', 'failed', 'cancelled',
 ]);
 
 export const mapUploadState = (value) => {
@@ -89,6 +89,7 @@ export const createWebUploadTransport = ({ apiUrl, fetchImpl = fetch, xhrFactory
 };
 
 const BackgroundUpload = registerPlugin('BackgroundUpload');
+export const getBackgroundUploadPlugin = () => BackgroundUpload;
 
 export const getNativeBackgroundUploadTransport = () => {
   // registerPlugin returns a proxy even in a browser, so platform detection must
@@ -100,6 +101,7 @@ export const getNativeBackgroundUploadTransport = () => {
     pickFiles: (options) => BackgroundUpload.pickFiles(options),
     requestNotificationPermission: () => BackgroundUpload.requestNotificationPermission(),
     enqueue: (options) => BackgroundUpload.enqueue(options),
+    refreshCredentials: (options) => BackgroundUpload.refreshCredentials(options),
     resume: (options = {}) => BackgroundUpload.resume(options),
     retry: (options) => BackgroundUpload.retry(options),
     cancel: (options) => BackgroundUpload.cancel(options),

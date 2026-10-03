@@ -6,6 +6,7 @@ const STATUS_LABELS = {
   completing: '완료 처리 중',
   processing: '음원 추출 중',
   processing_failed: '음원 추출 실패',
+  auth_required: '로그인이 필요합니다',
   completed: '완료',
   failed: '실패',
   cancelled: '취소됨',
@@ -25,7 +26,7 @@ export const getUploadStatusLabel = (status, progress = 0, variant = 'queue') =>
 };
 
 export const isUploadInProgress = (status) => (
-  ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing'].includes(status)
+  ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing', 'auth_required'].includes(status)
 );
 
 export const isUploadCancellable = isUploadInProgress;

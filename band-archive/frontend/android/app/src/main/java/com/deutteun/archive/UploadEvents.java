@@ -11,6 +11,10 @@ public final class UploadEvents {
   static JSObject json(UploadStore.Task t) {
     JSObject out = new JSObject().put("id", t.id).put("state", t.state).put("progress", t.progress);
     out.put("name", t.name);
+    out.put("protocol", t.protocol);
+    if (t.bandId > 0) out.put("bandId", t.bandId);
+    if (t.bandName != null) out.put("bandName", t.bandName);
+    if (t.bandSlug != null) out.put("bandSlug", t.bandSlug);
     try { out.put("target", new org.json.JSONObject(t.target)); } catch (Exception ignored) {}
     if (t.error != null) out.put("error", t.error);
     if (t.result != null) out.put("result", t.result);

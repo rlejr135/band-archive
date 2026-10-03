@@ -24,13 +24,16 @@ public class UploadStoreRobolectricIntegrationTest {
   @Before public void setUp() { context = ApplicationProvider.getApplicationContext(); context.deleteDatabase(DB); }
   @After public void tearDown() { context.deleteDatabase(DB); }
 
-  @Test public void freshV3CreatesPositiveUniqueWorkIdsAndLeaseColumns() {
+  @Test public void freshV4CreatesPositiveUniqueWorkIdsLeaseAndBandScopeColumns() {
     UploadStore store = new UploadStore(context);
     UploadStore.Task task = task("fresh"); store.insert(task);
     UploadStore.Task persisted = store.get("fresh");
     assertNotNull(persisted); assertTrue(UploadWorkIds.isValid(persisted.workId));
     assertColumn(store.getReadableDatabase(), "work_id"); assertColumn(store.getReadableDatabase(), "lease_owner");
     assertColumn(store.getReadableDatabase(), "lease_expires_at");
+    assertColumn(store.getReadableDatabase(), "protocol"); assertColumn(store.getReadableDatabase(), "band_id");
+    assertColumn(store.getReadableDatabase(), "account_id"); assertColumn(store.getReadableDatabase(), "direct_url");
+    assertFalse(columnExists(store.getReadableDatabase(), "auth"));
     try {
       store.getWritableDatabase().execSQL("INSERT INTO tasks(id,work_id,uri,state) VALUES(?,?,?,?)",
           new Object[] { "duplicate", persisted.workId, "file:///safe", "queued" });
@@ -62,6 +65,25 @@ public class UploadStoreRobolectricIntegrationTest {
     store.close();
   }
 
+  @Test public void preBandRowsAreExplicitlyLegacyInsteadOfGuessingTheCurrentBand() {
+    createLegacy(3, true); insertLegacy("released-v3", "queued", null, null, 0, 30L);
+    UploadStore store = new UploadStore(context); UploadStore.Task task = store.get("released-v3");
+    assertEquals("v1", task.protocol); assertEquals(0L, task.bandId); assertNull(task.accountId);
+    store.close();
+  }
+
+  @Test public void v2ScopeIsDurableAndBridgeEventsExcludeCredentialsAndPresignedUrls() {
+    UploadStore store = new UploadStore(context);
+    UploadStore.Task task = task("scoped"); task.protocol="v2"; task.mode="direct"; task.bandId=41;
+    task.bandName="First band"; task.bandSlug="first-band"; task.accountId="account-a";
+    task.capability="capability-secret"; task.directUrl="https://storage.example/direct-secret";
+    store.insert(task); UploadStore.Task persisted=store.get("scoped");
+    assertEquals("v2",persisted.protocol);assertEquals(41L,persisted.bandId);assertEquals("first-band",persisted.bandSlug);assertEquals("account-a",persisted.accountId);
+    String event=UploadEvents.json(persisted).toString();
+    assertFalse(event.contains("capability-secret"));assertFalse(event.contains("direct-secret"));assertFalse(event.contains("account-a"));
+    store.close();
+  }
+
   private void createLegacy(int version, boolean leaseColumns) {
     SQLiteDatabase db = context.openOrCreateDatabase(DB, Context.MODE_PRIVATE, null);
     String lease = leaseColumns ? ", lease_owner TEXT, lease_expires_at INTEGER DEFAULT 0" : "";
@@ -85,5 +107,11 @@ public class UploadStoreRobolectricIntegrationTest {
     try { while (cursor.moveToNext()) if (expected.equals(cursor.getString(cursor.getColumnIndexOrThrow("name")))) return; }
     finally { cursor.close(); }
     fail("missing column " + expected);
+  }
+  private static boolean columnExists(SQLiteDatabase db, String expected) {
+    Cursor cursor = db.rawQuery("PRAGMA table_info(tasks)", null);
+    try { while (cursor.moveToNext()) if (expected.equals(cursor.getString(cursor.getColumnIndexOrThrow("name")))) return true; }
+    finally { cursor.close(); }
+    return false;
   }
 }

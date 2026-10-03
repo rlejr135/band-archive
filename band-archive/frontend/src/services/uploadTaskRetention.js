@@ -1,4 +1,4 @@
-const inProgress = (status) => ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing'].includes(status);
+const inProgress = (status) => ['preparing', 'queued', 'uploading', 'retry_wait', 'completing', 'processing', 'auth_required'].includes(status);
 
 // Keep task history small without retaining every failed browser File in RAM.
 // The rows remain visible, but only the newest failed browser transfer can be

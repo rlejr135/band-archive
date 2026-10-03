@@ -34,6 +34,9 @@ test('target filters keep song, rehearsal, and member uploads isolated', async (
   assert.deepEqual(filterNativeUploads({ memberId:2 }).map((item)=>item.id),['member']);
   assert.equal(nativeTargetMatches({ target:{song_id:4,rehearsal_id:9} },{ songId:4,rehearsalId:null }),false);
   assert.equal(nativeTargetMatches({ target:{member_id:2,rehearsal_id:9} },{ rehearsalId:9 }),false);
+  assert.equal(nativeTargetMatches({ bandId:4,target:{song_id:4,band_id:4} },{ songId:4,bandId:4 }),true);
+  assert.equal(nativeTargetMatches({ bandId:4,target:{song_id:4,band_id:4} },{ songId:4,bandId:5 }),false);
+  assert.equal(nativeTargetMatches({ bandId:4,target:{song_id:4,band_id:4} },{ songId:4 }),false);
   resetNativeUploadQueueForTest();
 });
 

@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'r
 import { UploadContext } from '../context/UploadContext';
 import { useAuth } from '../context/AuthContext';
 import { API_URL } from '../services/api';
-import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, getWebUploadTransport, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadBandMediaFile, uploadMediaFile } from '../services/mediaUploadManager';
+import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, getWebUploadTransport, MULTIPART_THRESHOLD_BYTES, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadBandMediaFile, uploadMediaFile } from '../services/mediaUploadManager';
 import { isNativeDurableVideo, mapUploadState } from '../services/uploadTransport';
 import { createBandUploadTransport } from '../services/bandUploadTransport';
 import { createAuthenticatedApiClient } from '../services/authApiClient';
@@ -14,7 +14,7 @@ const processingChanged = (previous, next) => ['transcoding_status', 'audio_url'
   .some((field) => previous?.[field] !== next?.[field]);
 
 export function useUploadController() {
-  const { getAccessToken, refreshSession } = useAuth();
+  const { getAccessToken, refreshSession, user } = useAuth();
   const authenticatedApi = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const activeRef = useRef(new Map());
   const recoveryRef = useRef(new Map());
@@ -40,6 +40,16 @@ export function useUploadController() {
     return () => { mounted=false; };
   }, []);
   useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
+  useEffect(() => {
+    const transport = getUploadTransport();
+    if (transport.kind !== 'native' || !transport.refreshCredentials) return undefined;
+    const accountId = user?.id || null;
+    const sync = async () => {
+      if (accountId) await transport.refreshCredentials({ accountId });
+    };
+    sync().catch(() => {});
+    return undefined;
+  }, [user?.id]);
 
   const poll = useCallback(async (media, active, onStatus, onMediaUpdate, kind = 'media', readProcessing = fetchMediaProcessing) => {
     let failures = 0;
@@ -72,8 +82,12 @@ export function useUploadController() {
       const recovery={ cancelled:false, xhrs:new Set(), session:null };
       recoveryRef.current.set(item.id,recovery);
       const media=normalizeMedia(nativeUploadResult(item));
+      const bandId=Number(item.bandId ?? item.target?.band_id);
+      const readProcessing=Number.isInteger(bandId)&&bandId>0
+        ? (mediaId,kind)=>authenticatedApi.requestJson(`/api/v2/bands/${bandId}/${kind === 'personal_log' ? 'personal-logs' : 'media'}/${mediaId}/processing`)
+        : fetchMediaProcessing;
       poll(media,recovery,(state,current) => updateNativeUpload({ id:item.id, state, result:current?JSON.stringify(current):item.result, error:current?.error || item.error }),
-        (current) => updateNativeUpload({ id:item.id, state:'processing', result:JSON.stringify(current), error:current?.error || item.error }),nativeUploadKind(item))
+        (current) => updateNativeUpload({ id:item.id, state:'processing', result:JSON.stringify(current), error:current?.error || item.error }),nativeUploadKind(item),readProcessing)
         .then(async (current) => {
           if(recovery.cancelled)return;
           const state=current?.transcoding_status === 'failed' ? 'failed' : current?.audio_url ? 'completed' : 'processing';
@@ -81,7 +95,7 @@ export function useUploadController() {
           if(state !== 'processing') await syncNativeProcessingStatus(transport,item.id,state,current);
         }).catch(() => {}).finally(() => { releaseNativeProcessingRecovery(item.id); recoveryRef.current.delete(item.id); });
     });
-  }, [nativePending,poll]);
+  }, [authenticatedApi,nativePending,poll]);
 
   const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, band, onProgress, onStatus, onMediaUpdate }) => {
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
@@ -92,7 +106,7 @@ export function useUploadController() {
       const transport = getUploadTransport();
       const bandId = Number(band?.id);
       const isBandUpload = Number.isInteger(bandId) && bandId > 0;
-      if (!isBandUpload && transport.kind === 'native' && isNativeDurableVideo(file)) {
+      if (transport.kind === 'native' && isNativeDurableVideo(file)) {
         active.transport = transport; active.nativeId = file.id;
         return await new Promise((resolve, reject) => {
           active.rejectNative = reject;
@@ -130,7 +144,10 @@ export function useUploadController() {
                 onMediaUpdate?.(media);
                 if (active.nativePolling) return;
                 active.nativePolling = true;
-                poll(media, active, onStatus, onMediaUpdate, target.kind)
+                const readProcessing = isBandUpload
+                  ? (mediaId, kind) => authenticatedApi.requestJson(`/api/v2/bands/${bandId}/${kind === 'personal_log' ? 'personal-logs' : 'media'}/${mediaId}/processing`)
+                  : fetchMediaProcessing;
+                poll(media, active, onStatus, onMediaUpdate, target.kind, readProcessing)
                   .then(async (result) => {
                     if (active.cancelled) return;
                     const state = result?.transcoding_status === 'failed' ? 'failed' : result?.audio_url ? 'completed' : 'processing';
@@ -144,7 +161,11 @@ export function useUploadController() {
             await hydrateNativeUploadQueue(transport);
             await transport.enqueue({
               fileId: file.id, uri: file.uri, name: file.name, mimeType: file.mimeType || file.type || 'application/octet-stream',
-              size: file.size, fingerprint: file.fingerprint, apiUrl: API_URL, target: nativeTargetPayload(target),
+              size: file.size, fingerprint: file.fingerprint, apiUrl: API_URL,
+              target: { ...nativeTargetPayload(target), ...(isBandUpload ? { band_id: bandId } : {}) },
+              protocol: isBandUpload ? 'v2' : 'v1', mode: isBandUpload && file.size < MULTIPART_THRESHOLD_BYTES ? 'direct' : 'multipart',
+              bandId: isBandUpload ? bandId : undefined, bandName: isBandUpload ? (band?.name || `밴드 #${bandId}`) : undefined,
+              bandSlug: isBandUpload ? (band?.slug || undefined) : undefined, accountId: isBandUpload ? user?.id : undefined,
             });
             onStatus('queued');
             } catch (error) { finish(error); }
@@ -169,7 +190,7 @@ export function useUploadController() {
       if (!active.cancelled) onStatus('failed', { error: error.message });
       throw error;
     } finally { activeRef.current.delete(key); }
-  }, [authenticatedApi, poll]);
+  }, [authenticatedApi, poll, user?.id]);
 
   const retryAudio = useCallback(async (mediaId, onStatus, onMediaUpdate, kind = 'media', taskKey = null) => {
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };

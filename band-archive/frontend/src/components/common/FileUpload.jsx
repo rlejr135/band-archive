@@ -18,7 +18,7 @@ const FileUpload = ({
   const [uploadProgress, setUploadProgress] = useState({});
   const { upload, cancel, cancelByNativeId, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
   const inputId = useId();
-  const nativeTarget = useMemo(() => memberId ? { memberId } : { songId, rehearsalId }, [memberId,rehearsalId,songId]);
+  const nativeTarget = useMemo(() => ({ ...(memberId ? { memberId } : { songId, rehearsalId }), bandId: band?.id }), [band?.id,memberId,rehearsalId,songId]);
   const onMediaCompleteRef = useRef(onMediaComplete);
 
   useEffect(() => { onMediaCompleteRef.current = onMediaComplete; }, [onMediaComplete]);
