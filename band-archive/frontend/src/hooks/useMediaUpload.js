@@ -88,8 +88,7 @@ export function useUploadController() {
   useEffect(() => {
     const transport=getUploadTransport();
     nativePending.filter((item) => item.state === 'processing' && nativeUploadResult(item)?.id).forEach((item) => {
-      if(!claimNativeProcessingRecovery(item.id))return;
-      const scope=captureNativeUploadScope(item.id); if(!scope){releaseNativeProcessingRecovery(item.id);return;}
+      const scope=captureNativeUploadScope(item.id); const claim=claimNativeProcessingRecovery(scope); if(!claim)return;
       const recovery={ cancelled:false, xhrs:new Set(), session:null };
       const current=()=>!recovery.cancelled&&isNativeUploadScopeCurrent(scope);
       recoveryRef.current.set(item.id,recovery);
@@ -105,7 +104,7 @@ export function useUploadController() {
           const state=result?.transcoding_status === 'failed' ? 'failed' : result?.audio_url ? 'completed' : 'processing';
           updateNativeUpload({ id:item.id, state, result:result?JSON.stringify(result):item.result, error:result?.error || item.error });
           if(state !== 'processing' && current()) await syncNativeProcessingStatus(transport,item.id,state,result);
-        }).catch(() => {}).finally(() => { releaseNativeProcessingRecovery(item.id); recoveryRef.current.delete(item.id); });
+        }).catch(() => {}).finally(() => { releaseNativeProcessingRecovery(claim); if(recoveryRef.current.get(item.id)===recovery)recoveryRef.current.delete(item.id); });
     });
   }, [authenticatedApi,nativePending,poll]);
 

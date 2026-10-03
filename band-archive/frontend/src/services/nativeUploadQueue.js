@@ -2,7 +2,7 @@
 const listeners = new Set();
 const items = new Map();
 const acknowledging = new Set();
-const recovered = new Set();
+const recovered = new Map();
 let started = false;
 let remove = null;
 let hydration = null;
@@ -77,8 +77,17 @@ export const isNativeUploadScopeCurrent = (scope) => {
   if (!item || !visibleToAccount(item)) return false;
   return item.protocol !== 'v2' || (scope.protocol === 'v2' && scope.generation === accountGeneration && scope.accountId === accountScope && item.accountId === scope.accountId);
 };
-export const claimNativeProcessingRecovery = (id) => { if (recovered.has(id)) return false; recovered.add(id); return true; };
-export const releaseNativeProcessingRecovery = (id) => recovered.delete(id);
+const recoveryKey = (scope) => scope?.protocol === 'v2' ? `v2:${scope.id}:${scope.accountId}:${scope.generation}` : `v1:${scope?.id}`;
+// A claim is owned by one exact scope generation. An old B recovery must not
+// block a later B session after B→A→B, nor release that newer owner's claim.
+export const claimNativeProcessingRecovery = (scope) => {
+  if (!scope) return null;
+  const key = recoveryKey(scope); if (recovered.has(key)) return null;
+  const claim = { key }; recovered.set(key, claim); return claim;
+};
+export const releaseNativeProcessingRecovery = (claim) => {
+  if (claim && recovered.get(claim.key) === claim) recovered.delete(claim.key);
+};
 
 export const hydrateNativeUploadQueue = async (transport, { refresh = false } = {}) => {
   if (!transport || transport.kind !== 'native') return [];

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { captureNativeUploadScope, consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, isNativeUploadScopeCurrent, mergeNativeUploadState, nativeTargetMatches, resetNativeUploadQueueForTest, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from './nativeUploadQueue.js';
+import { captureNativeUploadScope, claimNativeProcessingRecovery, consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, isNativeUploadScopeCurrent, mergeNativeUploadState, nativeTargetMatches, releaseNativeProcessingRecovery, resetNativeUploadQueueForTest, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from './nativeUploadQueue.js';
 
 test('native queue hydrates once and fans out one listener snapshot', async () => {
   resetNativeUploadQueueForTest(); let list = 0; let nativeListener; const acked = [];
@@ -58,6 +58,23 @@ test('partial callbacks cannot create unknown rows but full legacy and active v2
   assert.equal(updateNativeUpload({id:'legacy',protocol:'v1',state:'queued',target:{song_id:2}}),true);
   assert.equal(updateNativeUpload({id:'active-v2',protocol:'v2',accountId:'account-a',state:'queued',target:{song_id:3}}),true);
   assert.deepEqual(filterNativeUploads({songId:2}).map((item)=>item.id),['legacy']); assert.deepEqual(filterNativeUploads({songId:3}).map((item)=>item.id),['active-v2']);
+  resetNativeUploadQueueForTest();
+});
+
+test('B to A to B gives the new B generation its own recovery claim and old release cannot clear it', async () => {
+  resetNativeUploadQueueForTest(); const synced=[]; let resolveOld; let resolveNew;
+  const oldWait=new Promise((done)=>{resolveOld=done;}); const newWait=new Promise((done)=>{resolveNew=done;});
+  const transport={kind:'native',listPending:async()=>({items:[{id:'same-id',protocol:'v2',accountId:'account-b',state:'processing',target:{song_id:1}}]}),addListener:async()=>()=>{},syncStatus:async(value)=>synced.push(value)};
+  setNativeUploadAccountScope('account-b'); await hydrateNativeUploadQueue(transport); const oldScope=captureNativeUploadScope('same-id'); const oldClaim=claimNativeProcessingRecovery(oldScope);
+  const oldRecovery=oldWait.then(async()=>{if(!isNativeUploadScopeCurrent(oldScope))return;updateNativeUpload({id:'same-id',state:'completed',result:'{}'});await syncNativeProcessingStatus(transport,'same-id','completed',{id:1,transcoding_status:'completed'});}).finally(()=>releaseNativeProcessingRecovery(oldClaim));
+  setNativeUploadAccountScope('account-a'); await hydrateNativeUploadQueue(transport,{refresh:true});
+  setNativeUploadAccountScope('account-b'); await hydrateNativeUploadQueue(transport,{refresh:true}); const newScope=captureNativeUploadScope('same-id'); const newClaim=claimNativeProcessingRecovery(newScope);
+  assert.ok(oldClaim); assert.ok(newClaim); assert.notEqual(oldClaim.key,newClaim.key); assert.equal(claimNativeProcessingRecovery(newScope),null);
+  const newRecovery=newWait.then(async()=>{if(!isNativeUploadScopeCurrent(newScope))return;updateNativeUpload({id:'same-id',state:'completed',result:'{}'});await syncNativeProcessingStatus(transport,'same-id','completed',{id:1,transcoding_status:'completed'});}).finally(()=>releaseNativeProcessingRecovery(newClaim));
+  resolveOld(); await oldRecovery; assert.equal(claimNativeProcessingRecovery(newScope),null);
+  assert.equal(isNativeUploadScopeCurrent(oldScope),false); assert.equal(isNativeUploadScopeCurrent(newScope),true);
+  resolveNew(); await newRecovery;
+  assert.equal(filterNativeUploads({songId:1})[0]?.state,'completed'); assert.equal(synced.length,1);
   resetNativeUploadQueueForTest();
 });
 
