@@ -115,6 +115,48 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertTrue(IOSUploadAccountScope.allows(accountB,accountID:"account-b"))
     }
 
+    func testInFlightRefreshCannotReplaceAccountASession() async throws {
+        let gate = ControlledRefresh(); let service="test.auth.\(UUID().uuidString)"
+        let auth=SecureAuthSessionStore(service:service,refreshTransport:{ request in try await gate.fetch(request) })
+        defer { try? auth.removeSession() }
+        try auth.setSession(authSession(access:"old-b",refresh:"refresh-b",account:"account-b"),supabaseURL:"https://example.invalid",anonKey:"anon")
+        let pending=Task { try await auth.bearerToken(for:"account-b") }; await gate.waitForRequest()
+        try auth.setSession(authSession(access:"new-a",refresh:"refresh-a",account:"account-a"),supabaseURL:"https://example.invalid",anonKey:"anon")
+        await gate.release(authSession(access:"rotated-b",refresh:"rotated-refresh-b",account:"account-b"))
+        do { _=try await pending.value; XCTFail("stale refresh must fail") } catch let error as SecureAuthSessionError { XCTAssertEqual(error,.accountMismatch) }
+        XCTAssertEqual(try auth.accountID(),"account-a")
+    }
+
+    func testInFlightRefreshCannotRestoreLoggedOutSession() async throws {
+        let gate = ControlledRefresh(); let auth=SecureAuthSessionStore(service:"test.auth.\(UUID().uuidString)",refreshTransport:{ request in try await gate.fetch(request) })
+        try auth.setSession(authSession(access:"old-b",refresh:"refresh-b",account:"account-b"),supabaseURL:"https://example.invalid",anonKey:"anon")
+        let pending=Task { try await auth.bearerToken(for:"account-b") }; await gate.waitForRequest(); try auth.removeSession()
+        await gate.release(authSession(access:"rotated-b",refresh:"rotated-refresh-b",account:"account-b"))
+        do { _=try await pending.value; XCTFail("logout must win") } catch let error as SecureAuthSessionError { XCTAssertEqual(error,.accountMismatch) }
+        XCTAssertNil(try auth.session())
+    }
+
+    func testStaleRefreshTokenRotationCannotWinOverNewerSameAccountSession() async throws {
+        let gate = ControlledRefresh(); let auth=SecureAuthSessionStore(service:"test.auth.\(UUID().uuidString)",refreshTransport:{ request in try await gate.fetch(request) })
+        defer { try? auth.removeSession() }
+        try auth.setSession(authSession(access:"old",refresh:"old-refresh",account:"account-a"),supabaseURL:"https://example.invalid",anonKey:"anon")
+        let first=Task { try await auth.bearerToken(for:"account-a") }; await gate.waitForRequest()
+        try auth.setSession(authSession(access:"new",refresh:"new-refresh",account:"account-a"),supabaseURL:"https://example.invalid",anonKey:"anon")
+        await gate.release(authSession(access:"stale",refresh:"stale-refresh",account:"account-a"))
+        do { _=try await first.value; XCTFail("stale rotation must fail") } catch let error as SecureAuthSessionError { XCTAssertEqual(error,.accountMismatch) }
+        let value=try auth.session(); XCTAssertTrue(value?.contains("new-refresh") == true); XCTAssertEqual(await gate.requestCount(),1)
+    }
+
+    func testConcurrentSameAccountRefreshSharesOneRotatedSession() async throws {
+        let gate = ControlledRefresh(); let auth=SecureAuthSessionStore(service:"test.auth.\(UUID().uuidString)",refreshTransport:{ request in try await gate.fetch(request) })
+        defer { try? auth.removeSession() }
+        try auth.setSession(authSession(access:"old",refresh:"old-refresh",account:"account-a"),supabaseURL:"https://example.invalid",anonKey:"anon")
+        let first=Task { try await auth.bearerToken(for:"account-a") }; await gate.waitForRequest()
+        let second=Task { try await auth.bearerToken(for:"account-a") }; for _ in 0..<3 { await Task.yield() }
+        await gate.release(authSession(access:"rotated",refresh:"rotated-refresh",account:"account-a"))
+        XCTAssertEqual(try await first.value,"rotated"); XCTAssertEqual(try await second.value,"rotated"); XCTAssertEqual(await gate.requestCount(),1)
+    }
+
     func testOwnerMismatchTerminalOverwriteAndLeaseExpiryTakeover() throws {
         let (store, task) = try makeStoreTask()
         let now = Date(timeIntervalSince1970: 1_000)
@@ -178,6 +220,19 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let cancelled = try insertTask(store: store, root: root, id: "cancelled", credentials: credentials)
         XCTAssertTrue(try store.cancel(cancelled.uploadID))
         XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.file.path))
+    }
+
+    func testGCRemovesStaleDirectMappingButPreservesLoggedOutV2Source() throws {
+        let root=try testRoot(); defer { try? FileManager.default.removeItem(at:root) }
+        let credentials=FakeCredentials(); let store=try IOSUploadStore(root:root,credentials:credentials)
+        let source=root.appendingPathComponent("direct.mov"); try Data([1]).write(to:source)
+        let task=IOSUploadTask(uploadID:"direct",workID:1,createdAt:Date(),file:DurableUploadFile(uploadID:"direct",path:source.path,filename:"direct.mov",contentType:"video/mp4",bytes:1,sha256:"x"),api:"https://example.invalid",targetKind:"media",targetID:"{}",sessionID:"s",partSize:nil,state:.uploading,progress:1,error:nil,result:nil,leaseOwner:nil,leaseExpiresAt:nil,updatedAt:Date(),protocolVersion:"v2",mode:"direct",bandID:7,bandName:nil,bandSlug:nil,accountID:"account-b")
+        try store.insert(task,capability:"cap"); XCTAssertTrue(try store.acquire(task.uploadID,owner:"worker"))
+        let attempt=IOSPartAttempt(uploadID:task.uploadID,part:0,attemptID:"stale",temporaryPath:source.path,taskIdentifier:1)
+        XCTAssertTrue(try store.savePartAttempt(attempt,owner:"worker")); XCTAssertEqual(try store.pauseAfterLogout(accountID:"account-b").count,1)
+        try store.garbageCollect(now:Date().addingTimeInterval(8*24*60*60))
+        XCTAssertTrue(FileManager.default.fileExists(atPath:source.path)); XCTAssertNil(try store.partAttempt(uploadID:task.uploadID,part:0,attemptID:"stale"))
+        XCTAssertEqual(try store.resumeAfterAuth(accountID:"account-b").first?.state,.retryWait)
     }
 
     func testRetryAndProcessingSourcesSurviveSevenDayGC() throws {
@@ -266,6 +321,29 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let task = IOSUploadTask(uploadID: id, workID: try store.allocateWorkID(), createdAt: Date(), file: DurableUploadFile(uploadID: id, path: path.path, filename: "video.mp4", contentType: "video/mp4", bytes: 1, sha256: "x"), api: "https://example.invalid", targetKind: "member_id", targetID: "1", sessionID: "session", partSize: 1, state: .queued, progress: 0, error: nil, result: nil, leaseOwner: nil, leaseExpiresAt: nil, updatedAt: Date())
         try store.insert(task, capability: "secret"); return task
     }
+    private func authSession(access: String, refresh: String, account: String) -> String {
+        String(data: try! JSONSerialization.data(withJSONObject:["access_token":access,"refresh_token":refresh,"expires_at":0,"user":["id":account]]),encoding:.utf8)!
+    }
+}
+
+private actor ControlledRefresh {
+    private var requestContinuation: CheckedContinuation<Void, Never>?
+    private var responseContinuation: CheckedContinuation<(Data, URLResponse), Error>?
+    private var requested = false
+    private var count = 0
+    func fetch(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        count += 1; requested = true; requestContinuation?.resume(); requestContinuation = nil
+        return try await withCheckedThrowingContinuation { responseContinuation = $0 }
+    }
+    func waitForRequest() async {
+        if requested { return }
+        await withCheckedContinuation { requestContinuation = $0 }
+    }
+    func release(_ body: String) {
+        let response=HTTPURLResponse(url:URL(string:"https://example.invalid/auth/v1/token")!,statusCode:200,httpVersion:nil,headerFields:nil)!
+        responseContinuation?.resume(returning:(Data(body.utf8),response)); responseContinuation=nil
+    }
+    func requestCount() -> Int { count }
 }
 
 private final class FakeCredentials: UploadCredentialStoring {

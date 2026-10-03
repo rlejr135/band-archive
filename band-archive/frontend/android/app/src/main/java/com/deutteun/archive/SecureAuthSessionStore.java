@@ -13,6 +13,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -26,35 +27,42 @@ final class SecureAuthSessionStore {
   private static final String SESSION="session",SESSION_IV="session_iv",URL_KEY="url",URL_IV="url_iv",ANON="anon",ANON_IV="anon_iv";
   private final SharedPreferences prefs;
   private static final Object REFRESH_LOCK=new Object();
+  private static final Object SESSION_LOCK=new Object();
+  private static final AtomicLong SESSION_GENERATION=new AtomicLong();
   SecureAuthSessionStore(Context context){prefs=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE);}
   String getSession(){return open(SESSION,SESSION_IV);}
-  void setSession(String value){seal(SESSION,SESSION_IV,value);}
+  void setSession(String value){synchronized(SESSION_LOCK){seal(SESSION,SESSION_IV,value);SESSION_GENERATION.incrementAndGet();}}
   String accountId(){try{JSONObject session=new JSONObject(getSession());JSONObject user=session.optJSONObject("user");return user==null?null:user.optString("id",null);}catch(Exception ignored){return null;}}
   /** A bridge enqueue must never synchronously refresh on the UI thread. */
   boolean hasSessionFor(String accountId){try{return sessionFor(accountId)!=null;}catch(Exception ignored){return false;}}
-  void removeSession(){prefs.edit().remove(SESSION).remove(SESSION_IV).commit();}
-  void configure(String url,String anon){seal(URL_KEY,URL_IV,url!=null&&url.endsWith("/")?url.substring(0,url.length()-1):url);seal(ANON,ANON_IV,anon);}
+  void removeSession(){synchronized(SESSION_LOCK){prefs.edit().remove(SESSION).remove(SESSION_IV).commit();SESSION_GENERATION.incrementAndGet();}}
+  void configure(String url,String anon){synchronized(SESSION_LOCK){seal(URL_KEY,URL_IV,url!=null&&url.endsWith("/")?url.substring(0,url.length()-1):url);seal(ANON,ANON_IV,anon);SESSION_GENERATION.incrementAndGet();}}
   String accessTokenFor(String accountId) throws Exception {
     synchronized(REFRESH_LOCK){
-      JSONObject session=sessionFor(accountId); if(session==null)return null;
+      String raw=getSession();JSONObject session=sessionFor(raw,accountId); if(session==null)return null; long generation=SESSION_GENERATION.get();
       long expires=session.optLong("expires_at",0); long now=System.currentTimeMillis()/1000L;
       if(expires>now+60)return session.optString("access_token",null);
-      return refresh(session,accountId);
+      return refresh(session,accountId,raw,generation);
     }
   }
   private JSONObject sessionFor(String accountId) throws Exception {
-    String raw=getSession();if(raw==null||accountId==null)return null;
+    return sessionFor(getSession(),accountId);
+  }
+  private JSONObject sessionFor(String raw,String accountId) throws Exception {
+    if(raw==null||accountId==null)return null;
     JSONObject session=new JSONObject(raw);JSONObject user=session.optJSONObject("user");
     return user!=null&&accountId.equals(user.optString("id"))?session:null;
   }
-  private String refresh(JSONObject session,String accountId) throws Exception {
+  private String refresh(JSONObject session,String accountId,String original,long generation) throws Exception {
     String refresh=session.optString("refresh_token"),url=open(URL_KEY,URL_IV),anon=open(ANON,ANON_IV);
     if(refresh.isEmpty()||url==null||anon==null)return null;
     HttpURLConnection c=(HttpURLConnection)new URL(url+"/auth/v1/token?grant_type=refresh_token").openConnection();
     c.setRequestMethod("POST");c.setConnectTimeout(20_000);c.setReadTimeout(60_000);c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");c.setRequestProperty("apikey",anon);c.setRequestProperty("Authorization","Bearer "+anon);
     try{try(OutputStream out=c.getOutputStream()){out.write(new JSONObject().put("refresh_token",refresh).toString().getBytes(StandardCharsets.UTF_8));}
       int code=c.getResponseCode();InputStream in=code/100==2?c.getInputStream():c.getErrorStream();StringBuilder body=new StringBuilder();if(in!=null)try(BufferedReader reader=new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8))){String line;while((line=reader.readLine())!=null)body.append(line);}
-      if(code/100!=2)return null;JSONObject renewed=new JSONObject(body.toString());JSONObject user=renewed.optJSONObject("user");if(user==null||!accountId.equals(user.optString("id")))return null;setSession(renewed.toString());return renewed.optString("access_token",null);
+      if(code/100!=2)return null;JSONObject renewed=new JSONObject(body.toString());JSONObject user=renewed.optJSONObject("user");if(user==null||!accountId.equals(user.optString("id")))return null;
+      synchronized(SESSION_LOCK){String current=getSession();if(SESSION_GENERATION.get()!=generation||current==null||!current.equals(original)||sessionFor(current,accountId)==null)return null;seal(SESSION,SESSION_IV,renewed.toString());SESSION_GENERATION.incrementAndGet();}
+      return renewed.optString("access_token",null);
     }finally{c.disconnect();}
   }
   private SecretKey key() throws Exception{KeyStore ks=KeyStore.getInstance("AndroidKeyStore");ks.load(null);if(!ks.containsAlias(KEY)){KeyGenerator g=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");g.init(new KeyGenParameterSpec.Builder(KEY,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());g.generateKey();}return ((KeyStore.SecretKeyEntry)ks.getEntry(KEY,null)).getSecretKey();}

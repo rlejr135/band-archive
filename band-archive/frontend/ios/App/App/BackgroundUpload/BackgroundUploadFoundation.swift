@@ -390,13 +390,21 @@ final class IOSUploadStore {
         for id in terminalIDs { _ = try? acknowledge(id, fileManager: fileManager) }
 
         let referencedSources = Set(try query("SELECT path FROM tasks", []).compactMap { $0[0] })
+        let tasksByID = Dictionary(uniqueKeysWithValues: try retainedTasks().map { ($0.uploadID, $0) })
         let attempts = try allAttempts()
         let leasedAttempts = Set(try query("SELECT p.temp_path FROM part_attempts p JOIN tasks t ON t.upload_id=p.upload_id WHERE t.lease_expires_at>=? AND t.state NOT IN ('completed','failed','cancelled')", [stamp(now)]).compactMap { $0[0] })
         let active = activeAttemptPaths.union(leasedAttempts).union(BackgroundUploadCopyRegistry.activePaths())
         let referencedAttempts = Set(attempts.map(\.temporaryPath))
         for attempt in attempts where !active.contains(attempt.temporaryPath) {
-            // A mapping without a recovered active URLSession task is stale; remove its canonical part file and row.
-            try? removeCanonical(attempt.temporaryPath, fileManager: fileManager)
+            // A direct v2 part zero points at the durable source rather than a
+            // disposable multipart part. Its stale URLSession mapping can be
+            // removed after logout/lease loss, but a nonterminal source remains
+            // resumable until backend completion or explicit user cancellation.
+            let isDurableDirectSource = tasksByID[attempt.uploadID].map {
+                $0.protocolVersion == "v2" && $0.mode == "direct" && !$0.state.isTerminal &&
+                attempt.part == 0 && attempt.temporaryPath == $0.file.path
+            } ?? false
+            if !isDurableDirectSource { try? removeCanonical(attempt.temporaryPath, fileManager: fileManager) }
             try? execute("DELETE FROM part_attempts WHERE upload_id=? AND part_number=? AND attempt_id=?", values: [attempt.uploadID, attempt.part, attempt.attemptID])
         }
 

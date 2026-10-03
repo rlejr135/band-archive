@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, mergeNativeUploadState, nativeTargetMatches, resetNativeUploadQueueForTest, subscribeNativeUploadQueue, syncNativeProcessingStatus } from './nativeUploadQueue.js';
+import { consumeNativeUpload, filterNativeUploads, hydrateNativeUploadQueue, mergeNativeUploadState, nativeTargetMatches, resetNativeUploadQueueForTest, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus } from './nativeUploadQueue.js';
 
 test('native queue hydrates once and fans out one listener snapshot', async () => {
   resetNativeUploadQueueForTest(); let list = 0; let nativeListener; const acked = [];
@@ -28,6 +28,18 @@ test('an account-scoped refresh replaces retained native snapshots from the prio
   const refreshed=await hydrateNativeUploadQueue(transport,{ refresh:true });
   assert.deepEqual(refreshed.map((item)=>item.id),['account-b']);
   resetNativeUploadQueueForTest();
+});
+
+test('a retained v2 event from account B is dropped after switching the JS scope to account A', async () => {
+  resetNativeUploadQueueForTest(); let retained;
+  const transport={ kind:'native', listPending:async()=>({ items:[] }), addListener:async(_name,listener)=>{retained=listener;return()=>{};} };
+  setNativeUploadAccountScope('account-b'); await hydrateNativeUploadQueue(transport);
+  retained({id:'b-event',protocol:'v2',accountId:'account-b',state:'queued',target:{song_id:1}});
+  setNativeUploadAccountScope('account-a');
+  retained({id:'late-b-event',protocol:'v2',accountId:'account-b',state:'queued',target:{song_id:1}});
+  const snapshots=[]; const stop=subscribeNativeUploadQueue((items)=>snapshots.push(items.map((item)=>item.id)));
+  assert.deepEqual(snapshots.at(-1),[]);
+  stop(); resetNativeUploadQueueForTest();
 });
 
 test('target filters keep song, rehearsal, and member uploads isolated', async () => {

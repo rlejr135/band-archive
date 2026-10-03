@@ -7,7 +7,7 @@ import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUplo
 import { isNativeDurableVideo, mapUploadState, shouldUseNativeUpload } from '../services/uploadTransport';
 import { createBandUploadTransport } from '../services/bandUploadTransport';
 import { createAuthenticatedApiClient } from '../services/authApiClient';
-import { claimNativeProcessingRecovery, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
+import { claimNativeProcessingRecovery, hydrateNativeUploadQueue, nativeUploadKind, nativeUploadResult, releaseNativeProcessingRecovery, setNativeUploadAccountScope, subscribeNativeUploadQueue, syncNativeProcessingStatus, updateNativeUpload } from '../services/nativeUploadQueue';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const processingStates = new Set(['queued', 'pending', 'processing']);
@@ -43,6 +43,7 @@ export function useUploadController() {
   useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
   useEffect(() => {
     const transport = getUploadTransport(); let mounted = true;
+    setNativeUploadAccountScope(user?.id);
     hydrateNativeUploadQueue(transport, { refresh:true }).then((items) => { if (mounted) setNativePending(items); }).catch(() => {});
     return () => { mounted = false; };
   }, [user?.id]);

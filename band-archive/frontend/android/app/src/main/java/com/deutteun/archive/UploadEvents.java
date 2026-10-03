@@ -12,6 +12,7 @@ public final class UploadEvents {
     JSObject out = new JSObject().put("id", t.id).put("state", t.state).put("progress", t.progress);
     out.put("name", t.name);
     out.put("protocol", t.protocol);
+    if ("v2".equals(t.protocol) && t.accountId != null) out.put("accountId", t.accountId);
     if (t.bandId > 0) out.put("bandId", t.bandId);
     if (t.bandName != null) out.put("bandName", t.bandName);
     if (t.bandSlug != null) out.put("bandSlug", t.bandSlug);

@@ -6,12 +6,14 @@ const recovered = new Set();
 let started = false;
 let remove = null;
 let hydration = null;
+let accountScope = null;
 const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 
 const snapshot = () => [...items.values()];
 const notify = () => { const value = snapshot(); listeners.forEach((listener) => listener(value)); };
 const sameValue = (left, right) => JSON.stringify(left) === JSON.stringify(right);
-const publish = (item) => { if (!item?.id || sameValue(items.get(item.id), item)) return; items.set(item.id, item); notify(); };
+const visibleToAccount = (item) => item?.protocol !== 'v2' || (!!accountScope && item.accountId === accountScope);
+const publish = (item) => { if (!item?.id || !visibleToAccount(item) || sameValue(items.get(item.id), item)) return; items.set(item.id, item); notify(); };
 const numeric = (value) => value === undefined || value === null || value === '' ? null : Number(value);
 
 export const nativeTargetMatches = (item, target = {}) => {
@@ -47,6 +49,12 @@ export const mergeNativeUploadState = (previous, matching, project = (item) => i
   return next;
 };
 export const updateNativeUpload = (item) => publish({ ...items.get(item.id), ...item });
+export const setNativeUploadAccountScope = (accountId) => {
+  accountScope = accountId || null;
+  let changed = false;
+  for (const [id, item] of items) if (!visibleToAccount(item)) { items.delete(id); changed = true; }
+  if (changed) notify();
+};
 export const claimNativeProcessingRecovery = (id) => { if (recovered.has(id)) return false; recovered.add(id); return true; };
 export const releaseNativeProcessingRecovery = (id) => recovered.delete(id);
 
@@ -97,4 +105,4 @@ export const syncNativeProcessingStatus = async (transport, id, state, media) =>
   publish(updated); await transport.syncStatus?.({ id, state, result, error: updated.error }); return updated;
 };
 
-export const resetNativeUploadQueueForTest = () => { remove?.(); remove = null; started = false; hydration = null; items.clear(); listeners.clear(); acknowledging.clear(); recovered.clear(); };
+export const resetNativeUploadQueueForTest = () => { remove?.(); remove = null; started = false; hydration = null; accountScope = null; items.clear(); listeners.clear(); acknowledging.clear(); recovered.clear(); };
