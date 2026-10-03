@@ -60,9 +60,9 @@ test('iOS durable video snapshots accept MIME values and the legacy public.movie
   assert.equal(isNativeDurableVideo({ id: 'three', uri: 'file:///three', mimeType: 'audio/mpeg' }), false);
 });
 
-test('only Android sends scoped band videos to native while legacy iOS uploads stay native', () => {
+test('native platforms send scoped band videos to their v2 queue while legacy uploads stay native', () => {
   assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:true, platform:'android' }),true);
-  assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:true, platform:'ios' }),false);
+  assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:true, platform:'ios' }),true);
   assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:false, platform:'ios' }),true);
   assert.equal(shouldUseNativeUpload({ isNativeVideo:false, isBandUpload:true, platform:'android' }),false);
 });

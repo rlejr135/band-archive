@@ -78,6 +78,20 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         XCTAssertEqual(try store.task(task.uploadID)?.state, .cancelled)
     }
 
+    func testAccountLogoutMakesOnlyV2RowsAuthRequiredAndBlocksStaleLeaseWrites() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        let source = root.appendingPathComponent("v2.mov"); try Data([1]).write(to: source)
+        let file = DurableUploadFile(uploadID:"v2",path:source.path,filename:"v2.mov",contentType:"video/mp4",bytes:1,sha256:"x")
+        let task = IOSUploadTask(uploadID:"v2",workID:1,createdAt:Date(),file:file,api:"https://example.invalid",targetKind:"media",targetID:"{}",sessionID:"s",partSize:1,state:.uploading,progress:10,error:nil,result:nil,leaseOwner:nil,leaseExpiresAt:nil,updatedAt:Date(),protocolVersion:"v2",mode:"multipart",bandID:7,bandName:"Band",bandSlug:"band",accountID:"account-a")
+        try store.insert(task, capability:"cap"); XCTAssertTrue(try store.acquire("v2", owner:"worker"))
+        XCTAssertEqual(try store.pauseAfterLogout(accountID:"account-a").map(\.uploadID), ["v2"])
+        var stale=task; stale.state=.uploading
+        XCTAssertFalse(try store.updateForOwner(stale, owner:"worker"))
+        XCTAssertEqual(try store.task("v2")?.state, .authRequired)
+        XCTAssertTrue(try store.resumeAfterAuth(accountID:"account-a").first?.state == .retryWait)
+    }
+
     func testOwnerMismatchTerminalOverwriteAndLeaseExpiryTakeover() throws {
         let (store, task) = try makeStoreTask()
         let now = Date(timeIntervalSince1970: 1_000)

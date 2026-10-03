@@ -17,10 +17,9 @@ export const isNativeDurableVideo = (file = {}) => {
   return Boolean(file.id && file.uri) && (file.nativeVideo === true || mime.startsWith('video/') || mime === 'public.movie');
 };
 
-// iOS currently implements only the legacy native queue. Keep that behavior
-// for unscoped uploads, while band media uses the authenticated web v2 path.
+// Both native queues keep v2 band scope and credentials durably on-device.
 export const shouldUseNativeUpload = ({ isBandUpload = false, isNativeVideo = false, platform = Capacitor.getPlatform() } = {}) => (
-  Boolean(isNativeVideo) && (!isBandUpload || platform === 'android')
+  Boolean(isNativeVideo) && (!isBandUpload || ['android', 'ios'].includes(platform))
 );
 
 export class UploadTransportError extends Error {

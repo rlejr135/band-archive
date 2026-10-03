@@ -10,7 +10,7 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 
 // This foundation is deliberately not a Capacitor plugin yet. Web calls continue to use the web transport.
 enum BackgroundUploadState: String, Codable, CaseIterable {
-    case preparing, queued, uploading, retryWait = "retry_wait", completing, processing, completed, failed, cancelled
+    case preparing, queued, uploading, retryWait = "retry_wait", completing, processing, authRequired = "auth_required", completed, failed, cancelled
 
     var isTerminal: Bool { self == .completed || self == .failed || self == .cancelled }
     var isRunnable: Bool { [.preparing, .queued, .uploading, .retryWait, .completing].contains(self) }
@@ -252,6 +252,16 @@ struct IOSUploadTask: Codable, Equatable {
     var file: DurableUploadFile; var api: String; var targetKind: String; var targetID: String
     var sessionID: String?; var partSize: Int64?; var state: BackgroundUploadState; var progress: Int
     var error: String?; var result: String?; var leaseOwner: String?; var leaseExpiresAt: Date?; var updatedAt: Date
+    /// v1 is deliberately the migration default. A legacy row is never inferred to
+    /// belong to the currently selected band.
+    var protocolVersion: String = "v1"; var mode: String = "multipart"
+    var bandID: Int64?; var bandName: String?; var bandSlug: String?; var accountID: String?
+
+    init(uploadID: String, workID: Int64, createdAt: Date, file: DurableUploadFile, api: String, targetKind: String, targetID: String, sessionID: String?, partSize: Int64?, state: BackgroundUploadState, progress: Int, error: String?, result: String?, leaseOwner: String?, leaseExpiresAt: Date?, updatedAt: Date, protocolVersion: String = "v1", mode: String = "multipart", bandID: Int64? = nil, bandName: String? = nil, bandSlug: String? = nil, accountID: String? = nil) {
+        self.uploadID=uploadID; self.workID=workID; self.createdAt=createdAt; self.file=file; self.api=api; self.targetKind=targetKind; self.targetID=targetID; self.sessionID=sessionID; self.partSize=partSize; self.state=state; self.progress=progress; self.error=error; self.result=result; self.leaseOwner=leaseOwner; self.leaseExpiresAt=leaseExpiresAt; self.updatedAt=updatedAt; self.protocolVersion=protocolVersion; self.mode=mode; self.bandID=bandID; self.bandName=bandName; self.bandSlug=bandSlug; self.accountID=accountID
+    }
+
+    var isBandV2: Bool { protocolVersion == "v2" && bandID != nil && accountID != nil }
 }
 
 /// A durable association between an opaque background URLSession task and its
@@ -282,7 +292,7 @@ final class IOSUploadStore {
     func insert(_ task: IOSUploadTask, capability: String) throws {
         try transaction {
             try credentials.save(capability, uploadID: task.uploadID)
-            try execute("INSERT INTO tasks(upload_id,work_id,created_at,path,name,bytes,type,hash,api,target_kind,target_id,session_id,part_size,state,progress,error,result,lease_owner,lease_expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values: [task.uploadID, task.workID, stamp(task.createdAt), task.file.path, task.file.filename, task.file.bytes, task.file.contentType, task.file.sha256, task.api, task.targetKind, task.targetID, task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, task.leaseOwner, task.leaseExpiresAt.map(stamp), stamp(task.updatedAt)])
+            try execute("INSERT INTO tasks(upload_id,work_id,created_at,path,name,bytes,type,hash,api,target_kind,target_id,session_id,part_size,state,progress,error,result,lease_owner,lease_expires_at,updated_at,protocol,mode,band_id,band_name,band_slug,account_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values: [task.uploadID, task.workID, stamp(task.createdAt), task.file.path, task.file.filename, task.file.bytes, task.file.contentType, task.file.sha256, task.api, task.targetKind, task.targetID, task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, task.leaseOwner, task.leaseExpiresAt.map(stamp), stamp(task.updatedAt), task.protocolVersion, task.mode, task.bandID, task.bandName, task.bandSlug, task.accountID])
         }
     }
     func task(_ id: String) throws -> IOSUploadTask? { try tasks(where: "upload_id=?", values: [id]).first }
@@ -295,12 +305,12 @@ final class IOSUploadStore {
             return next
         }
     }
-    func acquire(_ id: String, owner: String, now: Date = Date()) throws -> Bool { try update("UPDATE tasks SET lease_owner=?,lease_expires_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled') AND (lease_owner IS NULL OR lease_expires_at<? OR lease_owner=?)", [owner, stamp(now.addingTimeInterval(120)), id, stamp(now), owner]) }
-    func renew(_ id: String, owner: String, now: Date = Date()) throws -> Bool { try update("UPDATE tasks SET lease_expires_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [stamp(now.addingTimeInterval(120)), id, owner, stamp(now)]) }
+    func acquire(_ id: String, owner: String, now: Date = Date()) throws -> Bool { try update("UPDATE tasks SET lease_owner=?,lease_expires_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled','auth_required') AND (lease_owner IS NULL OR lease_expires_at<? OR lease_owner=?)", [owner, stamp(now.addingTimeInterval(120)), id, stamp(now), owner]) }
+    func renew(_ id: String, owner: String, now: Date = Date()) throws -> Bool { try update("UPDATE tasks SET lease_expires_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled','auth_required')", [stamp(now.addingTimeInterval(120)), id, owner, stamp(now)]) }
     func release(_ id: String, owner: String) throws -> Bool { try update("UPDATE tasks SET lease_owner=NULL,lease_expires_at=NULL WHERE upload_id=? AND lease_owner=?", [id, owner]) }
     /// Engine writes are compare-and-set: a cancelled/terminal row or different lease owner cannot be overwritten.
     func updateForOwner(_ task: IOSUploadTask, owner: String, now: Date = Date()) throws -> Bool {
-        try transaction { try update("UPDATE tasks SET session_id=?,part_size=?,state=?,progress=?,error=?,result=?,lease_expires_at=?,updated_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, stamp(now.addingTimeInterval(120)), stamp(now), task.uploadID, owner, stamp(now)]) }
+        try transaction { try update("UPDATE tasks SET session_id=?,part_size=?,state=?,progress=?,error=?,result=?,lease_expires_at=?,updated_at=? WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled','auth_required')", [task.sessionID, task.partSize, task.state.rawValue, task.progress, task.error, task.result, stamp(now.addingTimeInterval(120)), stamp(now), task.uploadID, owner, stamp(now)]) }
     }
     func cancel(_ id: String) throws -> Bool {
         let changed = try transaction { try update("UPDATE tasks SET state='cancelled',lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state NOT IN ('completed','failed','cancelled')", [stamp(Date()), id]) }
@@ -314,12 +324,30 @@ final class IOSUploadStore {
         guard state == .completed || state == .failed else { return false }
         return try update("UPDATE tasks SET state=?,result=COALESCE(?,result),error=COALESCE(?,error),lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE upload_id=? AND state='processing'", [state.rawValue, result, error, stamp(now), id])
     }
+    /// Logout wins over an active worker. Clearing the lease in the same UPDATE
+    /// means a delayed completion cannot move an account's v2 task back to upload.
+    func pauseAfterLogout(accountID: String, now: Date = Date()) throws -> [IOSUploadTask] {
+        try transaction {
+            let before = try tasks(where: "protocol='v2' AND account_id=? AND state NOT IN ('completed','failed','cancelled','auth_required')", values: [accountID])
+            _ = try update("UPDATE tasks SET state='auth_required',error='auth_required',lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE protocol='v2' AND account_id=? AND state NOT IN ('completed','failed','cancelled','auth_required')", [stamp(now), accountID])
+            return before.map { var value=$0; value.state=.authRequired; value.error="auth_required"; value.leaseOwner=nil; value.leaseExpiresAt=nil; value.updatedAt=now; return value }
+        }
+    }
+    func resumeAfterAuth(accountID: String, now: Date = Date()) throws -> [IOSUploadTask] {
+        try transaction {
+            let before = try tasks(where: "protocol='v2' AND account_id=? AND state='auth_required'", values: [accountID])
+            _ = try update("UPDATE tasks SET state='retry_wait',error=NULL,updated_at=? WHERE protocol='v2' AND account_id=? AND state='auth_required'", [stamp(now), accountID])
+            return before.map { var value=$0; value.state=.retryWait; value.error=nil; value.updatedAt=now; return value }
+        }
+    }
     /// Terminal-only consume sequence. Files are removed first, then Keychain capability, then the task row and
     /// its ACK/attempt children. Any earlier failure leaves the terminal row for an idempotent later retry.
     func acknowledge(_ id: String, fileManager: FileManager = .default) throws -> Bool {
         guard let task = try task(id), task.state.isTerminal else { return false }
         try cleanupArtifacts(uploadID: id, requireTerminal: true, deleteMappings: false, fileManager: fileManager)
         try credentials.delete(uploadID: id)
+        // Direct presigned URLs use a separate Keychain account and never enter SQLite.
+        try? credentials.delete(uploadID: "direct-url:\(id)")
         return try transaction { try update("DELETE FROM tasks WHERE upload_id=? AND state IN ('completed','failed','cancelled')", [id]) }
     }
     func saveAck(uploadID: String, part: Int, etag: String, bytes: Int64, owner: String, now: Date = Date()) throws -> Bool { try ownerTransaction(uploadID: uploadID, owner: owner, now: now) { try execute("INSERT OR REPLACE INTO part_acks(upload_id,part_number,etag,bytes) VALUES(?,?,?,?)", values: [uploadID, part, etag, bytes]) } }
@@ -411,11 +439,22 @@ final class IOSUploadStore {
         if version < 2 { try transaction { try execute("CREATE TABLE IF NOT EXISTS pending_acks(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,etag TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(upload_id,part_number))"); try execute("PRAGMA user_version=2") } }
         if version < 3 { try transaction { try execute("CREATE TABLE IF NOT EXISTS part_attempts(upload_id TEXT NOT NULL REFERENCES tasks(upload_id) ON DELETE CASCADE,part_number INTEGER NOT NULL,attempt_id TEXT NOT NULL,temp_path TEXT NOT NULL,task_identifier INTEGER,created_at REAL NOT NULL,PRIMARY KEY(upload_id,part_number,attempt_id))"); try execute("PRAGMA user_version=3") } }
         if version < 4 { try transaction { try execute("CREATE TABLE IF NOT EXISTS work_id_allocator(singleton INTEGER PRIMARY KEY CHECK(singleton=1),next_work_id INTEGER NOT NULL CHECK(next_work_id>0))"); try execute("INSERT OR IGNORE INTO work_id_allocator(singleton,next_work_id) SELECT 1,COALESCE(MAX(work_id),0)+1 FROM tasks"); try execute("PRAGMA user_version=4") } }
+        if version < 5 { try transaction {
+            try execute("ALTER TABLE tasks ADD COLUMN protocol TEXT NOT NULL DEFAULT 'v1'")
+            try execute("ALTER TABLE tasks ADD COLUMN mode TEXT NOT NULL DEFAULT 'multipart'")
+            try execute("ALTER TABLE tasks ADD COLUMN band_id INTEGER")
+            try execute("ALTER TABLE tasks ADD COLUMN band_name TEXT")
+            try execute("ALTER TABLE tasks ADD COLUMN band_slug TEXT")
+            try execute("ALTER TABLE tasks ADD COLUMN account_id TEXT")
+            // Explicitly pin pre-v2 rows to legacy transport; no current-band inference.
+            try execute("UPDATE tasks SET protocol='v1',mode='multipart' WHERE protocol IS NULL OR protocol='' ")
+            try execute("PRAGMA user_version=5")
+        } }
     }
     private func tasks(where clause: String, values: [Any?]) throws -> [IOSUploadTask] {
-        try query("SELECT upload_id,work_id,created_at,path,name,bytes,type,hash,api,target_kind,target_id,session_id,part_size,state,progress,error,result,lease_owner,lease_expires_at,updated_at FROM tasks WHERE \(clause) ORDER BY created_at", values).compactMap { row in
+        try query("SELECT upload_id,work_id,created_at,path,name,bytes,type,hash,api,target_kind,target_id,session_id,part_size,state,progress,error,result,lease_owner,lease_expires_at,updated_at,protocol,mode,band_id,band_name,band_slug,account_id FROM tasks WHERE \(clause) ORDER BY created_at", values).compactMap { row in
             guard let id=row[0], let work=Int64(row[1] ?? ""), let created=Double(row[2] ?? ""), let path=row[3], let name=row[4], let bytes=Int64(row[5] ?? ""), let type=row[6], let hash=row[7], let api=row[8], let kind=row[9], let target=row[10], let raw=row[13], let state=BackgroundUploadState(rawValue:raw), let progress=Int(row[14] ?? ""), let updated=Double(row[19] ?? "") else{return nil}
-            return IOSUploadTask(uploadID:id,workID:work,createdAt:Date(timeIntervalSince1970:created),file:DurableUploadFile(uploadID:id,path:path,filename:name,contentType:type,bytes:bytes,sha256:hash),api:api,targetKind:kind,targetID:target,sessionID:row[11],partSize:Int64(row[12] ?? ""),state:state,progress:progress,error:row[15],result:row[16],leaseOwner:row[17],leaseExpiresAt:Double(row[18] ?? "").map{Date(timeIntervalSince1970:$0)},updatedAt:Date(timeIntervalSince1970:updated))
+            return IOSUploadTask(uploadID:id,workID:work,createdAt:Date(timeIntervalSince1970:created),file:DurableUploadFile(uploadID:id,path:path,filename:name,contentType:type,bytes:bytes,sha256:hash),api:api,targetKind:kind,targetID:target,sessionID:row[11],partSize:Int64(row[12] ?? ""),state:state,progress:progress,error:row[15],result:row[16],leaseOwner:row[17],leaseExpiresAt:Double(row[18] ?? "").map{Date(timeIntervalSince1970:$0)},updatedAt:Date(timeIntervalSince1970:updated),protocolVersion:row[20] ?? "v1",mode:row[21] ?? "multipart",bandID:Int64(row[22] ?? ""),bandName:row[23],bandSlug:row[24],accountID:row[25])
         }
     }
     private func transaction<T>(_ block: () throws -> T) throws -> T { try execute("BEGIN IMMEDIATE"); do { let result=try block(); try execute("COMMIT"); return result } catch { try? execute("ROLLBACK"); throw error } }
@@ -425,7 +464,7 @@ final class IOSUploadStore {
             try write(); return true
         }
     }
-    private func ownsLease(uploadID: String, owner: String, now: Date) throws -> Bool { !(try query("SELECT 1 FROM tasks WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')", [uploadID, owner, stamp(now)])).isEmpty }
+    private func ownsLease(uploadID: String, owner: String, now: Date) throws -> Bool { !(try query("SELECT 1 FROM tasks WHERE upload_id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled','auth_required')", [uploadID, owner, stamp(now)])).isEmpty }
     private func execute(_ sql: String, values: [Any?] = []) throws { guard let db else { throw BackgroundUploadError.database("closed") }; var statement: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw BackgroundUploadError.database("prepare") }; defer { sqlite3_finalize(statement) }; try bind(values, to: statement); guard sqlite3_step(statement) == SQLITE_DONE else { throw BackgroundUploadError.database("step") } }
     private func update(_ sql: String, _ values: [Any?]) throws -> Bool { guard let db else { throw BackgroundUploadError.database("closed") }; var statement: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw BackgroundUploadError.database("prepare") }; defer { sqlite3_finalize(statement) }; try bind(values, to: statement); guard sqlite3_step(statement) == SQLITE_DONE else { throw BackgroundUploadError.database("step") }; return sqlite3_changes(db)>0 }
     private func query(_ sql: String, _ values: [Any?]) throws -> [[String?]] { guard let db else { throw BackgroundUploadError.database("closed") }; var statement: OpaquePointer?; guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw BackgroundUploadError.database("prepare") }; defer { sqlite3_finalize(statement) }; try bind(values, to: statement); var rows:[[String?]]=[]; while sqlite3_step(statement)==SQLITE_ROW { rows.append((0..<sqlite3_column_count(statement)).map { sqlite3_column_text(statement,$0).map { String(cString:$0) } }) }; return rows }

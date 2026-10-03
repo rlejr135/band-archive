@@ -43,7 +43,7 @@ export function useUploadController() {
   useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
   useEffect(() => {
     const transport = getUploadTransport();
-    if (Capacitor.getPlatform() !== 'android' || transport.kind !== 'native' || !transport.refreshCredentials) return undefined;
+    if (!['android', 'ios'].includes(Capacitor.getPlatform()) || transport.kind !== 'native' || !transport.refreshCredentials) return undefined;
     const accountId = user?.id || null;
     const sync = async () => {
       if (accountId) await transport.refreshCredentials({ accountId });
