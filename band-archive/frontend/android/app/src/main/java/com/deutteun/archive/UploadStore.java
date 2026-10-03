@@ -51,7 +51,7 @@ public final class UploadStore extends SQLiteOpenHelper {
   /** Local/UI transition before scheduling; engine writes must use updateForOwner instead. */
   public void update(Task t) { Sealed cap=seal(t.capability),directUrl=seal(t.directUrl); getWritableDatabase().execSQL("UPDATE tasks SET state=?,progress=?,session=?,cap=?,iv=?,direct_url=?,direct_url_iv=?,mode=?,error=?,result=?,attempts=?,updated=? WHERE id=?",new Object[]{t.state,t.progress,t.session,cap.cipher,cap.iv,directUrl.cipher,directUrl.iv,t.mode,t.error,t.result,t.attempts,System.currentTimeMillis(),t.id}); }
   /** Atomic engine write: an active matching lease and a nonterminal row are both required. */
-  public boolean updateForOwner(Task t,String owner){if(owner==null||owner.isEmpty())return false;long now=System.currentTimeMillis();Sealed cap=seal(t.capability),directUrl=seal(t.directUrl);android.content.ContentValues v=new android.content.ContentValues();v.put("state",t.state);v.put("progress",t.progress);v.put("session",t.session);v.put("cap",cap.cipher);v.put("iv",cap.iv);v.put("direct_url",directUrl.cipher);v.put("direct_url_iv",directUrl.iv);v.put("mode",t.mode);v.put("error",t.error);v.put("result",t.result);v.put("attempts",t.attempts);v.put("updated",now);v.put("lease_expires_at",now+120_000L);return getWritableDatabase().update("tasks",v,"id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled')",new String[]{t.id,owner,String.valueOf(now)})>0;}
+  public boolean updateForOwner(Task t,String owner){if(owner==null||owner.isEmpty())return false;long now=System.currentTimeMillis();Sealed cap=seal(t.capability),directUrl=seal(t.directUrl);android.content.ContentValues v=new android.content.ContentValues();v.put("state",t.state);v.put("progress",t.progress);v.put("session",t.session);v.put("cap",cap.cipher);v.put("iv",cap.iv);v.put("direct_url",directUrl.cipher);v.put("direct_url_iv",directUrl.iv);v.put("mode",t.mode);v.put("error",t.error);v.put("result",t.result);v.put("attempts",t.attempts);v.put("updated",now);v.put("lease_expires_at",now+120_000L);return getWritableDatabase().update("tasks",v,"id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('completed','failed','cancelled','auth_required')",new String[]{t.id,owner,String.valueOf(now)})>0;}
   /** Resume only this account's paused v2 rows after its secure auth session was refreshed. */
   public List<Task> resumeAfterAuth(String accountId){
     List<Task> resumed=new ArrayList<>(); if(accountId==null||accountId.isEmpty())return resumed;
@@ -69,7 +69,7 @@ public final class UploadStore extends SQLiteOpenHelper {
     }finally{db.endTransaction();}
     return resumed;
   }
-  /** Logout removes the secure session and pauses only that account's v2 rows. */
+  /** Logout removes this account's v2 rows from runnable ownership atomically. */
   public List<Task> pauseAfterLogout(String accountId){
     List<Task> paused=new ArrayList<>(); if(accountId==null||accountId.isEmpty())return paused;
     SQLiteDatabase db=getWritableDatabase(); db.beginTransaction(); try{
@@ -77,15 +77,17 @@ public final class UploadStore extends SQLiteOpenHelper {
       try{
         while(c.moveToNext()){
           Task t=read(c);t.state="auth_required";
-          t.error="로그인 세션이 종료되어 업로드가 일시 중지되었습니다.";update(t);paused.add(t);
+          t.error="로그인 세션이 종료되어 업로드가 일시 중지되었습니다.";
+          android.content.ContentValues values=new android.content.ContentValues();values.put("state",t.state);values.put("error",t.error);values.putNull("lease_owner");values.put("lease_expires_at",0);values.put("updated",System.currentTimeMillis());
+          if(db.update("tasks",values,"id=? AND protocol='v2' AND account_id=? AND state NOT IN ('completed','failed','cancelled')",new String[]{t.id,accountId})>0){t.leaseOwner=null;t.leaseExpires=0;paused.add(t);}
         }
       }finally{c.close();}
       db.setTransactionSuccessful();
     }finally{db.endTransaction();}
     return paused;
   }
-  public boolean acquire(String id,String owner){if(owner==null||owner.isEmpty())return false;long now=System.currentTimeMillis(),until=now+120_000L;android.content.ContentValues v=new android.content.ContentValues();v.put("lease_owner",owner);v.put("lease_expires_at",until);return getWritableDatabase().update("tasks",v,"id=? AND state NOT IN ('completed','failed','cancelled') AND (lease_owner IS NULL OR lease_expires_at<? OR lease_owner=?)",new String[]{id,String.valueOf(now),owner})>0;}
-  public boolean renew(String id,String owner){if(owner==null||owner.isEmpty())return false;long now=System.currentTimeMillis();android.content.ContentValues v=new android.content.ContentValues();v.put("lease_expires_at",now+120_000L);return getWritableDatabase().update("tasks",v,"id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('cancelled','completed','failed')",new String[]{id,owner,String.valueOf(now)})>0;}
+  public boolean acquire(String id,String owner){if(owner==null||owner.isEmpty())return false;long now=System.currentTimeMillis(),until=now+120_000L;android.content.ContentValues v=new android.content.ContentValues();v.put("lease_owner",owner);v.put("lease_expires_at",until);return getWritableDatabase().update("tasks",v,"id=? AND state NOT IN ('completed','failed','cancelled','auth_required') AND (lease_owner IS NULL OR lease_expires_at<? OR lease_owner=?)",new String[]{id,String.valueOf(now),owner})>0;}
+  public boolean renew(String id,String owner){if(owner==null||owner.isEmpty())return false;long now=System.currentTimeMillis();android.content.ContentValues v=new android.content.ContentValues();v.put("lease_expires_at",now+120_000L);return getWritableDatabase().update("tasks",v,"id=? AND lease_owner=? AND lease_expires_at>=? AND state NOT IN ('cancelled','completed','failed','auth_required')",new String[]{id,owner,String.valueOf(now)})>0;}
   public void release(String id,String owner){getWritableDatabase().execSQL("UPDATE tasks SET lease_owner=NULL,lease_expires_at=0 WHERE id=? AND lease_owner=?",new Object[]{id,owner});}
   /** The cancelled state is the durable cancel marker; clearing the lease happens in this same transaction. */
   public boolean cancel(String id){SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{android.content.ContentValues v=new android.content.ContentValues();v.put("state","cancelled");v.putNull("lease_owner");v.put("lease_expires_at",0);v.put("updated",System.currentTimeMillis());boolean changed=db.update("tasks",v,"id=? AND state NOT IN ('completed','failed','cancelled')",new String[]{id})>0;db.setTransactionSuccessful();return changed;}finally{db.endTransaction();}}

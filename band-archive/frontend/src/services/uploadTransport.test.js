@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createTransportCache, createWebUploadTransport, isNativeDurableVideo, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
+import { createTransportCache, createWebUploadTransport, isNativeDurableVideo, mapUploadState, resolveUploadTransport, shouldUseNativeUpload } from './uploadTransport.js';
 
 const response = (body = {}, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -58,6 +58,13 @@ test('iOS durable video snapshots accept MIME values and the legacy public.movie
   assert.equal(isNativeDurableVideo({ id: 'one', uri: 'file:///one', mimeType: 'video/quicktime', nativeVideo: true }), true);
   assert.equal(isNativeDurableVideo({ id: 'two', uri: 'file:///two', mimeType: 'public.movie' }), true);
   assert.equal(isNativeDurableVideo({ id: 'three', uri: 'file:///three', mimeType: 'audio/mpeg' }), false);
+});
+
+test('only Android sends scoped band videos to native while legacy iOS uploads stay native', () => {
+  assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:true, platform:'android' }),true);
+  assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:true, platform:'ios' }),false);
+  assert.equal(shouldUseNativeUpload({ isNativeVideo:true, isBandUpload:false, platform:'ios' }),true);
+  assert.equal(shouldUseNativeUpload({ isNativeVideo:false, isBandUpload:true, platform:'android' }),false);
 });
 
 test('iOS uses Capacitor 8 bridge-instance registration instead of the removed static API', async () => {

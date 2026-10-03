@@ -25,7 +25,7 @@ public final class UploadEngine {
 
   static Outcome run(Context context, String id, UploadExecutionRegistry.Handle execution) {
     UploadStore store = new UploadStore(context); UploadStore.Task task = store.get(id);
-    if (task == null || execution == null || execution.isCancelled() || "cancelled".equals(task.state) || "completed".equals(task.state)) { UploadExecutionRegistry.unregister(execution); return Outcome.SUCCESS; }
+    if (task == null || execution == null || execution.isCancelled() || "cancelled".equals(task.state) || "completed".equals(task.state) || "auth_required".equals(task.state)) { UploadExecutionRegistry.unregister(execution); return Outcome.SUCCESS; }
     execution.attach(Thread.currentThread()); if (!store.acquire(id, execution.owner)) { UploadExecutionRegistry.unregister(execution); return Outcome.SUCCESS; }
     EXECUTION.set(execution);
     try { try {

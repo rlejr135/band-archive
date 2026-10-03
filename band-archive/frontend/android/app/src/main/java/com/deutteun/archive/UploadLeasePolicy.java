@@ -5,7 +5,7 @@ final class UploadLeasePolicy {
   private UploadLeasePolicy() {}
 
   static boolean isNonterminal(String state) {
-    return !"completed".equals(state) && !"failed".equals(state) && !"cancelled".equals(state);
+    return !"completed".equals(state) && !"failed".equals(state) && !"cancelled".equals(state) && !"auth_required".equals(state);
   }
 
   static boolean canEngineWrite(String currentState, String leaseOwner, String owner) {

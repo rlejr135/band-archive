@@ -84,6 +84,18 @@ public class UploadStoreRobolectricIntegrationTest {
     store.close();
   }
 
+  @Test public void logoutRevokesOnlyMatchingV2LeaseAndRejectsAStaleWorkerWrite() {
+    UploadStore store = new UploadStore(context);
+    UploadStore.Task matching=task("matching");matching.protocol="v2";matching.bandId=4;matching.accountId="account-a";store.insert(matching);matching=store.get(matching.id);matching.state="uploading";store.update(matching);assertTrue(store.acquire(matching.id,"worker-a"));
+    UploadStore.Task other=task("other");other.protocol="v2";other.bandId=5;other.accountId="account-b";store.insert(other);other=store.get(other.id);other.state="uploading";store.update(other);assertTrue(store.acquire(other.id,"worker-b"));
+    assertEquals(1,store.pauseAfterLogout("account-a").size());
+    UploadStore.Task paused=store.get(matching.id),unaffected=store.get(other.id);
+    assertEquals("auth_required",paused.state);assertNull(paused.leaseOwner);assertEquals(0L,paused.leaseExpires);
+    matching.state="uploading";assertFalse(store.updateForOwner(matching,"worker-a"));assertFalse(store.renew(matching.id,"worker-a"));assertFalse(store.acquire(matching.id,"worker-a"));
+    assertEquals("uploading",unaffected.state);assertEquals("worker-b",unaffected.leaseOwner);
+    store.close();
+  }
+
   private void createLegacy(int version, boolean leaseColumns) {
     SQLiteDatabase db = context.openOrCreateDatabase(DB, Context.MODE_PRIVATE, null);
     String lease = leaseColumns ? ", lease_owner TEXT, lease_expires_at INTEGER DEFAULT 0" : "";

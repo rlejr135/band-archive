@@ -44,6 +44,7 @@ public class UploadProtocolTest {
   @Test public void cancelRaceRejectsTheEngineWriteAfterLeaseWasCleared() {
     // This mirrors the SQL predicate after cancel's one-transaction state+lease update.
     assertFalse(UploadLeasePolicy.canEngineWrite("cancelled",null,"owner-a"));
+    assertFalse(UploadLeasePolicy.canEngineWrite("auth_required","owner-a","owner-a"));
     assertTrue(UploadLeasePolicy.isNonterminal("processing"));
     assertFalse(UploadLeasePolicy.isNonterminal("cancelled"));
   }
