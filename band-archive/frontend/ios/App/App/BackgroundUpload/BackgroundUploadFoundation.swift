@@ -264,6 +264,16 @@ struct IOSUploadTask: Codable, Equatable {
     var isBandV2: Bool { protocolVersion == "v2" && bandID != nil && accountID != nil }
 }
 
+/// v1 rows predate account-scoped uploads and deliberately retain their
+/// historical, unscoped behavior. Every v2 row is visible or mutable only by
+/// the account it was created for; no session means no v2 access.
+enum IOSUploadAccountScope {
+    static func allows(_ task: IOSUploadTask, accountID: String?) -> Bool {
+        guard task.protocolVersion == "v2" else { return true }
+        return task.isBandV2 && task.accountID == accountID
+    }
+}
+
 /// A durable association between an opaque background URLSession task and its
 /// one-use on-disk part file. Presigned URLs and capabilities are deliberately
 /// not persisted here.
@@ -297,6 +307,9 @@ final class IOSUploadStore {
     }
     func task(_ id: String) throws -> IOSUploadTask? { try tasks(where: "upload_id=?", values: [id]).first }
     func retainedTasks() throws -> [IOSUploadTask] { try tasks(where: "1=1", values: []) }
+    func retainedTasks(accountID: String?) throws -> [IOSUploadTask] {
+        try retainedTasks().filter { IOSUploadAccountScope.allows($0, accountID: accountID) }
+    }
     func allocateWorkID() throws -> Int64 {
         try transaction {
             guard let text = try query("SELECT next_work_id FROM work_id_allocator WHERE singleton=1", []).first?.first,

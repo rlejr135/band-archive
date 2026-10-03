@@ -21,6 +21,15 @@ test('started native queue explicitly refreshes recovered snapshots without addi
   resetNativeUploadQueueForTest();
 });
 
+test('an account-scoped refresh replaces retained native snapshots from the prior account', async () => {
+  resetNativeUploadQueueForTest(); let list=0;
+  const transport={ kind:'native', listPending:async()=>({ items:++list === 1 ? [{ id:'account-a',state:'queued',target:{song_id:1} }] : [{ id:'account-b',state:'queued',target:{song_id:2} }] }), addListener:async()=>()=>{} };
+  await hydrateNativeUploadQueue(transport);
+  const refreshed=await hydrateNativeUploadQueue(transport,{ refresh:true });
+  assert.deepEqual(refreshed.map((item)=>item.id),['account-b']);
+  resetNativeUploadQueueForTest();
+});
+
 test('target filters keep song, rehearsal, and member uploads isolated', async () => {
   resetNativeUploadQueueForTest();
   const transport={ kind:'native', listPending:async()=>({ items:[

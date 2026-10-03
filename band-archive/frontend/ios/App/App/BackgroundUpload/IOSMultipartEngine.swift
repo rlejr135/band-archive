@@ -292,6 +292,11 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
 
     func allocateWorkID() throws -> Int64 { try store.allocateWorkID() }
     func retainedTasks() -> [IOSUploadTask] { (try? store.retainedTasks()) ?? [] }
+    func retainedTasks(accountID: String?) -> [IOSUploadTask] { (try? store.retainedTasks(accountID: accountID)) ?? [] }
+    func allowsAction(_ id: String, accountID: String?) -> Bool {
+        guard let task = try? store.task(id) else { return false }
+        return IOSUploadAccountScope.allows(task, accountID: accountID)
+    }
 
     func enqueue(_ task: IOSUploadTask) async throws {
         if task.protocolVersion == "v2" {
@@ -322,6 +327,19 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
                 // Recovery registers live system tasks before GC sees stale mappings/files.
                 try? self.store.garbageCollect(activeAttemptPaths: self.coordinator.activeAttemptPaths())
                 let tasks = (try? self.store.retainedTasks()) ?? []
+                for task in tasks where (uploadID == nil || task.uploadID == uploadID) && task.state.isRunnable { self.beginReconcile(task.uploadID) }
+            }
+        }
+    }
+    /// A bridge-triggered pump must not wake another account's v2 work. Internal
+    /// background recovery keeps using the unscoped overload and still fences on
+    /// the durable lease plus the secure bearer before making a request.
+    func pumpVisible(accountID: String?, uploadID: String? = nil) {
+        recoverBackgroundTasks { [weak self] in
+            guard let self else { return }
+            self.pumpQueue.async {
+                try? self.store.garbageCollect(activeAttemptPaths: self.coordinator.activeAttemptPaths())
+                let tasks = self.retainedTasks(accountID: accountID)
                 for task in tasks where (uploadID == nil || task.uploadID == uploadID) && task.state.isRunnable { self.beginReconcile(task.uploadID) }
             }
         }
@@ -578,6 +596,10 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         } }
         publish(task)
     }
+    func cancel(_ id: String, accountID: String?) -> Bool {
+        guard allowsAction(id, accountID: accountID) else { return false }
+        cancel(id); return true
+    }
     func pauseAfterLogout(accountID: String) {
         guard !accountID.isEmpty, let tasks = try? store.pauseAfterLogout(accountID: accountID) else { return }
         for task in tasks { stopActive(task.uploadID); publish(task) }
@@ -589,12 +611,24 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
         resumed.forEach { publish($0); pump($0.uploadID) }; return true
     }
     func acknowledge(_ id: String) -> Bool { guard let task = try? store.task(id) else { return false }; BackgroundUploadNotifier.shared.clear(task); return (try? store.acknowledge(id)) ?? false }
+    func acknowledge(_ id: String, accountID: String?) -> Bool {
+        guard allowsAction(id, accountID: accountID) else { return false }
+        return acknowledge(id)
+    }
     func retry(_ id: String) -> Bool { guard let task = try? store.task(id), task.state == .retryWait, !coordinator.hasActive(uploadID: id) else { return false }; pump(id); return true }
+    func retry(_ id: String, accountID: String?) -> Bool {
+        guard allowsAction(id, accountID: accountID) else { return false }
+        return retry(id)
+    }
     func syncProcessing(_ id: String, state: BackgroundUploadState, result: String?, error: String?) -> Bool {
         guard state == .completed || state == .failed, let current = try? store.task(id), current.state == .processing,
               (try? store.syncProcessing(id, state: state, result: result, error: error)) == true,
               let task = try? store.task(id) else { return false }
         publish(task); return true
+    }
+    func syncProcessing(_ id: String, state: BackgroundUploadState, result: String?, error: String?, accountID: String?) -> Bool {
+        guard allowsAction(id, accountID: accountID) else { return false }
+        return syncProcessing(id, state: state, result: result, error: error)
     }
 
     private func requestBackgroundDrain() {
@@ -672,7 +706,10 @@ final class IOSMultipartEngine: NSObject, URLSessionTaskDelegate, URLSessionData
     }
     private func stopActive(_ uploadID: String) {
         session.getAllTasks { tasks in tasks.filter { MultipartPartDescriptor.parse($0.taskDescription)?.uploadID == uploadID }.forEach { $0.cancel() } }
-        coordinator.releaseAll(uploadID: uploadID).forEach { try? FileManager.default.removeItem(at: $0.temporaryURL) }
+        // part zero is a direct upload's canonical durable source. A logout,
+        // lease loss, or stale delegate must only cancel it; source deletion is
+        // reserved for successful backend completion or explicit user cancel.
+        coordinator.releaseAll(uploadID: uploadID).filter { $0.descriptor.part > 0 }.forEach { try? FileManager.default.removeItem(at: $0.temporaryURL) }
     }
     private func publish(_ task: IOSUploadTask) { event?(task); BackgroundUploadNotifier.shared.publishIfNeeded(task) }
 }

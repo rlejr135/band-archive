@@ -32,6 +32,10 @@ test('iOS v2 queue keeps immutable band scope, Keychain session rotation, and op
   assert.match(auth, /refresh_token/);
   assert.match(auth, /auth\/v1\/token/);
   assert.match(auth, /accountMismatch/);
+  assert.match(engine, /filter \{ \$0\.descriptor\.part > 0 \}/);
+  assert.match(plugin, /retainedTasks\(accountID:account\)/);
+  assert.match(plugin, /engine\.cancel\(id,accountID:currentAccountID\(\)\)/);
+  assert.match(plugin, /IOSUploadAccountScope\.allows/);
   assert.doesNotMatch(auth, /UserDefaults/);
   assert.match(supabase, /\['android', 'ios'\]/);
   assert.match(supabase, /storage: isNativeSecureSession\(\) \? nativeAuthStorage : window\.localStorage/);

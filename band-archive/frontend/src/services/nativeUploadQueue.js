@@ -56,6 +56,9 @@ export const hydrateNativeUploadQueue = async (transport, { refresh = false } = 
   if (!started || refresh) {
     hydration = (async () => {
       const pending = await transport.listPending();
+      // Native plugins scope a refreshed snapshot to the active account. Drop
+      // retained events from a previous account before applying that snapshot.
+      if (refresh) { items.clear(); notify(); }
       (pending.items || []).forEach(publish);
       if (!started) { started = true; remove = await transport.addListener('state', publish); }
     })();

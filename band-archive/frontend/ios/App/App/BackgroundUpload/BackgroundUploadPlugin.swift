@@ -29,10 +29,10 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
     private func bind(_ engine: IOSMultipartEngine) {
         guard boundEngine !== engine else { return }
         boundEngine = engine
-        engine.event = { [weak self] task in self?.notifyListeners("state", data: Self.json(task), retainUntilConsumed: true) }
+        engine.event = { [weak self] task in self?.emitIfVisible(task) }
         // Rehydrate listeners registered while the provider was temporarily nil.
-        engine.retainedTasks().forEach { notifyListeners("state", data: Self.json($0), retainUntilConsumed: true) }
-        engine.pump()
+        let account=currentAccountID(); engine.retainedTasks(accountID: account).forEach { notifyListeners("state", data: Self.json($0), retainUntilConsumed: true) }
+        engine.pumpVisible(accountID: account)
     }
 
     @objc func requestNotificationPermission(_ call: CAPPluginCall) { BackgroundUploadNotifier.shared.requestPermission { granted in call.resolve(["granted":granted,"backgroundLimited":!granted,"message":granted ? "" : "Notifications are off; background completion alerts will be unavailable.","forceQuitStopsTransfers":true]) } }
@@ -58,19 +58,19 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
         let file=DurableUploadFile(uploadID:id,path:safe.path,filename:call.getString("name") ?? "upload",contentType:call.getString("mimeType") ?? "video/mp4",bytes:size,sha256:call.getString("fingerprint") ?? "")
         let protocolVersion=call.getString("protocol") ?? "v1"; let mode=call.getString("mode") ?? "multipart"
         let bandID=call.getInt("bandId").map(Int64.init); let accountID=call.getString("accountId")
-        if protocolVersion == "v2" && (bandID == nil || bandID! <= 0 || accountID?.isEmpty != false || !["direct","multipart"].contains(mode)) { call.reject("Band-scoped uploads require immutable band and account metadata"); return }
+        if protocolVersion == "v2" && (bandID == nil || bandID! <= 0 || accountID?.isEmpty != false || accountID != currentAccountID() || !["direct","multipart"].contains(mode)) { call.reject("Band-scoped uploads require the current account's immutable metadata"); return }
         let task=IOSUploadTask(uploadID:id,workID:workID,createdAt:Date(),file:file,api:api,targetKind:kind,targetID:targetID,sessionID:nil,partSize:nil,state:.preparing,progress:0,error:nil,result:nil,leaseOwner:nil,leaseExpiresAt:nil,updatedAt:Date(),protocolVersion:protocolVersion,mode:protocolVersion == "v2" ? mode : "multipart",bandID:bandID,bandName:call.getString("bandName"),bandSlug:call.getString("bandSlug"),accountID:accountID)
         Task { do { try await engine.enqueue(task); call.resolve(["id":id,"state":"queued"]) } catch { call.reject(error.localizedDescription) } }
     }
     @objc func resume(_ call: CAPPluginCall) {
         guard let engine else { call.resolve(["available":false,"retryable":true,"state":"retry_wait","error":"queue_unavailable"]); return }
-        engine.pump(call.getString("id")); call.resolve(["available":true])
+        let account=currentAccountID(); if let id=call.getString("id"), !engine.allowsAction(id, accountID: account) { call.resolve(["available":false]); return }; engine.pumpVisible(accountID:account,uploadID:call.getString("id")); call.resolve(["available":true])
     }
-    @objc func retry(_ call: CAPPluginCall) { guard let id=call.getString("id"), let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.retry(id)]) }
-    @objc func cancel(_ call: CAPPluginCall) { guard let id=call.getString("id"), let engine else {call.reject("The upload queue is temporarily unavailable.");return}; engine.cancel(id); call.resolve() }
+    @objc func retry(_ call: CAPPluginCall) { guard let id=call.getString("id"), let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.retry(id,accountID:currentAccountID())]) }
+    @objc func cancel(_ call: CAPPluginCall) { guard let id=call.getString("id"), let engine else {call.reject("The upload queue is temporarily unavailable.");return}; guard engine.cancel(id,accountID:currentAccountID()) else {call.reject("Upload is unavailable for this account.");return}; call.resolve() }
     @objc func acknowledge(_ call: CAPPluginCall) { terminalDelete(call) }
     @objc func delete(_ call: CAPPluginCall) { terminalDelete(call) }
-    @objc func syncProcessingStatus(_ call: CAPPluginCall) { guard let id=call.getString("id"), let state=call.getString("state"), let next=BackgroundUploadState(rawValue:state), next == .completed || next == .failed, let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.syncProcessing(id,state:next,result:call.getString("result"),error:call.getString("error"))]) }
+    @objc func syncProcessingStatus(_ call: CAPPluginCall) { guard let id=call.getString("id"), let state=call.getString("state"), let next=BackgroundUploadState(rawValue:state), next == .completed || next == .failed, let engine else {call.resolve(["changed":false]);return}; call.resolve(["changed":engine.syncProcessing(id,state:next,result:call.getString("result"),error:call.getString("error"),accountID:currentAccountID())]) }
     @objc func updateProcessing(_ call: CAPPluginCall) { syncProcessingStatus(call) }
     @objc func setSecureAuthSession(_ call: CAPPluginCall) {
         guard let value=call.getString("value"), let url=call.getString("supabaseUrl"), let anon=call.getString("anonKey") else { call.reject("A secure session is required"); return }
@@ -81,7 +81,7 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
         do { let account=try secureAuth.accountID(); if let account { engine?.pauseAfterLogout(accountID:account) }; try secureAuth.removeSession(); call.resolve() } catch { call.reject(error.localizedDescription) }
     }
     @objc func refreshCredentials(_ call: CAPPluginCall) {
-        guard let account=call.getString("accountId"), let engine else { call.resolve(["changed":false]); return }
+        guard let account=call.getString("accountId"), account == currentAccountID(), let engine else { call.resolve(["changed":false]); return }
         Task { call.resolve(["changed": await engine.refreshCredentials(accountID:account)]) }
     }
     @objc func listPending(_ call: CAPPluginCall) {
@@ -89,10 +89,12 @@ public final class BackgroundUploadPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve(["items":[],"supportsBackground":true,"forceQuitStopsTransfers":true,"queueUnavailable":true,"retryable":true,"backgroundNotice":"The upload queue is temporarily unavailable; unlock the device and reopen the app to retry."])
             return
         }
-        engine.pump()
-        let tasks=engine.retainedTasks()
+        let account=currentAccountID(); engine.pumpVisible(accountID:account)
+        let tasks=engine.retainedTasks(accountID:account)
         call.resolve(["items":tasks.map(Self.json),"supportsBackground":true,"forceQuitStopsTransfers":true,"backgroundNotice":"Force-quitting the app cancels iOS background transfers; reopen and retry when needed."])
     }
-    private func terminalDelete(_ call:CAPPluginCall){guard let id=call.getString("id"),let engine else{call.resolve(["changed":false]);return};call.resolve(["changed":engine.acknowledge(id)])}
+    private func terminalDelete(_ call:CAPPluginCall){guard let id=call.getString("id"),let engine else{call.resolve(["changed":false]);return};call.resolve(["changed":engine.acknowledge(id,accountID:currentAccountID())])}
+    private func currentAccountID() -> String? { try? secureAuth.accountID() }
+    private func emitIfVisible(_ task: IOSUploadTask) { guard IOSUploadAccountScope.allows(task, accountID:currentAccountID()) else { return }; notifyListeners("state", data:Self.json(task), retainUntilConsumed:true) }
     private static func json(_ task:IOSUploadTask)->[String:Any]{ let target: [String:Any] = task.targetKind == "media" ? ((try? JSONSerialization.jsonObject(with: Data(task.targetID.utf8))) as? [String:Any] ?? [:]) : [task.targetKind:task.targetID]; var value:[String:Any] = ["id":task.uploadID,"workId":task.workID,"uri":URL(fileURLWithPath:task.file.path).absoluteString,"name":task.file.filename,"mimeType":task.file.contentType,"size":task.file.bytes,"fingerprint":task.file.sha256,"apiUrl":task.api,"target":target,"state":task.state.rawValue,"progress":task.progress,"error":task.error as Any,"result":task.result as Any,"protocol":task.protocolVersion,"mode":task.mode]; if let bandID=task.bandID { value["bandId"]=bandID; value["bandName"]=task.bandName as Any; value["bandSlug"]=task.bandSlug as Any }; return value }
 }

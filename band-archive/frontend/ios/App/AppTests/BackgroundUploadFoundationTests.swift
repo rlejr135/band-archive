@@ -86,10 +86,33 @@ final class BackgroundUploadFoundationTests: XCTestCase {
         let task = IOSUploadTask(uploadID:"v2",workID:1,createdAt:Date(),file:file,api:"https://example.invalid",targetKind:"media",targetID:"{}",sessionID:"s",partSize:1,state:.uploading,progress:10,error:nil,result:nil,leaseOwner:nil,leaseExpiresAt:nil,updatedAt:Date(),protocolVersion:"v2",mode:"multipart",bandID:7,bandName:"Band",bandSlug:"band",accountID:"account-a")
         try store.insert(task, capability:"cap"); XCTAssertTrue(try store.acquire("v2", owner:"worker"))
         XCTAssertEqual(try store.pauseAfterLogout(accountID:"account-a").map(\.uploadID), ["v2"])
+        // Logout/lease loss pauses a direct-v2 source; it must remain available
+        // for the same account's later authenticated resume.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
         var stale=task; stale.state=.uploading
         XCTAssertFalse(try store.updateForOwner(stale, owner:"worker"))
         XCTAssertEqual(try store.task("v2")?.state, .authRequired)
         XCTAssertTrue(try store.resumeAfterAuth(accountID:"account-a").first?.state == .retryWait)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testAccountScopedSnapshotsAndActionsHideOtherV2RowsButKeepLegacyRows() throws {
+        let root = try testRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = FakeCredentials(); let store = try IOSUploadStore(root: root, credentials: credentials)
+        func insert(_ id: String, workID: Int64, protocolVersion: String, accountID: String?) throws -> IOSUploadTask {
+            let source=root.appendingPathComponent("\(id).mov"); try Data([1]).write(to:source)
+            let value=IOSUploadTask(uploadID:id,workID:workID,createdAt:Date(),file:DurableUploadFile(uploadID:id,path:source.path,filename:"\(id).mov",contentType:"video/mp4",bytes:1,sha256:"x"),api:"https://example.invalid",targetKind:"media",targetID:"{}",sessionID:"s",partSize:1,state:.retryWait,progress:0,error:nil,result:nil,leaseOwner:nil,leaseExpiresAt:nil,updatedAt:Date(),protocolVersion:protocolVersion,mode:"multipart",bandID:protocolVersion == "v2" ? 7 : nil,bandName:nil,bandSlug:nil,accountID:accountID)
+            try store.insert(value,capability:"cap"); return value
+        }
+        let legacy=try insert("legacy",workID:1,protocolVersion:"v1",accountID:nil)
+        let accountA=try insert("account-a",workID:2,protocolVersion:"v2",accountID:"account-a")
+        let accountB=try insert("account-b",workID:3,protocolVersion:"v2",accountID:"account-b")
+        XCTAssertEqual(try store.retainedTasks(accountID:"account-a").map(\.uploadID),[legacy.uploadID,accountA.uploadID])
+        XCTAssertEqual(try store.retainedTasks(accountID:"account-b").map(\.uploadID),[legacy.uploadID,accountB.uploadID])
+        XCTAssertEqual(try store.retainedTasks(accountID:nil).map(\.uploadID),[legacy.uploadID])
+        XCTAssertTrue(IOSUploadAccountScope.allows(legacy,accountID:"account-b"))
+        XCTAssertFalse(IOSUploadAccountScope.allows(accountA,accountID:"account-b"))
+        XCTAssertTrue(IOSUploadAccountScope.allows(accountB,accountID:"account-b"))
     }
 
     func testOwnerMismatchTerminalOverwriteAndLeaseExpiryTakeover() throws {

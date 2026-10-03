@@ -42,6 +42,11 @@ export function useUploadController() {
   }, []);
   useEffect(() => subscribeNativeUploadQueue(setNativePending), []);
   useEffect(() => {
+    const transport = getUploadTransport(); let mounted = true;
+    hydrateNativeUploadQueue(transport, { refresh:true }).then((items) => { if (mounted) setNativePending(items); }).catch(() => {});
+    return () => { mounted = false; };
+  }, [user?.id]);
+  useEffect(() => {
     const transport = getUploadTransport();
     if (!['android', 'ios'].includes(Capacitor.getPlatform()) || transport.kind !== 'native' || !transport.refreshCredentials) return undefined;
     const accountId = user?.id || null;
