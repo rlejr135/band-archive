@@ -32,6 +32,7 @@ PHASE6_REVISION = '20260920_06'
 PHASE7_REVISION = '20260927_07'
 PHASE8_REVISION = '20261002_08'
 PHASE9_REVISION = '20261002_09'
+PHASE10_REVISION = '20261003_10'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -219,7 +220,17 @@ def phase9_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase10_direct_expiry_state(metadata)
+    return metadata
+
+
+def phase10_metadata():
+    """Exact revision-10 snapshot before direct gallery reservations."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    _restore_pre_phase11_direct_gallery_state(metadata)
     return metadata
 
 
@@ -261,6 +272,31 @@ def _restore_pre_phase10_direct_expiry_state(metadata):
     table.append_constraint(CheckConstraint(
         "status IN ('initiated', 'completing', 'completed', 'expired', 'failed')",
         name='ck_direct_upload_session_status',
+    ))
+
+
+def _restore_pre_phase11_direct_gallery_state(metadata):
+    """Undo gallery direct-upload columns and checks for the v10 snapshot."""
+    table = metadata.tables.get('direct_upload_session')
+    if table is None:
+        return
+    gallery_column = table.c.get('result_gallery_image_id')
+    if gallery_column is not None:
+        for constraint in list(table.constraints):
+            if gallery_column in constraint.columns:
+                table.constraints.remove(constraint)
+        table._columns.remove(gallery_column)
+    for constraint in list(table.constraints):
+        if constraint.name in {'ck_direct_upload_session_kind', 'ck_direct_upload_session_target'}:
+            table.constraints.remove(constraint)
+    table.append_constraint(CheckConstraint(
+        "kind IN ('media', 'personal_log')",
+        name='ck_direct_upload_session_kind',
+    ))
+    table.append_constraint(CheckConstraint(
+        "(kind = 'media' AND song_id IS NOT NULL AND member_id IS NULL) OR "
+        "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)",
+        name='ck_direct_upload_session_target',
     ))
 
 
@@ -1233,6 +1269,8 @@ def metadata_for_recorded_revision(revision):
         return phase8_metadata()
     if revision == PHASE9_REVISION:
         return phase9_metadata()
+    if revision == PHASE10_REVISION:
+        return phase10_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

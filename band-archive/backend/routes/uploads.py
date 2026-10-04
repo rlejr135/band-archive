@@ -294,6 +294,19 @@ def _v2_direct_item(session, actual_size):
     )
 
 
+def _v2_direct_gallery_item(session, actual_size):
+    """Materialize a verified gallery object in the session's original band."""
+    band = db.session.get(Band, session.band_id)
+    image = GalleryImage(
+        band_id=session.band_id, created_by_membership_id=session.created_by_membership_id,
+        visibility=band.default_visibility, filename=session.object_key.rsplit('/', 1)[1],
+        original_filename=session.original_filename, object_key=session.object_key,
+        file_size=actual_size,
+    )
+    db.session.add(image); db.session.flush()
+    return image
+
+
 @uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/direct/initiate', methods=['POST'])
 @_v2_upload_write
 def v2_initiate_direct_upload(band_id):
@@ -362,6 +375,57 @@ def v2_complete_direct_upload(band_id, session_id):
     session = db.session.get(DirectUploadSession, session_id)
     result_key = 'personal_log' if session.kind == 'personal_log' else 'media'
     return jsonify({'session_id': session.id, 'status': 'completed', result_key: item.to_dict() if item else None}), status
+
+
+@uploads_bp.route('/api/v2/bands/<int:band_id>/gallery/direct/initiate', methods=['POST'])
+@_v2_upload_write
+def v2_initiate_direct_gallery_upload(band_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ValidationError('A JSON object is required.')
+    filename = data.get('filename', '').strip() if isinstance(data.get('filename'), str) else ''
+    if not filename or not allowed_image_file(filename):
+        raise ValidationError('A supported image filename is required.')
+    declared_bytes = _require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1,
+                                  maximum=MAX_VIDEO_BYTES)
+    content_type = data.get('content_type', '').strip() if isinstance(data.get('content_type'), str) else ''
+    secure_name = generate_secure_filename(filename)
+
+    def operation():
+        band, membership = _v2_active_membership(band_id, lock=True)
+        used, reserved = _v2_used_and_reserved_bytes(band.id)
+        if used + reserved + declared_bytes > band.storage_quota_bytes:
+            raise ValidationError('Band storage quota exceeded.', status_code=409)
+        return create_direct_session(
+            band_id=band.id, created_by_membership_id=membership.id, kind='gallery',
+            object_key=f'bands/{band.id}/gallery/{secure_name}', original_filename=filename,
+            content_type=content_type or guess_content_type(filename), declared_bytes=declared_bytes,
+            status='initiated', commit=False,
+        )
+
+    session, capability_token = _v2_write(operation)
+    return jsonify({
+        'session_id': session.id, 'filename': secure_name,
+        'upload_url': storage.generate_upload_url(session.object_key, content_type=session.content_type),
+        'expires_at': session.expires_at.isoformat(),
+        'upload_capability_token': capability_token, 'capability_header': UPLOAD_CAPABILITY_HEADER,
+    }), 201
+
+
+@uploads_bp.route('/api/v2/bands/<int:band_id>/gallery/direct/<session_id>/complete', methods=['POST'])
+@_v2_upload_write
+def v2_complete_direct_gallery_upload(band_id, session_id):
+    def operation():
+        _v2_active_membership(band_id, lock=True)
+        session = _v2_direct_session_or_404(session_id, band_id)
+        if session.kind != 'gallery':
+            raise NotFoundError('Upload session not found')
+        require_direct_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
+        return complete_direct_session(session, _object_size, _v2_direct_gallery_item)
+
+    item, status = _v2_write(operation)
+    session = db.session.get(DirectUploadSession, session_id)
+    return jsonify({'session_id': session.id, 'status': 'completed', 'gallery': item.to_dict() if item else None}), status
 
 
 @uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/multipart/initiate', methods=['POST'])

@@ -8,7 +8,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from extensions import db
 from errors import ValidationError
-from models import DirectUploadSession, Media, PersonalLog
+from models import DirectUploadSession, GalleryImage, Media, PersonalLog
 from storage import storage
 
 
@@ -118,6 +118,12 @@ def recover_direct_sessions():
 
 
 def completed_item(session):
+    if session.kind == 'gallery':
+        if session.result_gallery_image_id:
+            return GalleryImage.query.filter_by(id=session.result_gallery_image_id, band_id=session.band_id).one_or_none()
+        return GalleryImage.query.filter_by(
+            band_id=session.band_id, object_key=session.object_key,
+        ).order_by(GalleryImage.id.desc()).first()
     if session.kind == 'media':
         if session.media_id:
             return Media.query.filter_by(id=session.media_id, band_id=session.band_id).one_or_none()
@@ -136,7 +142,7 @@ def completed_item(session):
 
 def mark_direct_session_completed(session, item):
     values = {'status': 'completed', 'completion_started_at': None, 'completed_at': now()}
-    values['media_id' if session.kind == 'media' else 'personal_log_id'] = item.id
+    values[{'media': 'media_id', 'personal_log': 'personal_log_id', 'gallery': 'result_gallery_image_id'}[session.kind]] = item.id
     DirectUploadSession.query.filter_by(id=session.id, status='completing').update(values)
     db.session.commit()
 

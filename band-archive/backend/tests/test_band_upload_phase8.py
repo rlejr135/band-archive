@@ -44,6 +44,12 @@ def _direct_initiate(client, band_id, headers, *, filename='recording.mp4', byte
     })
 
 
+def _gallery_direct_initiate(client, band_id, headers, *, filename='picture.jpg', bytes=10):
+    return client.post(f'/api/v2/bands/{band_id}/gallery/direct/initiate', headers=headers, json={
+        'filename': filename, 'content_type': 'image/jpeg', 'declared_bytes': bytes,
+    })
+
+
 def test_band_initiate_requires_active_membership_scopes_keys_and_reserves_quota(
         access_app, write_client, principals, monkeypatch):
     band_id = _band_id(access_app)
@@ -183,6 +189,75 @@ def test_direct_complete_requires_capability_and_current_membership_is_idempoten
         assert session.status == 'completed' and media.band_id == band_id
         assert media.object_key == f'bands/{band_id}/media/{payload["filename"]}'
         assert Media.query.filter_by(band_id=band_id).count() == 1
+
+
+def test_gallery_direct_upload_is_tenant_scoped_quota_reserved_and_idempotent(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    with access_app.app_context():
+        band = db.session.get(Band, band_id)
+        band.storage_quota_bytes = 15
+        membership = BandMembership.query.filter_by(band_id=band_id, role='member', status='active').one()
+        membership_id = membership.id
+        db.session.commit()
+    endpoint = f'/api/v2/bands/{band_id}/gallery/direct/initiate'
+    assert write_client.post(endpoint, json={'filename': 'picture.jpg', 'declared_bytes': 10}).status_code == 401
+    assert _gallery_direct_initiate(write_client, band_id, principals['outsider']).status_code == 403
+
+    started = _gallery_direct_initiate(write_client, band_id, principals['member'])
+    assert started.status_code == 201
+    payload = started.get_json()
+    assert payload['upload_url'].endswith(f'bands/{band_id}/gallery/{payload["filename"]}')
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, payload['session_id'])
+        assert session.kind == 'gallery'
+        assert session.band_id == band_id and session.created_by_membership_id == membership_id
+        assert session.result_gallery_image_id is None
+    # The reservation shares the quota ledger with completed GalleryImage rows
+    # and every other live direct session.
+    assert _gallery_direct_initiate(write_client, band_id, principals['member']).status_code == 409
+
+    complete = f'/api/v2/bands/{band_id}/gallery/direct/{payload["session_id"]}/complete'
+    capability = {payload['capability_header']: payload['upload_capability_token']}
+    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 10})
+    assert write_client.post(complete, headers=principals['member'], json={}).status_code == 403
+    with access_app.app_context():
+        db.session.get(BandMembership, membership_id).status = 'left'
+        db.session.commit()
+    assert write_client.post(complete, headers={**principals['member'], **capability}, json={}).status_code == 403
+    with access_app.app_context():
+        db.session.get(BandMembership, membership_id).status = 'active'
+        db.session.commit()
+    assert write_client.post(complete, headers={**principals['member'], **capability}, json={}).status_code == 201
+    assert write_client.post(complete, headers={**principals['member'], **capability}, json={}).status_code == 200
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, payload['session_id'])
+        image = db.session.get(GalleryImage, session.result_gallery_image_id)
+        assert session.status == 'completed' and image.band_id == band_id
+        assert image.created_by_membership_id == membership_id
+        assert image.object_key == f'bands/{band_id}/gallery/{payload["filename"]}'
+        assert GalleryImage.query.filter_by(band_id=band_id).count() == 1
+
+
+def test_gallery_direct_expiry_releases_quota_and_deletes_only_the_tenant_key(
+        access_app, write_client, principals, monkeypatch):
+    band_id = _band_id(access_app)
+    with access_app.app_context():
+        db.session.get(Band, band_id).storage_quota_bytes = 10
+        db.session.commit()
+    first = _gallery_direct_initiate(write_client, band_id, principals['member'])
+    assert first.status_code == 201
+    with access_app.app_context():
+        session = db.session.get(DirectUploadSession, first.get_json()['session_id'])
+        session.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        db.session.commit()
+        expired_key = session.object_key
+    deleted = []
+    monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
+    assert _gallery_direct_initiate(write_client, band_id, principals['member']).status_code == 201
+    with access_app.app_context():
+        assert db.session.get(DirectUploadSession, first.get_json()['session_id']).status == 'expired'
+    assert deleted == [expired_key]
 
 
 def test_expired_direct_reservation_is_released_before_the_next_quota_check(

@@ -448,19 +448,21 @@ class DirectUploadSession(db.Model):
     capability_token_hash = db.Column(db.String(255), nullable=False)
     media_id = db.Column(db.Integer, db.ForeignKey('media.id'), nullable=True)
     personal_log_id = db.Column(db.Integer, db.ForeignKey('personal_log.id'), nullable=True)
+    result_gallery_image_id = db.Column(db.Integer, db.ForeignKey('gallery_image.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc) + timedelta(hours=24), nullable=False)
     completed_at = db.Column(db.DateTime, nullable=True)
     completion_started_at = db.Column(db.DateTime, nullable=True)
 
     __table_args__ = (
-        db.CheckConstraint("kind IN ('media', 'personal_log')", name='ck_direct_upload_session_kind'),
+        db.CheckConstraint("kind IN ('media', 'personal_log', 'gallery')", name='ck_direct_upload_session_kind'),
         db.CheckConstraint('declared_bytes > 0', name='ck_direct_upload_session_bytes'),
         db.CheckConstraint("status IN ('initiated', 'completing', 'expiring', 'completed', 'expired', 'failed')",
                            name='ck_direct_upload_session_status'),
         db.CheckConstraint(
             "(kind = 'media' AND song_id IS NOT NULL AND member_id IS NULL) OR "
-            "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)",
+            "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL) OR "
+            "(kind = 'gallery' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NULL)",
             name='ck_direct_upload_session_target',
         ),
     )
