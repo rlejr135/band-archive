@@ -58,6 +58,15 @@ def _url(path):
     return f"sqlite:///{path.as_posix()}"
 
 
+def _freeze_attestation(path):
+    fingerprint = _file_fingerprint(path)
+    return {
+        "version": "phase9-write-freeze-v1",
+        "writes_frozen": True,
+        "snapshot": fingerprint,
+    }
+
+
 def _upgrade(path, revision="head"):
     app = create_migration_app(_url(path))
     try:
@@ -498,7 +507,7 @@ def test_rehearsal_preserves_fixture_relationships_and_refuses_repeat(tmp_path):
     _legacy_fixture(source)
     _upgrade(target)
     report = run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
-                           sqlite_test_target_path=str(target))
+                           sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source))
     assert {key: value for key, value in report["before"]["table_counts"].items()
             if "multipart" not in key} == {key: value for key, value in report["after"]["table_counts"].items()
                                             if "multipart" not in key}
@@ -512,6 +521,34 @@ def test_rehearsal_preserves_fixture_relationships_and_refuses_repeat(tmp_path):
     with pytest.raises(RehearsalError, match="target must be empty"):
         run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
                       sqlite_test_target_path=str(target))
+
+
+def test_final_import_requires_a_snapshot_bound_write_freeze_attestation(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    _upgrade(target)
+
+    with pytest.raises(RehearsalError, match="requires a matching write-freeze attestation"):
+        run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target))
+    with create_engine(_url(target)).connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM song")).scalar_one() == 0
+
+
+def test_write_freeze_attestation_is_bound_to_exact_snapshot_and_report_is_nonsecret(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    _upgrade(target)
+    bad = _freeze_attestation(source)
+    bad["snapshot"] = {**bad["snapshot"], "sha256": "0" * 64}
+    with pytest.raises(RehearsalError, match="does not match"):
+        run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
+                      sqlite_test_target_path=str(target), write_freeze_attestation=bad)
+
+    report = run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
+                           sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source))
+    assert report["write_freeze"] == {"version": "phase9-write-freeze-v1", "snapshot_matches": True}
+    assert "writes_frozen" not in json.dumps(report)
 
 
 def test_rehearsal_refuses_extra_nonlegacy_band_without_mutating_bootstrap_rows(tmp_path):
@@ -571,7 +608,7 @@ def test_rehearsal_rolls_back_a_post_import_reconciliation_failure(tmp_path, mon
     monkeypatch.setattr(rehearsal, "reconcile", fail_after_target_import)
     with pytest.raises(RehearsalError, match="transaction rolled back"):
         run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
-                      sqlite_test_target_path=str(target))
+                      sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source))
     engine = create_engine(_url(target))
     try:
         with engine.connect() as connection:
@@ -890,7 +927,7 @@ def test_broken_pruned_lifecycle_blocks_real_rehearsal_import(tmp_path, file_typ
     with pytest.raises(RehearsalError, match='relationship/object defects'):
         run_rehearsal(
             str(source), _url(target), allow_sqlite_target=True,
-            sqlite_test_target_path=str(target),
+            sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source),
         )
     target_engine = create_engine(_url(target))
     try:
@@ -915,7 +952,7 @@ def test_content_digest_detects_non_primary_key_tampering_and_rolls_back(tmp_pat
     monkeypatch.setattr(rehearsal, "_copy_rows", corrupt_after_copy)
     with pytest.raises(RehearsalError, match="content digest mismatch"):
         run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
-                      sqlite_test_target_path=str(target))
+                      sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source))
     engine = create_engine(_url(target))
     try:
         with engine.connect() as connection:
@@ -988,7 +1025,7 @@ def test_phase4_canonical_key_rules_allow_korean_spaces_without_leaking_upload_s
         engine.dispose()
     _upgrade(target)
     report = run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
-                           sqlite_test_target_path=str(target))
+                           sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source))
     assert "gallery/한글 사진.png" in {item["key"] for item in report["after"]["object_manifest"]}
     assert report["after"]["table_counts"]["multipart_upload_session"] == 0
     assert report["after"]["table_counts"]["multipart_upload_part"] == 0
@@ -1078,12 +1115,15 @@ def test_cli_report_output_writes_unicode_as_utf8_without_shell_round_trip(tmp_p
 def test_cli_report_output_is_retained_for_successful_import(tmp_path):
     source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
     output = tmp_path / "retained-report.json"
+    attestation = tmp_path / "write-freeze.json"
     _legacy_fixture(source)
     _upgrade(target)
+    attestation.write_text(json.dumps(_freeze_attestation(source)), encoding="utf-8")
 
     result = CliRunner().invoke(cli, [
         "--source-sqlite", str(source), "--target-url", _url(target),
         "--allow-sqlite-target", "--sqlite-test-target-path", str(target),
+        "--write-freeze-attestation", str(attestation),
         "--report-output", str(output),
     ])
 
@@ -1207,7 +1247,8 @@ def test_report_destination_race_does_not_overwrite_and_rolls_back_import(tmp_pa
     with pytest.raises(RehearsalError, match="rehearsal failed"):
         run_rehearsal(
             str(source), _url(target), allow_sqlite_target=True,
-            sqlite_test_target_path=str(target), report_publisher=reservation.publish,
+            sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source),
+            report_publisher=reservation.publish,
         )
     reservation.abort()
 

@@ -24,7 +24,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 import click
 from alembic.config import Config
@@ -69,6 +69,7 @@ _OBJECT_FIELDS = (
     ("multipart_upload_session", "id", "band_id", "object_key", None, "", "declared_bytes", "upload"),
     ("personal_log_multipart_upload_session", "id", "band_id", "object_key", None, "", "declared_bytes", "upload"),
 )
+WRITE_FREEZE_ATTESTATION_VERSION = "phase9-write-freeze-v1"
 
 
 def _head_revisions() -> set[str]:
@@ -281,6 +282,42 @@ def _file_fingerprint(path: Path) -> dict[str, Any]:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return {"sha256": digest.hexdigest(), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def validate_write_freeze_attestation(value: Any, source_fingerprint: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a local, non-secret operator gate for a final import.
+
+    This is deliberately an attestation, not an attempt to control Fly.  The
+    operator must stop writers outside this process; binding that statement to
+    the exact immutable SQLite input prevents a stale approval from authorizing
+    a later snapshot.  It accepts no endpoint, credential, URL, or free-form
+    text, so retained reports cannot become a secrets channel.
+    """
+    if not isinstance(value, dict) or set(value) != {"version", "writes_frozen", "snapshot"}:
+        raise RehearsalError("write-freeze attestation has an invalid shape")
+    snapshot = value["snapshot"]
+    if (value.get("version") != WRITE_FREEZE_ATTESTATION_VERSION
+            or value.get("writes_frozen") is not True
+            or not isinstance(snapshot, dict)
+            or set(snapshot) != {"sha256", "size", "mtime_ns"}
+            or not isinstance(snapshot.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", snapshot["sha256"]) is None
+            or type(snapshot.get("size")) is not int or snapshot["size"] < 0
+            or type(snapshot.get("mtime_ns")) is not int or snapshot["mtime_ns"] < 0):
+        raise RehearsalError("write-freeze attestation is invalid")
+    if dict(snapshot) != dict(source_fingerprint):
+        raise RehearsalError("write-freeze attestation does not match the supplied SQLite snapshot")
+    return {"version": WRITE_FREEZE_ATTESTATION_VERSION, "snapshot_matches": True}
+
+
+def load_write_freeze_attestation(path: Path, source_fingerprint: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the strict local attestation file without placing it in a report."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RehearsalError("write-freeze attestation is not readable JSON") from error
+    validate_write_freeze_attestation(value, source_fingerprint)
+    return value
 
 
 def _validate_target_url(database_url: str, *, expected_target_host: str | None,
@@ -1456,6 +1493,7 @@ def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: 
                   expected_target_database: str | None = None, expected_target_schema: str | None = None,
                   dry_run: bool = False, allow_sqlite_target: bool = False,
                   sqlite_test_target_path: str | None = None,
+                  write_freeze_attestation: Mapping[str, Any] | None = None,
                   report_publisher: Callable[[dict[str, Any]], str] | None = None) -> dict[str, Any]:
     """Copy/migrate/backfill an SQLite copy and optionally import it once.
 
@@ -1471,16 +1509,27 @@ def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: 
     engine = create_engine(target_url, future=True, hide_parameters=True)
     try:
         _assert_target_ready(engine, identity)
+        source_path = preflight_sqlite_snapshot(source_sqlite)
+        source_fingerprint = _file_fingerprint(source_path)
+        write_freeze = None
+        if not dry_run:
+            if write_freeze_attestation is None:
+                raise RehearsalError("final import requires a matching write-freeze attestation")
+            write_freeze = validate_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
+        elif write_freeze_attestation is not None:
+            write_freeze = validate_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
         with tempfile.TemporaryDirectory(prefix="band-archive-legacy-rehearsal-") as directory:
-            source_fingerprint = _source_schema_fingerprint(preflight_sqlite_snapshot(source_sqlite))
+            source_schema = _source_schema_fingerprint(source_path)
             source_copy, backfill, source_files = _copy_and_backfill(source_sqlite, Path(directory))
             source_engine = create_engine(f"sqlite:///{source_copy.as_posix()}", future=True)
             try:
                 with source_engine.connect() as source_connection:
                     before = reconcile(source_connection)
-                    result = {"target": safe_target_identity(target_url), "source_schema": source_fingerprint,
+                    result = {"target": safe_target_identity(target_url), "source_schema": source_schema,
                               "source_files": source_files, "backfill": backfill, "before": before,
                               "multipart_quarantine": before["multipart_quarantine"], "dry_run": dry_run}
+                    if write_freeze is not None:
+                        result["write_freeze"] = write_freeze
                     if dry_run:
                         result["source_files"]["source_after"] = _file_fingerprint(source_path)
                         if result["source_files"]["source_before"] != result["source_files"]["source_after"]:
@@ -1551,6 +1600,8 @@ class ReadOnlyS3Adapter:
 @click.option("--expected-target-database", help="Exact approved PostgreSQL database/project reference.")
 @click.option("--expected-target-schema", help="Exact PostgreSQL schema expected after connection.")
 @click.option("--dry-run", is_flag=True, help="Migrate/backfill only a temporary copy; do not write target.")
+@click.option("--write-freeze-attestation", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help="Required for a final import; strict local JSON bound to this stopped SQLite snapshot.")
 @click.option("--allow-sqlite-target", is_flag=True, help="TEST ONLY: permit SQLite compatibility target.")
 @click.option("--sqlite-test-target-path", type=click.Path(dir_okay=False, path_type=Path),
               help="TEST ONLY: resolved path that must exactly equal the SQLite target URL path.")
@@ -1558,18 +1609,23 @@ class ReadOnlyS3Adapter:
               help="Write retained evidence directly as UTF-8 JSON; refuses to overwrite an existing file.")
 def cli(source_sqlite: Path, target_url: str, expected_target_host: str | None,
         expected_target_database: str | None, expected_target_schema: str | None,
-        dry_run: bool, allow_sqlite_target: bool, sqlite_test_target_path: Path | None,
+        dry_run: bool, write_freeze_attestation: Path | None, allow_sqlite_target: bool, sqlite_test_target_path: Path | None,
         report_output: Path | None) -> None:
     """Run one offline, non-repeatable legacy-migration rehearsal."""
     reservation: _ReservedReportOutput | None = None
     try:
         if report_output is not None:
             reservation = _ReservedReportOutput(report_output)
+        attestation = None
+        if write_freeze_attestation is not None:
+            source_fingerprint = _file_fingerprint(preflight_sqlite_snapshot(str(source_sqlite)))
+            attestation = load_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
         report = run_rehearsal(
             str(source_sqlite), target_url, expected_target_host=expected_target_host,
             expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
             dry_run=dry_run, allow_sqlite_target=allow_sqlite_target,
             sqlite_test_target_path=str(sqlite_test_target_path) if sqlite_test_target_path else None,
+            write_freeze_attestation=attestation,
             report_publisher=reservation.publish if reservation is not None else None,
         )
         if reservation is not None:
