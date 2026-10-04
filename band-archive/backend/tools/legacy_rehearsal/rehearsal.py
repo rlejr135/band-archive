@@ -57,7 +57,7 @@ _AUDIT_TRIGGER_SQL = {
     "audit_event_no_update": "create trigger audit_event_no_update before update on audit_event begin select raise(abort, 'audit_event is append-only'); end",
     "audit_event_no_delete": "create trigger audit_event_no_delete before delete on audit_event begin select raise(abort, 'audit_event is append-only'); end",
 }
-_AUDIT_TRIGGER_REVISIONS = {"20260916_04", "20260916_05", "20260920_06"}
+_AUDIT_TRIGGER_INTRODUCTION_REVISION = "20260916_04"
 _OBJECT_FIELDS = (
     ("song", "id", "band_id", "sheet_music_object_key", "sheet_music", "media", None, "sheet_music"),
     ("media", "id", "band_id", "object_key", "filename", "media", "file_size", "original"),
@@ -81,6 +81,36 @@ def _known_revisions() -> set[str]:
     config = Config(str(MIGRATIONS_DIRECTORY / "alembic.ini"))
     config.set_main_option("script_location", str(MIGRATIONS_DIRECTORY))
     return {revision.revision for revision in ScriptDirectory.from_config(config).walk_revisions()}
+
+
+@lru_cache(maxsize=1)
+def _revisions_inheriting_audit_triggers() -> frozenset[str]:
+    """Return the linear descendants of the revision that installed the triggers.
+
+    Later migrations must opt into this contract by retaining the actual
+    triggers; this set merely prevents a new unrelated revision from being
+    mistaken for an untriggered pre-hardening schema.  A branch or a missing
+    history link is refused rather than guessed.
+    """
+    config = Config(str(MIGRATIONS_DIRECTORY / "alembic.ini"))
+    config.set_main_option("script_location", str(MIGRATIONS_DIRECTORY))
+    script = ScriptDirectory.from_config(config)
+    inherited = set()
+    for candidate in script.walk_revisions():
+        cursor = candidate
+        visited = set()
+        while cursor is not None and cursor.revision not in visited:
+            if cursor.revision == _AUDIT_TRIGGER_INTRODUCTION_REVISION:
+                inherited.add(candidate.revision)
+                break
+            visited.add(cursor.revision)
+            parents = cursor.down_revision
+            if isinstance(parents, tuple):
+                if len(parents) != 1:
+                    break
+                parents = parents[0]
+            cursor = script.get_revision(parents) if parents else None
+    return frozenset(inherited)
 
 
 def redact(value: Any) -> Any:
@@ -676,7 +706,7 @@ def _canonical_sqlite_trigger_sql(value: str | None) -> str:
 
 def _assert_exact_sqlite_trigger_contract(path: Path, revision: str | None) -> None:
     """Reject extra or altered trigger DDL before source migration can run."""
-    expected = _AUDIT_TRIGGER_SQL if revision in _AUDIT_TRIGGER_REVISIONS else {}
+    expected = _AUDIT_TRIGGER_SQL if revision in _revisions_inheriting_audit_triggers() else {}
     uri = f"file:{path.as_posix()}?mode=ro"
     with sqlite3.connect(uri, uri=True) as conn:
         actual = {

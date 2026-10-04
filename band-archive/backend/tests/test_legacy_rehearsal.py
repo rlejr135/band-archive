@@ -22,7 +22,8 @@ from tools.legacy_rehearsal.rehearsal import (
     RehearsalError, _ReservedReportOutput, _assert_supported_source_schema, _baseline_sqlite_contract,
     _contract_without_full_ddl_digests, _file_fingerprint,
     _mapped_sqlite_digests, _normalize_production_legacy_copy,
-    _production_legacy_contract, _report_payload, _sqlite_schema_contract, _validate_target_url,
+    _production_legacy_contract, _report_payload, _revisions_inheriting_audit_triggers,
+    _sqlite_schema_contract, _validate_target_url,
     cli, reconcile, run_rehearsal,
     safe_target_identity,
 )
@@ -967,6 +968,13 @@ def test_known_hardened_source_with_the_expected_audit_triggers_is_accepted(tmp_
     report = run_rehearsal(str(source), _url(target), dry_run=True, allow_sqlite_target=True,
                            sqlite_test_target_path=str(target))
     assert report["dry_run"] is True
+
+
+def test_audit_trigger_contract_is_inherited_by_later_linear_revisions():
+    inherited = _revisions_inheriting_audit_triggers()
+    assert "20260915_03" not in inherited
+    assert "20260916_04" in inherited
+    assert "20261004_11" in inherited
 
 
 def test_phase4_canonical_key_rules_allow_korean_spaces_without_leaking_upload_state(tmp_path):
