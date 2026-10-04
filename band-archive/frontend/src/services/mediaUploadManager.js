@@ -199,6 +199,16 @@ export const uploadGalleryImageFile = async ({ file, onProgress }) => {
   return requestJson(`${API_URL}/uploads/complete/gallery`, { method: 'POST', body: JSON.stringify({ filename: presign.filename, original_filename: file.name, file_size: file.size }) });
 };
 
+// FileUpload's custom `onUpload` callback consumes a percentage (unlike the
+// shared media uploader's byte-based callback). Keep this conversion at the
+// gallery boundary so media upload progress contracts remain unchanged.
+export const galleryUploadProgressPercent = (loaded, total) => {
+  const safeTotal = Number(total);
+  const safeLoaded = Number(loaded);
+  if (!Number.isFinite(safeTotal) || safeTotal <= 0 || !Number.isFinite(safeLoaded)) return 0;
+  return Math.min(100, Math.max(0, (safeLoaded / safeTotal) * 100));
+};
+
 // Gallery remains browser-only, but its v2 request chain is still captured to
 // one immutable band URL.  The caller supplies isCurrent so a route/account
 // switch cannot turn a late completion into a refresh for a new workspace.
@@ -219,7 +229,9 @@ export const uploadBandGalleryImageFile = async ({ file, bandId, api, onProgress
     declared_bytes: file.size,
   });
   ensureCurrent();
-  await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => onProgress?.(loaded, file.size));
+  await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => {
+    onProgress?.(galleryUploadProgressPercent(loaded, file.size));
+  });
   ensureCurrent();
   return transport.complete(session);
 };

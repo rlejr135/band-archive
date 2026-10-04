@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBandGalleryUploadTransport, createBandUploadTransport } from './bandUploadTransport.js';
-import { MULTIPART_THRESHOLD_BYTES, uploadBandMediaFile } from './mediaUploadManager.js';
+import { galleryUploadProgressPercent, MULTIPART_THRESHOLD_BYTES, uploadBandMediaFile } from './mediaUploadManager.js';
 import { createAuthenticatedApiClient } from './authApiClient.js';
 
 test('band upload transport keeps direct and multipart capability requests under its immutable v2 band URL', async () => {
@@ -85,4 +85,13 @@ test('gallery transport captures its v2 band endpoint and capability independent
     '/api/v2/bands/9/gallery/direct/gallery-1/complete',
   ]);
   assert.equal(calls[1].options.headers['X-Upload-Capability'], 'gallery-cap');
+});
+
+test('gallery FileUpload progress is a clamped percentage, not a byte count', () => {
+  const mib = 1024 * 1024;
+  assert.equal(galleryUploadProgressPercent(mib, 4 * mib), 25);
+  assert.equal(galleryUploadProgressPercent(4 * mib, 4 * mib), 100);
+  assert.equal(galleryUploadProgressPercent(5 * mib, 4 * mib), 100);
+  assert.equal(galleryUploadProgressPercent(-1, 4 * mib), 0);
+  assert.equal(galleryUploadProgressPercent(mib, 0), 0);
 });
