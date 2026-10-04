@@ -1,6 +1,7 @@
 import { API_URL } from './api.js';
 import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
 import { initiateMultipartSession } from './multipartSession.js';
+import { createBandGalleryUploadTransport } from './bandUploadTransport.js';
 
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
@@ -196,6 +197,31 @@ export const uploadGalleryImageFile = async ({ file, onProgress }) => {
   const presign = await requestJson(`${API_URL}/uploads/presign`, { method: 'POST', body: JSON.stringify({ filename: file.name, content_type: contentType, upload_type: 'gallery' }) });
   await webTransport.putPart(presign.upload_url, file, contentType, (loaded) => onProgress?.(loaded, file.size));
   return requestJson(`${API_URL}/uploads/complete/gallery`, { method: 'POST', body: JSON.stringify({ filename: presign.filename, original_filename: file.name, file_size: file.size }) });
+};
+
+// Gallery remains browser-only, but its v2 request chain is still captured to
+// one immutable band URL.  The caller supplies isCurrent so a route/account
+// switch cannot turn a late completion into a refresh for a new workspace.
+export const uploadBandGalleryImageFile = async ({ file, bandId, api, onProgress, isCurrent = () => true }) => {
+  if (!file || !Number.isInteger(Number(file.size)) || file.size <= 0) throw new Error('업로드할 이미지 파일이 올바르지 않습니다.');
+  const capturedBandId = normalizePositiveInteger(bandId, '밴드 ID');
+  const transport = createBandGalleryUploadTransport({
+    bandId: capturedBandId,
+    api,
+    putPart: webTransport.putPart,
+  });
+  const ensureCurrent = () => {
+    if (!isCurrent()) throw new DOMException('밴드가 변경되어 업로드 결과를 적용하지 않았습니다.', 'AbortError');
+  };
+  const session = await transport.initiate({
+    filename: file.name,
+    content_type: file.type || undefined,
+    declared_bytes: file.size,
+  });
+  ensureCurrent();
+  await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => onProgress?.(loaded, file.size));
+  ensureCurrent();
+  return transport.complete(session);
 };
 
 export const fetchMediaProcessing = async (mediaId, kind = 'media') => normalizeMedia(await requestJson(`${API_URL}${kind === 'personal_log' ? '/personal-logs' : '/media'}/${mediaId}/processing`));

@@ -36,3 +36,16 @@ export const createBandUploadTransport = ({ bandId, api, putPart }) => {
     asError: (error) => error instanceof UploadTransportError ? error : error,
   };
 };
+
+export const createBandGalleryUploadTransport = ({ bandId, api, putPart }) => {
+  if (!Number.isInteger(Number(bandId)) || Number(bandId) <= 0) throw new Error('업로드 밴드 정보가 올바르지 않습니다.');
+  if (!api?.requestJson || typeof putPart !== 'function') throw new Error('인증된 브라우저 업로드 전송이 필요합니다.');
+  const base = `/api/v2/bands/${Number(bandId)}/gallery/direct`;
+  const request = (path, options = {}) => api.requestJson(`${base}${path}`, options);
+  const capability = (session) => ({ 'X-Upload-Capability': session.capabilityToken });
+  return {
+    initiate: async (payload) => sessionFrom(await request('/initiate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })),
+    complete: (session) => request(`/${encodeURIComponent(session.sessionId)}/complete`, { method:'POST', headers:{'Content-Type':'application/json',...capability(session)}, body:'{}' }),
+    putPart,
+  };
+};

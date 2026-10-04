@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload, suggestionPayload, votePayload } from '../../services/bandWorkspaceApi.js';
+import { uploadBandGalleryImageFile } from '../../services/mediaUploadManager.js';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import { MediaEngagement } from './MediaEngagement.jsx';
 import UploadCenter from '../common/UploadCenter.jsx';
@@ -380,6 +381,7 @@ export const GalleryWorkspace = () => {
   const [featured, setFeatured] = useState(null);
   const staleAttempts = useRef(new Set());
   const featuredGate = useRef(createWorkspaceRequestGate());
+  const uploadGate = useRef(createWorkspaceRequestGate());
   const refreshFeatured = useCallback(() => {
     const controller = new AbortController(); let live = true;
     const token = featuredGate.current.begin(`${workspaceKey}:featured`);
@@ -397,7 +399,24 @@ export const GalleryWorkspace = () => {
     if (kind === 'featured') refreshFeatured();
     else gallery.refresh();
   };
+  const uploadGallery = useCallback(async (file, onProgress) => {
+    // Capture both the band id and account-scoped workspace identity before
+    // initiating. A late B completion must never refresh A's gallery.
+    const capturedBandId = band.id;
+    const requestKey = `${workspaceKey}:gallery-upload`;
+    const token = uploadGate.current.begin(requestKey);
+    const isCurrent = () => uploadGate.current.accepts(requestKey, token);
+    const result = await uploadBandGalleryImageFile({
+      file, bandId: capturedBandId, api, onProgress, isCurrent,
+    });
+    if (isCurrent()) {
+      gallery.refresh();
+      refreshFeatured();
+    }
+    return result?.gallery || result;
+  }, [api, band.id, gallery, refreshFeatured, workspaceKey]);
   return <section className="workspace-page" aria-labelledby="workspace-gallery-title"><div className="workspace-page-heading"><div><h1 id="workspace-gallery-title">갤러리</h1><p>밴드에서 공개한 사진입니다.</p></div></div>
+    {band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active' && <BandUploadInput band={band} onUpload={uploadGallery} accept="image/*,.png,.jpg,.jpeg,.gif,.webp" multiple={true} />}
     {featured?.url && <section className="workspace-featured"><h2>대표 사진</h2><img src={featured.url} alt="대표 갤러리 이미지" onError={() => refreshImage(featured.id, 'featured')} /></section>}
     {gallery.loading && gallery.entries.length === 0 ? <p aria-live="polite">갤러리를 불러오는 중입니다…</p> : gallery.error && gallery.entries.length === 0 ? <ErrorState message={genericError} retry={gallery.refresh} /> : gallery.entries.length === 0 ? <div className="workspace-empty"><p>표시할 사진이 없습니다.</p></div> : <div className="workspace-gallery-grid">{gallery.entries.map((image) => image.url ? <img key={image.id} src={image.url} alt="갤러리 이미지" onError={() => refreshImage(image.id)} /> : <div className="workspace-gallery-missing" key={image.id}>표시할 사진이 없습니다.</div>)}</div>}
     {gallery.pagination?.has_more && <button className="secondary-btn" disabled={gallery.loading} onClick={gallery.loadMore}>{gallery.loading ? '사진을 불러오는 중…' : '사진 더 불러오기'}</button>}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBandUploadTransport } from './bandUploadTransport.js';
+import { createBandGalleryUploadTransport, createBandUploadTransport } from './bandUploadTransport.js';
 import { MULTIPART_THRESHOLD_BYTES, uploadBandMediaFile } from './mediaUploadManager.js';
 import { createAuthenticatedApiClient } from './authApiClient.js';
 
@@ -66,4 +66,23 @@ test('band initiate refreshes a rejected bearer and retries the same immutable e
     { url: 'https://api.example/api/v2/bands/5/uploads/direct/initiate', authorization: 'Bearer expired' },
     { url: 'https://api.example/api/v2/bands/5/uploads/direct/initiate', authorization: 'Bearer fresh' },
   ]);
+});
+
+test('gallery transport captures its v2 band endpoint and capability independently of media uploads', async () => {
+  const calls = [];
+  const api = { requestJson: async (path, options) => {
+    calls.push({ path, options });
+    return path.endsWith('/initiate')
+      ? { session_id: 'gallery-1', upload_capability_token: 'gallery-cap', upload_url: 'https://r2/gallery' }
+      : { gallery: { id: 17 } };
+  } };
+  const gallery = createBandGalleryUploadTransport({ bandId: 9, api, putPart: async () => {} });
+  const session = await gallery.initiate({ filename: 'cover.jpg', declared_bytes: 12 });
+  const completed = await gallery.complete(session);
+  assert.equal(completed.gallery.id, 17);
+  assert.deepEqual(calls.map((call) => call.path), [
+    '/api/v2/bands/9/gallery/direct/initiate',
+    '/api/v2/bands/9/gallery/direct/gallery-1/complete',
+  ]);
+  assert.equal(calls[1].options.headers['X-Upload-Capability'], 'gallery-cap');
 });
