@@ -98,6 +98,18 @@ SQLite 데이터, R2 객체, 기존 API 및 `db.create_all()` 시작 동작을 �
     쓰기를 끄고, 기존 비밀번호 댓글/문자열 admin 경로와 SQLite를 별도 승인
     후 제거한다.
 
+### 현재 전환 준비 상태
+
+- Phase 9는 운영 전환을 실행하지 않았으며, 점검용 준비만 추가했다. Phase 5
+  리허설은 원본 SQLite snapshot의 무결성·변경 여부, Alembic head인 빈 대상,
+  행/PK/FK/투표 점수/댓글 트리와 R2 key·크기 manifest를 대조한다.
+- 최종 import는 원본 fingerprint에 묶인 `phase9-write-freeze-v1` 로컬
+  attestation 없이는 거부한다. 이 증명은 Fly를 제어하지 않으며, 운영자가
+  별도 승인된 절차로 쓰기를 멈췄다는 관문이다. 보고서에는 일치 여부만 남긴다.
+- 운영자 순서와 복구 경계는
+  `docs/runbooks/phase9-postgres-cutover-preflight.md`에 고정했다. PostgreSQL
+  새 쓰기 재개 뒤에는 자동/양방향 rollback을 하지 않는다.
+
 ## 외부 선행 조건
 
 - Supabase Tokyo 프로젝트를 만들고 staging과 production을 분리한다. 프로젝트
