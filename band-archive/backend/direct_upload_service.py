@@ -43,7 +43,7 @@ def expires_at_utc_naive(session):
     return expires_at
 
 
-def expire_direct_session_if_needed(session):
+def expire_direct_session_if_needed(session, *, commit=True):
     if session.status == 'expiring':
         return False
     if session.status != 'initiated' or expires_at_utc_naive(session) > now():
@@ -51,13 +51,24 @@ def expire_direct_session_if_needed(session):
     claimed = DirectUploadSession.query.filter_by(id=session.id, status='initiated').update({
         'status': 'expiring', 'completion_started_at': now(),
     })
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     if not claimed:
         return False
-    return recover_expiring_session(db.session.get(DirectUploadSession, session.id))
+    recovered = recover_expiring_session(db.session.get(DirectUploadSession, session.id), commit=commit)
+    # A failed object delete deliberately keeps the reservation as `expiring`.
+    # The v2 caller will reject its new reservation; committing just this
+    # terminal retry marker means that rejection's rollback cannot revive the
+    # expired session. No quota accounting or new direct session follows this
+    # commit, so it cannot reopen the initiate race.
+    if not recovered and not commit:
+        db.session.commit()
+    return recovered
 
 
-def expire_direct_sessions_for_band(band_id=None):
+def expire_direct_sessions_for_band(band_id=None, *, commit=True):
     """Clean expired direct PUTs before releasing their quota reservations."""
     query = DirectUploadSession.query.filter(
         DirectUploadSession.status == 'initiated',
@@ -66,7 +77,7 @@ def expire_direct_sessions_for_band(band_id=None):
     if band_id is not None:
         query = query.filter(DirectUploadSession.band_id == band_id)
     sessions = query.all()
-    return sum(expire_direct_session_if_needed(session) for session in sessions)
+    return sum(expire_direct_session_if_needed(session, commit=commit) for session in sessions)
 
 
 def _missing_object(error):
@@ -78,7 +89,7 @@ def _missing_object(error):
     return code in {'nosuchkey', 'nosuchobject', 'notfound', '404'} or http_status == 404
 
 
-def recover_expiring_session(session):
+def recover_expiring_session(session, *, commit=True):
     """Retry cleanup of a session-owned direct object before releasing quota."""
     if session.status != 'expiring':
         return session.status == 'expired'
@@ -90,7 +101,10 @@ def recover_expiring_session(session):
     DirectUploadSession.query.filter_by(id=session.id, status='expiring').update({
         'status': 'expired', 'completion_started_at': None,
     })
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     return True
 
 

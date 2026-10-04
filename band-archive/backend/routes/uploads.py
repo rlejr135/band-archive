@@ -110,7 +110,11 @@ def _v2_session_or_404(session_id, band_id, *, recover_aborting=True):
 
 def _v2_used_and_reserved_bytes(band_id):
     """Logical object usage plus every still-live upload reservation."""
-    expire_direct_sessions_for_band(band_id)
+    # This runs inside _v2_write after the SQLite immediate transaction (or
+    # PostgreSQL parent row locks) is acquired. Do not commit expiry cleanup
+    # here: releasing that transaction between quota accounting and session
+    # creation lets concurrent initiates oversubscribe the same band.
+    expire_direct_sessions_for_band(band_id, commit=False)
     used = sum((
         db.session.query(func.coalesce(func.sum(Media.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
         db.session.query(func.coalesce(func.sum(PersonalLog.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,

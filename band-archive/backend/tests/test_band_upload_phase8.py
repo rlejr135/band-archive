@@ -2,7 +2,8 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Event
+from threading import Event, Lock
+import threading
 
 from botocore.exceptions import ClientError
 import pytest
@@ -13,6 +14,7 @@ from direct_upload_service import (complete_direct_session, create_direct_sessio
                                    expire_direct_session_if_needed)
 from extensions import db
 from multipart_upload_service import recover_sessions
+import routes.uploads as upload_routes
 from routes.uploads import _v2_direct_item, recover_multipart_upload_sessions
 from errors import ValidationError
 from models import (AppUser, Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
@@ -469,6 +471,94 @@ def test_file_sqlite_direct_complete_and_expiry_claims_are_mutually_exclusive(tm
             assert db.session.get(DirectUploadSession, expiry_id).status == 'expired'
             assert Media.query.filter_by(band_id=band_id).count() == 1
         assert deleted == [f'bands/{band_id}/media/expiry-wins.mp4']
+    finally:
+        with app.app_context():
+            db.session.remove(); db.drop_all()
+
+
+def test_file_sqlite_direct_initiates_keep_quota_lock_while_expiry_is_released(tmp_path, monkeypatch):
+    """Expiry cleanup and reservation insertion are one quota transaction."""
+    db_path = tmp_path / 'direct-expiry-quota-race.db'
+
+    class FileConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path.as_posix()}'
+
+    app = create_app(FileConfig, start_worker=False)
+    try:
+        with app.app_context():
+            db.drop_all(); db.create_all()
+            user = AppUser(supabase_user_id='88888888-8888-8888-8888-888888888888',
+                           email='direct-quota-race@example.com')
+            band = Band(name='direct quota race', slug='direct-quota-race', default_visibility='PUBLIC',
+                        storage_quota_bytes=10)
+            db.session.add_all((user, band)); db.session.flush()
+            membership = BandMembership(band_id=band.id, user_id=user.id, role='member', status='active')
+            db.session.add(membership); db.session.flush()
+            song = Song(band_id=band.id, created_by_membership_id=membership.id,
+                        visibility='PUBLIC', title='quota target', artist='band')
+            db.session.add(song); db.session.flush()
+            expired, _ = create_direct_session(
+                band_id=band.id, created_by_membership_id=membership.id, kind='media',
+                object_key=f'bands/{band.id}/media/expired.mp4', original_filename='expired.mp4',
+                content_type='video/mp4', declared_bytes=10, song_id=song.id, status='initiated',
+            )
+            expired.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+            db.session.commit()
+            band_id, membership_id, song_id, expired_id, expired_key = (
+                band.id, membership.id, song.id, expired.id, expired.object_key,
+            )
+
+        deleted = []
+        monkeypatch.setattr(storage, 'delete', lambda key: deleted.append(key))
+        first_reserved, release_first = Event(), Event()
+        create_lock = Lock()
+        create_count = 0
+        original_create = upload_routes.create_direct_session
+
+        def delayed_create(*args, **kwargs):
+            nonlocal create_count
+            with create_lock:
+                create_count += 1
+                is_first = create_count == 1
+            if is_first:
+                first_reserved.set()
+                assert release_first.wait(5)
+            return original_create(*args, **kwargs)
+
+        monkeypatch.setattr(upload_routes, 'create_direct_session', delayed_create)
+
+        def initiate():
+            with app.app_context():
+                def operation():
+                    band = db.session.get(Band, band_id)
+                    used, reserved = upload_routes._v2_used_and_reserved_bytes(band_id)
+                    if used + reserved + 10 > band.storage_quota_bytes:
+                        raise ValidationError('Band storage quota exceeded.', status_code=413)
+                    return upload_routes.create_direct_session(
+                        band_id=band_id, created_by_membership_id=membership_id, kind='media',
+                        object_key=f'bands/{band_id}/media/new-{threading.get_ident()}.mp4',
+                        original_filename='new.mp4', content_type='video/mp4', declared_bytes=10,
+                        song_id=song_id, status='initiated', commit=False,
+                    )
+                try:
+                    upload_routes._v2_write(operation)
+                    return 201
+                except ValidationError as exc:
+                    return exc.status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(initiate)
+            assert first_reserved.wait(5)
+            second = pool.submit(initiate)
+            release_first.set()
+            results = {first.result(timeout=5), second.result(timeout=5)}
+
+        assert results == {201, 413}
+        assert create_count == 1
+        assert deleted == [expired_key]
+        with app.app_context():
+            assert db.session.get(DirectUploadSession, expired_id).status == 'expired'
+            assert DirectUploadSession.query.filter_by(band_id=band_id, status='initiated').count() == 1
     finally:
         with app.app_context():
             db.session.remove(); db.drop_all()
