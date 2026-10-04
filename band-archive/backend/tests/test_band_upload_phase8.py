@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Event, Lock
+from threading import Barrier, Event, Lock
 import threading
 
 from botocore.exceptions import ClientError
@@ -321,7 +321,7 @@ def test_transient_expiry_cleanup_keeps_reservation_until_startup_retry_succeeds
         )
         db.session.commit()
     monkeypatch.setattr(storage, 'delete', lambda key: (_ for _ in ()).throw(RuntimeError('R2 unavailable')))
-    assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 409
+    assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 503
     with access_app.app_context():
         assert db.session.get(DirectUploadSession, first.get_json()['session_id']).status == 'expiring'
     deleted = []
@@ -559,6 +559,79 @@ def test_file_sqlite_direct_initiates_keep_quota_lock_while_expiry_is_released(t
         with app.app_context():
             assert db.session.get(DirectUploadSession, expired_id).status == 'expired'
             assert DirectUploadSession.query.filter_by(band_id=band_id, status='initiated').count() == 1
+    finally:
+        with app.app_context():
+            db.session.remove(); db.drop_all()
+
+
+def test_file_sqlite_transient_expiry_cleanup_aborts_each_initiate_without_overquota(tmp_path, monkeypatch):
+    """A failed delete never lets a released SQLite lock continue an initiate."""
+    db_path = tmp_path / 'direct-expiry-cleanup-pending-race.db'
+
+    class FileConfig(TestingConfig):
+        SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_path.as_posix()}'
+
+    app = create_app(FileConfig, start_worker=False)
+    try:
+        with app.app_context():
+            db.drop_all(); db.create_all()
+            user = AppUser(supabase_user_id='99999999-9999-9999-9999-999999999999',
+                           email='direct-cleanup-pending@example.com')
+            band = Band(name='direct cleanup pending', slug='direct-cleanup-pending',
+                        default_visibility='PUBLIC', storage_quota_bytes=25)
+            db.session.add_all((user, band)); db.session.flush()
+            membership = BandMembership(band_id=band.id, user_id=user.id, role='member', status='active')
+            db.session.add(membership); db.session.flush()
+            song = Song(band_id=band.id, created_by_membership_id=membership.id,
+                        visibility='PUBLIC', title='cleanup target', artist='band')
+            db.session.add(song); db.session.flush()
+            expired, _ = create_direct_session(
+                band_id=band.id, created_by_membership_id=membership.id, kind='media',
+                object_key=f'bands/{band.id}/media/expired.mp4', original_filename='expired.mp4',
+                content_type='video/mp4', declared_bytes=10, song_id=song.id, status='initiated',
+            )
+            expired.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+            db.session.commit()
+            band_id, membership_id, song_id, expired_id = band.id, membership.id, song.id, expired.id
+
+        monkeypatch.setattr(storage, 'delete', lambda _key: (_ for _ in ()).throw(RuntimeError('R2 unavailable')))
+        start = Barrier(2)
+
+        def initiate():
+            with app.app_context():
+                start.wait(timeout=5)
+                def operation():
+                    band = db.session.get(Band, band_id)
+                    used, reserved = upload_routes._v2_used_and_reserved_bytes(band_id)
+                    if used + reserved + 10 > band.storage_quota_bytes:
+                        raise ValidationError('Band storage quota exceeded.', status_code=413)
+                    return upload_routes.create_direct_session(
+                        band_id=band_id, created_by_membership_id=membership_id, kind='media',
+                        object_key=f'bands/{band_id}/media/new-{threading.get_ident()}.mp4',
+                        original_filename='new.mp4', content_type='video/mp4', declared_bytes=10,
+                        song_id=song_id, status='initiated', commit=False,
+                    )
+                try:
+                    upload_routes._v2_direct_write(operation)
+                    return 201
+                except ValidationError as exc:
+                    return exc.status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(initiate) for _ in range(2)]
+            results = [future.result(timeout=5) for future in futures]
+
+        assert results.count(503) >= 1
+        assert results.count(201) <= 1
+        with app.app_context():
+            expired = db.session.get(DirectUploadSession, expired_id)
+            reserved = sum(session.declared_bytes for session in DirectUploadSession.query.filter(
+                DirectUploadSession.band_id == band_id,
+                DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
+            ))
+            assert expired.status == 'expiring'
+            assert DirectUploadSession.query.filter_by(band_id=band_id, status='initiated').count() == results.count(201)
+            assert reserved <= db.session.get(Band, band_id).storage_quota_bytes
     finally:
         with app.app_context():
             db.session.remove(); db.drop_all()

@@ -12,6 +12,13 @@ from models import DirectUploadSession, GalleryImage, Media, PersonalLog
 from storage import storage
 
 
+class DirectUploadCleanupPending(Exception):
+    """An expired reservation could not be safely released in this write."""
+
+    def __init__(self, session_id):
+        self.session_id = session_id
+
+
 def now():
     """Use naive UTC because SQLite does not preserve timezone information."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -58,13 +65,12 @@ def expire_direct_session_if_needed(session, *, commit=True):
     if not claimed:
         return False
     recovered = recover_expiring_session(db.session.get(DirectUploadSession, session.id), commit=commit)
-    # A failed object delete deliberately keeps the reservation as `expiring`.
-    # The v2 caller will reject its new reservation; committing just this
-    # terminal retry marker means that rejection's rollback cannot revive the
-    # expired session. No quota accounting or new direct session follows this
-    # commit, so it cannot reopen the initiate race.
     if not recovered and not commit:
-        db.session.commit()
+        # The caller must roll back its quota transaction before recording the
+        # retry marker in a separate transaction. In particular, never commit
+        # here: that would release SQLite's immediate lock and let this caller
+        # continue from stale quota accounting.
+        raise DirectUploadCleanupPending(session.id)
     return recovered
 
 
@@ -78,6 +84,14 @@ def expire_direct_sessions_for_band(band_id=None, *, commit=True):
         query = query.filter(DirectUploadSession.band_id == band_id)
     sessions = query.all()
     return sum(expire_direct_session_if_needed(session, commit=commit) for session in sessions)
+
+
+def persist_direct_cleanup_pending(session_id):
+    """Durably retain a failed cleanup reservation after the caller rolls back."""
+    DirectUploadSession.query.filter_by(id=session_id, status='initiated').update({
+        'status': 'expiring', 'completion_started_at': now(),
+    })
+    db.session.commit()
 
 
 def _missing_object(error):

@@ -10,8 +10,9 @@ from models import (Band, BandMembership, Media, Song, Rehearsal, Member,
                     PersonalLog, GalleryImage, MultipartUploadSession,
                     PersonalLogMultipartUploadSession, DirectUploadSession)
 from direct_upload_service import (
-    complete_direct_session, create_direct_session, expire_direct_session_if_needed,
+    DirectUploadCleanupPending, complete_direct_session, create_direct_session, expire_direct_session_if_needed,
     expire_direct_sessions_for_band, recover_direct_sessions, require_direct_capability,
+    persist_direct_cleanup_pending,
 )
 from legacy_scope import legacy_band_id, legacy_get_or_404, validate_legacy_graph
 from errors import ValidationError, NotFoundError
@@ -97,6 +98,18 @@ def _v2_write(operation):
     except Exception:
         db.session.rollback()
         raise
+
+
+def _v2_direct_write(operation):
+    """Abort an initiate if expiry cleanup cannot retain its quota lock."""
+    try:
+        return _v2_write(operation)
+    except DirectUploadCleanupPending as pending:
+        # _v2_write already rolled back the accounting transaction. Persist the
+        # retry marker only afterward, then fail closed instead of initiating a
+        # new reservation from a lock that was no longer held.
+        persist_direct_cleanup_pending(pending.session_id)
+        raise ValidationError('An expired upload is still being cleaned up. Please retry shortly.', status_code=503)
 
 
 def _v2_session_or_404(session_id, band_id, *, recover_aborting=True):
@@ -357,7 +370,7 @@ def v2_initiate_direct_upload(band_id):
             song_id=song_id, rehearsal_id=rehearsal_id, **common,
         )
 
-    session, capability_token = _v2_write(operation)
+    session, capability_token = _v2_direct_write(operation)
     return jsonify({
         'session_id': session.id, 'filename': secure_name,
         'upload_url': storage.generate_upload_url(session.object_key, content_type=session.content_type),
@@ -407,7 +420,7 @@ def v2_initiate_direct_gallery_upload(band_id):
             status='initiated', commit=False,
         )
 
-    session, capability_token = _v2_write(operation)
+    session, capability_token = _v2_direct_write(operation)
     return jsonify({
         'session_id': session.id, 'filename': secure_name,
         'upload_url': storage.generate_upload_url(session.object_key, content_type=session.content_type),
