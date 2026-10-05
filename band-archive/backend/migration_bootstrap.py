@@ -601,7 +601,8 @@ def _expected_check_constraints(table, dialect=None):
         if constraint.__class__.__name__ != 'CheckConstraint':
             continue
         canonical = _canonical_check_constraint(
-            constraint.sqltext, dialect, allow_or=table.name == 'direct_upload_session'
+            constraint.sqltext, dialect,
+            allow_or=(table.name, constraint.name) == ('direct_upload_session', 'ck_direct_upload_session_target'),
         )
         if getattr(dialect, 'name', None) == 'postgresql':
             canonical = _normalize_postgres_check_for_table(canonical, table)
@@ -626,7 +627,8 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
                 f'Dialect returned an unreadable CHECK constraint for {table_name}; refusing to stamp.'
             )
         canonical = _canonical_check_constraint(
-            constraint['sqltext'], dialect, allow_or=table_name == 'direct_upload_session'
+            constraint['sqltext'], dialect,
+            allow_or=(table_name, constraint.get('name')) == ('direct_upload_session', 'ck_direct_upload_session_target'),
         )
         if getattr(dialect, 'name', None) == 'postgresql' and table is not None:
             canonical = _normalize_postgres_check_for_table(canonical, table)

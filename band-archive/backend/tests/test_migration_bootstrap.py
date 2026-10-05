@@ -25,6 +25,7 @@ from migration_bootstrap import (
     _constraints_are_equivalent,
     _defaults_are_equivalent,
     _reflected_indexes,
+    _reflected_check_constraints,
     _audit_trigger_differences,
     _expected_check_constraints,
     _postgres_serial_sequence_is_owned,
@@ -563,6 +564,26 @@ def test_postgres_check_normalization_handles_direct_upload_or_branches_fail_clo
         "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)", allow_or=True
     ), table)
     assert weakened != expected
+
+
+def test_postgres_direct_upload_or_grammar_is_limited_to_the_named_target_check():
+    table = sa.Table(
+        'direct_upload_session', sa.MetaData(),
+        sa.Column('kind', sa.String(20)), sa.Column('song_id', sa.Integer()),
+    )
+
+    class Inspector:
+        def get_check_constraints(self, table_name):
+            assert table_name == 'direct_upload_session'
+            return [{
+                'name': 'ck_direct_upload_session_kind',
+                'sqltext': "kind = 'media' OR song_id IS NOT NULL",
+            }]
+
+    reflected = _reflected_check_constraints(
+        Inspector(), 'direct_upload_session', postgresql.dialect(), table,
+    )
+    assert reflected == Counter({('ck_direct_upload_session_kind', None): 1})
 
 
 def test_postgres_numeric_check_normalization_is_structured_and_fail_closed():
