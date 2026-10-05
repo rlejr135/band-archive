@@ -48,3 +48,47 @@ The normal app factory deliberately creates only the historical v1 metadata.
 It never creates Alembic-managed auth tables. With auth enabled it checks both
 the required tables and Alembic head, then refuses startup until this release
 order has been completed.
+
+## Local staging rehearsal
+
+`backend/.env.staging-auth.local` is an ignored, non-secret staging contract.
+It deliberately keeps `SUPABASE_AUTH_ENABLED=false`. It is not loaded by
+`app.py`'s default `load_dotenv()` call, so from the repository root use the
+dotenv runner explicitly whenever using it:
+
+```powershell
+& backend\.venv-test\Scripts\python.exe -m dotenv -f backend\.env.staging-auth.local run -- `
+  backend\.venv-test\Scripts\python.exe -c "import sys; sys.path.insert(0, 'backend'); from config import DevelopmentConfig, validate_supabase_auth_config; c={k:getattr(DevelopmentConfig,k) for k in dir(DevelopmentConfig) if k.isupper()}; assert not c['SUPABASE_AUTH_ENABLED']; c['SUPABASE_AUTH_ENABLED']=True; validate_supabase_auth_config(c); print('staging auth contract validated; auth remains disabled')"
+```
+
+The validation command checks the full configuration that would be required
+when auth is enabled, but does not create an app, contact Supabase, or change
+the disabled setting. The backend must be launched with the same explicit
+dotenv wrapper only *after* the database is at the checked-in Alembic head:
+
+```powershell
+Push-Location backend
+& .\.venv-test\Scripts\python.exe -m dotenv -f .env.staging-auth.local run -- `
+  .\.venv-test\Scripts\python.exe app.py
+Pop-Location
+```
+
+Keep the database password in the process environment (for example, an
+ephemeral operator variable), never in this file. Use the current pooler host,
+username, and `sslmode=require`; do not reuse a stale host or user embedded in
+an older connection URL. Before changing remote schema, take a restorable
+backup, run the read-only snapshot/preflight check, then run the isolated
+runner with the process `DATABASE_URL`:
+
+```powershell
+Push-Location backend
+& .\.venv-test\Scripts\python.exe migration_runner.py upgrade
+Pop-Location
+```
+
+That command performs the migration preflight before any DDL. Do not use
+`flask db upgrade`, do not start the normal application as a migration tool,
+and do not set `SUPABASE_AUTH_ENABLED=true` until the command completes and
+the recorded revision equals the checked-in head. Turnstile is not enabled in
+this rollout: there is currently no client-side challenge/token submission
+coverage, so enabling it would make signup fail.
