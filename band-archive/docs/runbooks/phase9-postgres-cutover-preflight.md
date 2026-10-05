@@ -18,8 +18,10 @@ separately approved change window.
 - Object checks are comparison-only. A permitted adapter can list/head R2;
   it must not expose put, copy, or delete. No R2 mutation is part of this
   cutover.
-- Connection strings and credentials are environment variables only. Do not
-  place them in commands, reports, tickets, source files, or shell history.
+- Connection strings and credentials are environment variables only. Inject
+  them into the child process through the approved secret manager or secure
+  launcher; do not type, paste, assign, or export a secret in a shell. “Env
+  only” does not mean manually assigning a value to a PowerShell variable.
 
 ## Dry-run evidence
 
@@ -28,8 +30,10 @@ itself as UTF-8 and refuses to overwrite evidence.
 
 ```powershell
 cd backend
-$env:REHEARSAL_TARGET_URL = '<approved disposable target connection string>'
-python tools/legacy_rehearsal/rehearsal.py `
+# Start this command through the approved secret-manager secure launcher.
+# It injects REHEARSAL_TARGET_URL only into this child process; the value is
+# never typed into the shell, a command line, or a history file.
+<approved-secure-launcher> -- python tools/legacy_rehearsal/rehearsal.py `
   --source-sqlite E:\operator\snapshots\band_archive.sqlite `
   --expected-target-host '<approved-host>' `
   --expected-target-database '<approved-database>' `
@@ -67,8 +71,13 @@ credential, bucket, object key, or free-form note.
 Pass that path through `--write-freeze-attestation` on the final (non-dry)
 rehearsal import. The tool refuses an import with no attestation, an altered
 snapshot, a stale fingerprint, unknown JSON fields, or a non-empty/non-head
-target. The retained report records only that the versioned attestation
-matched; it does not retain the attestation contents.
+target. A final import also requires a new `--report-output` path: the CLI
+reserves and atomically publishes retained evidence before the target
+transaction commits. The retained report records only that the versioned
+attestation matched; it does not retain the attestation contents. Use this
+CLI as the only operator-facing final-import entrypoint; the Python
+`run_rehearsal` function is an internal/test seam and its injected report
+publisher is not an operator workflow.
 
 After import, reconcile database rows, FKs, score aggregates, comment trees,
 and the R2 manifest before deploying the PostgreSQL backend. Keep SQLite and
