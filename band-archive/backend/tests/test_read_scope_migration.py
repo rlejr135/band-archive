@@ -306,6 +306,7 @@ def test_suggestion_vote_revision_has_postgres_offline_partial_unique_shape(monk
     upgrade_sql = _offline_postgres(revision.upgrade)
     downgrade_sql = _offline_postgres(revision.downgrade)
     assert 'voter_user_id INTEGER' in upgrade_sql
+    assert 'is_legacy BOOLEAN DEFAULT false NOT NULL' in upgrade_sql
     assert 'CREATE UNIQUE INDEX uq_song_suggestion_vote_user ON song_suggestion_vote (suggestion_id, voter_user_id)' in upgrade_sql
     assert 'WHERE voter_user_id IS NOT NULL' in upgrade_sql
     assert 'DROP INDEX uq_song_suggestion_vote_user' in downgrade_sql

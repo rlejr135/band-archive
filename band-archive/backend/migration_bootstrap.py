@@ -600,7 +600,9 @@ def _expected_check_constraints(table, dialect=None):
     for constraint in table.constraints:
         if constraint.__class__.__name__ != 'CheckConstraint':
             continue
-        canonical = _canonical_check_constraint(constraint.sqltext, dialect)
+        canonical = _canonical_check_constraint(
+            constraint.sqltext, dialect, allow_or=table.name == 'direct_upload_session'
+        )
         if getattr(dialect, 'name', None) == 'postgresql':
             canonical = _normalize_postgres_check_for_table(canonical, table)
         if getattr(dialect, 'name', None) == 'postgresql' and canonical is None:
@@ -623,7 +625,9 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             raise MigrationBootstrapError(
                 f'Dialect returned an unreadable CHECK constraint for {table_name}; refusing to stamp.'
             )
-        canonical = _canonical_check_constraint(constraint['sqltext'], dialect)
+        canonical = _canonical_check_constraint(
+            constraint['sqltext'], dialect, allow_or=table_name == 'direct_upload_session'
+        )
         if getattr(dialect, 'name', None) == 'postgresql' and table is not None:
             canonical = _normalize_postgres_check_for_table(canonical, table)
         reflected.append((constraint.get('name'), canonical))
@@ -676,9 +680,20 @@ def _split_postgres_top_level(value, delimiter):
 
 
 def _postgres_check_operand(value):
-    value, cast = _postgres_check_cast_parts(value)
-    if value is None:
-        return None
+    # PostgreSQL 17 may render a coerced VARCHAR literal as
+    # ``'value'::character varying::text`` inside an ANY array.  Keep every
+    # cast rather than discarding it: each one is checked against the metadata
+    # type below, so a changed predicate cannot become an accepted cosmetic
+    # variation merely by adding a cast chain.
+    casts = []
+    while True:
+        value, cast = _postgres_check_cast_parts(value, allow_inner_casts=True)
+        if value is None:
+            return None
+        if cast is None:
+            break
+        casts.append(cast)
+    cast = casts[0] if len(casts) == 1 else tuple(casts) if casts else None
     if re.fullmatch(r"'(?:''|[^'])*'", value):
         return ('literal', value[1:-1].replace("''", "'"), cast)
     if re.fullmatch(r'-?\d+', value):
@@ -697,22 +712,49 @@ def _postgres_check_in_values(value):
     return frozenset(parsed)
 
 
-def _canonical_postgres_check_constraint(value):
+def _canonical_postgres_check_constraint(value, allow_or=False):
     """Canonicalize the reflected, literal-only PostgreSQL CHECK grammar.
 
-    This intentionally recognizes only equality and IN/ANY literal checks
-    joined by AND.  It is enough for the checked-in metadata while refusing
-    OR, functions, expressions, and unfamiliar casts rather than treating
-    those as cosmetic server formatting.
+    This intentionally recognizes only equality, IN/ANY literal checks, and
+    NULL tests joined by AND, plus top-level ORs of those controlled AND
+    branches.  That is enough for the checked-in direct-upload target
+    constraint while refusing functions, expressions, nested boolean forms,
+    and unfamiliar casts rather than treating those as cosmetic formatting.
     """
     if not isinstance(value, str):
         return None
-    atoms = _split_postgres_predicate_and(value.strip().casefold())
+    expression = value.strip().casefold()
+    branches = _split_postgres_top_level(expression, ' or ')
+    if branches is None:
+        return None
+    if len(branches) > 1:
+        if not allow_or:
+            return None
+        canonical_branches = [
+            _canonical_postgres_check_and_branch(branch, allow_null_tests=True) for branch in branches
+        ]
+        if any(branch is None for branch in canonical_branches) or len(set(canonical_branches)) != len(canonical_branches):
+            return None
+        return ('or', frozenset(canonical_branches))
+    return _canonical_postgres_check_and_branch(expression, allow_null_tests=allow_or)
+
+
+def _canonical_postgres_check_and_branch(value, allow_null_tests=False):
+    atoms = _split_postgres_predicate_and(value)
     if not atoms:
         return None
     parsed = []
     for atom in atoms:
         atom = _strip_sql_parentheses(atom)
+        null_match = re.fullmatch(r'(.+?)\s+is\s+(not\s+)?null', atom, re.IGNORECASE)
+        if null_match:
+            if not allow_null_tests:
+                return None
+            column = _postgres_check_operand(null_match.group(1))
+            if not column or column[0] != 'column':
+                return None
+            parsed.append((column[1], 'is_not_null' if null_match.group(2) else 'is_null', None, column[2], None))
+            continue
         # ``column IN (literal, ...)``.
         in_parts = _split_postgres_top_level(atom, ' in ')
         if in_parts is not None and len(in_parts) == 2:
@@ -765,6 +807,10 @@ def _postgres_check_cast_matches(cast, column_type, array=False):
     """Allow only reflection casts that preserve this metadata column type."""
     if cast is None:
         return True
+    if isinstance(cast, tuple):
+        # A PostgreSQL 17 coercion chain is acceptable only if *every* step
+        # is a representation this audited column type may take.
+        return bool(cast) and all(_postgres_check_cast_matches(item, column_type, array=array) for item in cast)
     if array:
         if not cast.endswith('[]'):
             return False
@@ -791,12 +837,22 @@ def _postgres_check_cast_matches(cast, column_type, array=False):
 def _normalize_postgres_check_for_table(canonical, table):
     if canonical is None:
         return None
+    if isinstance(canonical, tuple) and len(canonical) == 2 and canonical[0] == 'or':
+        branches = [_normalize_postgres_check_for_table(branch, table) for branch in canonical[1]]
+        if any(branch is None for branch in branches) or len(set(branches)) != len(branches):
+            return None
+        return ('or', frozenset(branches))
     normalized = []
     for atom in canonical:
         column_name, operator, value, column_cast, value_cast = atom
         column = table.c.get(column_name)
         if column is None or not _postgres_check_cast_matches(column_cast, column.type):
             return None
+        if operator in {'is_null', 'is_not_null'}:
+            if value is not None or value_cast is not None:
+                return None
+            normalized.append((column_name, operator))
+            continue
         if operator == 'in':
             values = []
             for kind, literal, literal_cast in value:
@@ -813,9 +869,9 @@ def _normalize_postgres_check_for_table(canonical, table):
     return frozenset(normalized)
 
 
-def _canonical_check_constraint(value, dialect):
+def _canonical_check_constraint(value, dialect, allow_or=False):
     if getattr(dialect, 'name', None) == 'postgresql':
-        return _canonical_postgres_check_constraint(str(value))
+        return _canonical_postgres_check_constraint(str(value), allow_or=allow_or)
     return _normalize_sql(value)
 
 

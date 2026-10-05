@@ -84,7 +84,9 @@ def upgrade():
         sa.Column('suggestion_id', sa.Integer(), nullable=False),
         sa.Column('voter_user_id', sa.Integer(), nullable=True),
         sa.Column('created_by_membership_id', sa.Integer(), nullable=True),
-        sa.Column('is_legacy', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+        # ``sa.false()`` renders a typed boolean literal on PostgreSQL and
+        # retains SQLite's compatible false representation.
+        sa.Column('is_legacy', sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column('value', sa.Integer(), nullable=False),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),

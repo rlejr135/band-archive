@@ -526,6 +526,45 @@ def test_postgres_check_normalization_handles_only_literal_in_and_any_forms():
     assert _canonical_postgres_check_constraint("visibility = current_setting('app.visibility')") is None
 
 
+def test_postgres_check_normalization_handles_postgres17_literal_cast_chains_fail_closed():
+    table = sa.Table('visibility_test', sa.MetaData(), sa.Column('visibility', sa.String(20)))
+    expected = _normalize_postgres_check_for_table(
+        _canonical_postgres_check_constraint("visibility IN ('PUBLIC', 'MEMBERS')"), table,
+    )
+    reflected = _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(
+        "visibility::text = ANY (ARRAY['PUBLIC'::character varying::text, "
+        "'MEMBERS'::character varying::text])"
+    ), table)
+    assert reflected == expected
+    weakened = _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(
+        "visibility::text = ANY (ARRAY['PUBLIC'::character varying::text])"
+    ), table)
+    assert weakened != expected
+
+
+def test_postgres_check_normalization_handles_direct_upload_or_branches_fail_closed():
+    table = sa.Table(
+        'direct_upload_session', sa.MetaData(),
+        sa.Column('kind', sa.String(20)), sa.Column('song_id', sa.Integer()),
+        sa.Column('rehearsal_id', sa.Integer()), sa.Column('member_id', sa.Integer()),
+    )
+    expected = _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(
+        "(kind = 'media' AND song_id IS NOT NULL AND member_id IS NULL) OR "
+        "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)", allow_or=True
+    ), table)
+    reflected = _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(
+        "((kind)::text = 'media'::text AND song_id IS NOT NULL AND member_id IS NULL) OR "
+        "((kind)::text = 'personal_log'::text AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)",
+        allow_or=True,
+    ), table)
+    assert reflected == expected
+    weakened = _normalize_postgres_check_for_table(_canonical_postgres_check_constraint(
+        "(kind = 'media' AND song_id IS NOT NULL) OR "
+        "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)", allow_or=True
+    ), table)
+    assert weakened != expected
+
+
 def test_postgres_numeric_check_normalization_is_structured_and_fail_closed():
     table = sa.Table('quota_compare', sa.MetaData(), sa.Column('storage_quota_bytes', sa.BigInteger))
     expected = _normalize_postgres_check_for_table(
