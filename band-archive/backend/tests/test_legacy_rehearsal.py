@@ -551,6 +551,68 @@ def test_write_freeze_attestation_is_bound_to_exact_snapshot_and_report_is_nonse
     assert "writes_frozen" not in json.dumps(report)
 
 
+def test_attested_snapshot_swap_during_copy_aborts_before_target_write(tmp_path, monkeypatch):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    _upgrade(target)
+    import tools.legacy_rehearsal.rehearsal as rehearsal
+    original_copy2 = rehearsal.shutil.copy2
+    published = []
+
+    def swap_before_immutable_copy(source_arg, destination, *args, **kwargs):
+        if Path(destination).name == "legacy-rehearsal-snapshot.sqlite":
+            with create_engine(_url(source)).begin() as connection:
+                connection.execute(text("UPDATE song SET title = 'swapped-during-copy' WHERE id = 7"))
+        return original_copy2(source_arg, destination, *args, **kwargs)
+
+    monkeypatch.setattr(rehearsal.shutil, "copy2", swap_before_immutable_copy)
+    with pytest.raises(RehearsalError, match="immutable copied snapshot does not match"):
+        run_rehearsal(
+            str(source), _url(target), allow_sqlite_target=True,
+            sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source),
+            report_publisher=lambda report: published.append(report),
+        )
+    assert published == []
+    with create_engine(_url(target)).connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM song")).scalar_one() == 0
+
+
+def test_cli_dry_run_allows_omitting_report_output(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    _legacy_fixture(source)
+    _upgrade(target)
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", _url(target),
+        "--allow-sqlite-target", "--sqlite-test-target-path", str(target),
+        "--dry-run",
+    ])
+
+    assert result.exit_code == 0
+    assert '"dry_run": true' in result.output
+    with create_engine(_url(target)).connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM song")).scalar_one() == 0
+
+
+def test_cli_final_import_requires_retained_report_output_before_target_write(tmp_path):
+    source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
+    attestation = tmp_path / "write-freeze.json"
+    _legacy_fixture(source)
+    _upgrade(target)
+    attestation.write_text(json.dumps(_freeze_attestation(source)), encoding="utf-8")
+
+    result = CliRunner().invoke(cli, [
+        "--source-sqlite", str(source), "--target-url", _url(target),
+        "--allow-sqlite-target", "--sqlite-test-target-path", str(target),
+        "--write-freeze-attestation", str(attestation),
+    ])
+
+    assert result.exit_code != 0
+    assert "final import requires --report-output" in result.output
+    with create_engine(_url(target)).connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM song")).scalar_one() == 0
+
+
 def test_rehearsal_refuses_extra_nonlegacy_band_without_mutating_bootstrap_rows(tmp_path):
     source, target = tmp_path / 'source.sqlite', tmp_path / 'target.sqlite'
     _legacy_fixture(source)

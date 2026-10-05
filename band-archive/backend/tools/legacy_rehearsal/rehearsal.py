@@ -947,15 +947,22 @@ def _normalize_production_legacy_copy(snapshot_path: Path, working_path: Path,
     return _write_normalization_evidence(temporary_dir, source_snapshot, excluded, source_digests)
 
 
-def _copy_and_backfill(source: str, temporary_dir: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+def _copy_and_backfill(source: str, temporary_dir: Path, *,
+                       expected_source_fingerprint: Mapping[str, Any] | None = None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     source_path = preflight_sqlite_snapshot(source)
     source_revision, normalizer_variant = _assert_supported_source_schema(source_path)
     _assert_exact_sqlite_trigger_contract(source_path, source_revision)
     source_before = _file_fingerprint(source_path)
+    if (expected_source_fingerprint is not None
+            and source_before != dict(expected_source_fingerprint)):
+        raise RehearsalError("attested SQLite snapshot changed before immutable copy")
     snapshot_path = temporary_dir / "legacy-rehearsal-snapshot.sqlite"
     working_path = temporary_dir / "legacy-rehearsal-working.sqlite"
     shutil.copy2(source_path, snapshot_path)
     snapshot_fingerprint = _file_fingerprint(snapshot_path)
+    if (expected_source_fingerprint is not None
+            and snapshot_fingerprint != dict(expected_source_fingerprint)):
+        raise RehearsalError("immutable copied snapshot does not match the write-freeze attestation")
     if source_before != _file_fingerprint(source_path) or source_before["sha256"] != snapshot_fingerprint["sha256"]:
         raise RehearsalError("source SQLite snapshot changed while being copied")
     # Keep the copied snapshot immutable as operator evidence.  The supported
@@ -1499,6 +1506,12 @@ def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: 
 
     The target is always checked *before* the source work, is never upgraded by
     this tool, and all inserts plus sequence updates occur in one transaction.
+
+    This is an internal orchestration seam used by tests and by :func:`cli`.
+    The supported operator-facing final-import entrypoint is ``cli``, which
+    reserves a durable report destination before calling this function and
+    supplies its atomic publisher.  Callers that inject ``report_publisher``
+    are responsible for providing equivalent publication semantics.
     """
     identity = _validate_target_url(
         target_url, expected_target_host=expected_target_host,
@@ -1520,7 +1533,10 @@ def run_rehearsal(source_sqlite: str, target_url: str, *, expected_target_host: 
             write_freeze = validate_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
         with tempfile.TemporaryDirectory(prefix="band-archive-legacy-rehearsal-") as directory:
             source_schema = _source_schema_fingerprint(source_path)
-            source_copy, backfill, source_files = _copy_and_backfill(source_sqlite, Path(directory))
+            source_copy, backfill, source_files = _copy_and_backfill(
+                source_sqlite, Path(directory),
+                expected_source_fingerprint=source_fingerprint if write_freeze is not None else None,
+            )
             source_engine = create_engine(f"sqlite:///{source_copy.as_posix()}", future=True)
             try:
                 with source_engine.connect() as source_connection:
@@ -1612,6 +1628,10 @@ def cli(source_sqlite: Path, target_url: str, expected_target_host: str | None,
         dry_run: bool, write_freeze_attestation: Path | None, allow_sqlite_target: bool, sqlite_test_target_path: Path | None,
         report_output: Path | None) -> None:
     """Run one offline, non-repeatable legacy-migration rehearsal."""
+    # The CLI is the supported final-import entrypoint. Reject before creating
+    # a target engine so an omitted retained-evidence path cannot write data.
+    if not dry_run and report_output is None:
+        raise click.UsageError("final import requires --report-output for retained atomic evidence")
     reservation: _ReservedReportOutput | None = None
     try:
         if report_output is not None:
