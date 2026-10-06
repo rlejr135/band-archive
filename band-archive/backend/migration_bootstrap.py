@@ -33,6 +33,7 @@ PHASE7_REVISION = '20260927_07'
 PHASE8_REVISION = '20261002_08'
 PHASE9_REVISION = '20261002_09'
 PHASE10_REVISION = '20261003_10'
+PHASE11_REVISION = '20261004_11'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
@@ -157,6 +158,7 @@ def phase4_metadata():
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
     for table_name in (
         'song', 'rehearsal', 'media', 'member', 'personal_log', 'gallery_image',
         'announcement', 'song_suggestion', 'comment', 'song_vote', 'media_vote',
@@ -193,6 +195,7 @@ def phase6_metadata():
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
 
@@ -203,6 +206,7 @@ def phase7_metadata():
         table.to_metadata(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
 
@@ -212,6 +216,7 @@ def phase8_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
 
@@ -222,6 +227,7 @@ def phase9_metadata():
         table.to_metadata(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase10_direct_expiry_state(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
 
@@ -231,6 +237,16 @@ def phase10_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
+    return metadata
+
+
+def phase11_metadata():
+    """Exact revision-11 snapshot before ownership-claim capabilities."""
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
 
@@ -298,6 +314,13 @@ def _restore_pre_phase11_direct_gallery_state(metadata):
         "(kind = 'personal_log' AND song_id IS NULL AND rehearsal_id IS NULL AND member_id IS NOT NULL)",
         name='ck_direct_upload_session_target',
     ))
+
+
+def _restore_pre_phase12_legacy_claim_state(metadata):
+    """Remove the one-time legacy ownership capability before revision 12."""
+    table = metadata.tables.get('legacy_band_claim_token')
+    if table is not None:
+        metadata.remove(table)
 
 
 def _restore_pre_phase4_band(metadata):
@@ -1050,6 +1073,19 @@ def _canonical_postgres_partial_predicate(value):
     atoms = _split_postgres_predicate_and(expression)
     if not atoms:
         return None
+    claim_atoms = set()
+    for atom in atoms:
+        match = re.fullmatch(
+            r'(?:[a-z_][a-z0-9_]*\.)?(invalidated_at|redeemed_at)\s+is\s+null',
+            _strip_sql_parentheses(atom),
+        )
+        if match is None:
+            claim_atoms = set()
+            break
+        claim_atoms.add((match.group(1), 'is_null'))
+    if claim_atoms:
+        expected_claim_atoms = {('invalidated_at', 'is_null'), ('redeemed_at', 'is_null')}
+        return frozenset(claim_atoms) if claim_atoms == expected_claim_atoms and len(atoms) == 2 else None
     parsed = set()
     for atom in atoms:
         parsed_atom = _parse_postgres_predicate_atom(atom)
@@ -1329,6 +1365,8 @@ def metadata_for_recorded_revision(revision):
         return phase9_metadata()
     if revision == PHASE10_REVISION:
         return phase10_metadata()
+    if revision == PHASE11_REVISION:
+        return phase11_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

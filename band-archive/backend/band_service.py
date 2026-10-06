@@ -10,7 +10,10 @@ from sqlalchemy.exc import IntegrityError
 
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership
+from models import (
+    AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership,
+    LegacyBandClaimToken,
+)
 
 
 OWNER_ROLES = {'owner'}
@@ -406,6 +409,178 @@ def join_invite(user, raw):
         audit('membership_rejoined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
         db.session.commit()
     return item
+
+
+_LEGACY_CLAIM_PURPOSE = 'initial_owner'
+_LEGACY_CLAIM_TTL = timedelta(hours=24)
+
+
+def legacy_claim_dict(claim):
+    """Serialize token lifecycle metadata without exposing its digest."""
+    return {
+        'id': claim.id,
+        'band_id': claim.band_id,
+        'purpose': claim.purpose,
+        'created_at': claim.created_at.isoformat() if claim.created_at else None,
+        'expires_at': claim.expires_at.isoformat() if claim.expires_at else None,
+        'invalidated_at': claim.invalidated_at.isoformat() if claim.invalidated_at else None,
+        'redeemed_at': claim.redeemed_at.isoformat() if claim.redeemed_at else None,
+    }
+
+
+def _locked_legacy_band(band_id):
+    """Lock the legacy-band transition resource before inspecting its state."""
+    band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
+    if band is None:
+        raise NotFoundError('Band not found')
+    return band
+
+
+def _require_ownerless_legacy_band(band):
+    if not band.is_legacy_import:
+        raise ValidationError('Only an ownerless legacy band can be claimed.', 409)
+    owner = BandMembership.query.filter_by(
+        band_id=band.id, role='owner', status=ACTIVE,
+    ).with_for_update().populate_existing().one_or_none()
+    if band.created_by_user_id is not None or owner is not None:
+        raise ValidationError('This legacy band already has an owner.', 409)
+    return band
+
+
+def _locked_ownerless_legacy_band(band_id):
+    """Lock and verify a legacy band is still eligible for first ownership."""
+    return _require_ownerless_legacy_band(_locked_legacy_band(band_id))
+
+
+def _locked_outstanding_legacy_claim_query(band_id):
+    return LegacyBandClaimToken.query.filter_by(
+        band_id=band_id, purpose=_LEGACY_CLAIM_PURPOSE,
+        invalidated_at=None, redeemed_at=None,
+    ).with_for_update().populate_existing()
+
+
+def _locked_outstanding_legacy_claim(band_id):
+    return _locked_outstanding_legacy_claim_query(band_id).one_or_none()
+
+
+def _create_legacy_claim_locked(actor, band, timestamp):
+    # token_urlsafe(32) carries 256 bits; only a fixed-size digest reaches the database.
+    raw = secrets.token_urlsafe(32)
+    claim = LegacyBandClaimToken(
+        band_id=band.id,
+        purpose=_LEGACY_CLAIM_PURPOSE,
+        token_hash=_token_hash(raw),
+        issued_by_user_id=actor.id,
+        expires_at=timestamp + _LEGACY_CLAIM_TTL,
+    )
+    db.session.add(claim)
+    db.session.flush()
+    audit('legacy_band_claim_issued', actor, band=band, target=claim,
+          details={'purpose': _LEGACY_CLAIM_PURPOSE})
+    return claim, raw
+
+
+def _require_active_platform_admin(actor):
+    if actor.status != ACTIVE or actor.is_platform_admin is not True:
+        raise ValidationError('Platform administrator permission is required.', 403)
+
+
+def issue_legacy_claim(actor, band_id):
+    """Rotate the single outstanding initial-owner capability for a legacy band."""
+    _require_active_platform_admin(actor)
+    _begin_privileged_mutation()
+    band = _locked_ownerless_legacy_band(band_id)
+    timestamp = now()
+    previous = _locked_outstanding_legacy_claim(band.id)
+    if previous is not None:
+        previous.invalidated_at = timestamp
+        previous.invalidated_by_user_id = actor.id
+        audit('legacy_band_claim_invalidated', actor, band=band, target=previous,
+              details={'reason': 'rotated'})
+        # Release the partial-unique slot before inserting the replacement.
+        db.session.flush()
+    claim, raw = _create_legacy_claim_locked(actor, band, timestamp)
+    db.session.commit()
+    return claim, raw
+
+
+def invalidate_legacy_claim(actor, band_id):
+    """Invalidate the current initial-owner capability without issuing another."""
+    _require_active_platform_admin(actor)
+    _begin_privileged_mutation()
+    band = _locked_ownerless_legacy_band(band_id)
+    claim = _locked_outstanding_legacy_claim(band.id)
+    if claim is None:
+        return None
+    claim.invalidated_at = now()
+    claim.invalidated_by_user_id = actor.id
+    audit('legacy_band_claim_invalidated', actor, band=band, target=claim,
+          details={'reason': 'manual'})
+    db.session.commit()
+    return claim
+
+
+def _legacy_claim_expired(claim, timestamp):
+    expires_at = claim.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= timestamp
+
+
+def redeem_legacy_claim(user, band_id, raw):
+    """Consume a valid capability and atomically establish the first owner."""
+    if not isinstance(raw, str) or not raw or len(raw) > 200:
+        raise ValidationError('Legacy ownership claim is invalid.', 404)
+    if user.status != ACTIVE or user.email_verified is not True:
+        raise ValidationError('An active, verified account is required to claim this band.', 403)
+
+    _begin_privileged_mutation()
+    # Read the candidate only to obtain its band lock key.  The authoritative
+    # row is reloaded FOR UPDATE after the band lock, matching issuer order.
+    candidate = LegacyBandClaimToken.query.filter_by(token_hash=_token_hash(raw)).one_or_none()
+    if candidate is None or candidate.band_id != band_id:
+        raise ValidationError('Legacy ownership claim is invalid.', 404)
+    band = _locked_legacy_band(band_id)
+    claim = LegacyBandClaimToken.query.filter_by(
+        id=candidate.id, band_id=band.id, token_hash=_token_hash(raw),
+    ).with_for_update().populate_existing().one_or_none()
+    timestamp = now()
+    if (claim is None or claim.purpose != _LEGACY_CLAIM_PURPOSE
+            or claim.invalidated_at is not None or claim.redeemed_at is not None
+            or _legacy_claim_expired(claim, timestamp)):
+        raise ValidationError('Legacy ownership claim is invalid.', 404)
+    _require_ownerless_legacy_band(band)
+
+    membership = BandMembership.query.filter_by(
+        band_id=band.id, user_id=user.id,
+    ).with_for_update().populate_existing().one_or_none()
+    try:
+        band.created_by_user_id = user.id
+        claim.redeemed_at = timestamp
+        claim.redeemed_by_user_id = user.id
+        if membership is None:
+            membership = BandMembership(
+                band_id=band.id, user_id=user.id, role='owner', status=ACTIVE,
+                approved_at=timestamp, acted_by_user_id=user.id,
+            )
+            db.session.add(membership)
+        else:
+            membership.role = 'owner'
+            membership.status = ACTIVE
+            membership.requested_at = timestamp
+            membership.left_at = None
+            membership.approved_at = timestamp
+            membership.acted_by_user_id = user.id
+        db.session.flush()
+        audit('legacy_band_claim_redeemed', user, band=band, target=claim,
+              details={'purpose': _LEGACY_CLAIM_PURPOSE})
+        audit('legacy_band_owner_claimed', user, band=band, target=membership,
+              details={'role': 'owner'})
+        db.session.commit()
+    except IntegrityError as error:
+        db.session.rollback()
+        raise ValidationError('This legacy band already has an owner.', 409) from error
+    return membership
 
 
 def set_role(actor, membership_id, role):

@@ -102,6 +102,7 @@ def _runtime_config(database_path, auth_enabled=False):
         'SUPABASE_JWKS_CACHE_SECONDS': 60,
         'SUPABASE_HTTP_TIMEOUT_SECONDS': 1,
         'SUPABASE_JWT_LEEWAY_SECONDS': 0,
+        'SUPABASE_PUBLISHABLE_KEY': 'sb_publishable_test_only',
         'BOOTSTRAP_PLATFORM_ADMIN_EMAIL': 'admin@example.com',
     })
 
@@ -739,6 +740,8 @@ def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_functio
          frozenset({('role', 'owner'), ('status', 'active')})),
         ("((status)::text='pending'::text)", frozenset({('status', 'pending')})),
         ("(((gallery_image.is_featured IS TRUE)))", ('is_featured', 'is_true')),
+        ("(invalidated_at IS NULL) AND (redeemed_at IS NULL)",
+         frozenset({('invalidated_at', 'is_null'), ('redeemed_at', 'is_null')})),
         ("(role = 'owner')", None),
         ("(role = 'owner') OR (status = 'active')", None),
         ("(role = 'owner') AND (status = 'rejected')", None),
@@ -748,6 +751,8 @@ def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_functio
         ("is_featured", None),
         ("is_featured IS NOT FALSE", None),
         ("is_featured = TRUE", None),
+        ("invalidated_at IS NULL", None),
+        ("invalidated_at IS NULL OR redeemed_at IS NULL", None),
     ],
 )
 def test_postgres_partial_predicate_parser_is_semantic_and_fail_closed(expression, expected):
@@ -766,6 +771,8 @@ class _PostgresIndexesConnection:
             ('gallery_image', 'uq_gallery_image_featured_band', gallery_predicate),
             ('media_vote', 'uq_media_vote_membership', '(created_by_membership_id IS NOT NULL)'),
             ('song_suggestion_vote', 'uq_song_suggestion_vote_user', '(voter_user_id IS NOT NULL)'),
+            ('legacy_band_claim_token', 'uq_legacy_band_claim_outstanding',
+             '(invalidated_at IS NULL) AND (redeemed_at IS NULL)'),
         ]
 
     def execute(self, statement):

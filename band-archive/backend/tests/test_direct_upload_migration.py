@@ -140,3 +140,33 @@ def test_direct_gallery_result_migrates_from_phase10_on_sqlite(monkeypatch):
     assert 'DROP CONSTRAINT ck_direct_upload_session_kind' in upgrade_sql
     assert "'gallery'" in upgrade_sql
     assert 'DROP COLUMN result_gallery_image_id' in downgrade_sql
+
+
+def test_legacy_owner_claim_migration_preserves_history_on_downgrade():
+    revision = importlib.import_module('migrations.versions.20261006_12_legacy_band_ownership_claim')
+    engine = create_engine('sqlite://')
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('CREATE TABLE app_user (id INTEGER PRIMARY KEY)')
+            connection.exec_driver_sql('CREATE TABLE band (id INTEGER PRIMARY KEY)')
+            _run_revision(connection, revision.upgrade)
+            indexes = {item['name'] for item in inspect(connection).get_indexes('legacy_band_claim_token')}
+            assert 'uq_legacy_band_claim_outstanding' in indexes
+            connection.exec_driver_sql("""
+                INSERT INTO legacy_band_claim_token
+                    (band_id, purpose, token_hash, issued_by_user_id, created_at, expires_at)
+                VALUES (1, 'initial_owner', 'a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """)
+            with pytest.raises(RuntimeError, match='would discard capability history'):
+                _run_revision(connection, revision.downgrade)
+            connection.exec_driver_sql('DELETE FROM legacy_band_claim_token')
+            _run_revision(connection, revision.downgrade)
+            assert 'legacy_band_claim_token' not in inspect(connection).get_table_names()
+    finally:
+        engine.dispose()
+
+    upgrade_sql = _offline_postgres_sql(revision.upgrade)
+    downgrade_sql = _offline_postgres_sql(revision.downgrade)
+    assert 'CREATE TABLE legacy_band_claim_token' in upgrade_sql
+    assert 'uq_legacy_band_claim_outstanding' in upgrade_sql
+    assert 'DROP TABLE legacy_band_claim_token' in downgrade_sql

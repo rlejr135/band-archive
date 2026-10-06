@@ -60,8 +60,9 @@ class Band(db.Model):
     storage_quota_bytes = db.Column(db.BigInteger, nullable=False,
                                     default=20 * 1024 * 1024 * 1024,
                                     server_default=str(20 * 1024 * 1024 * 1024))
-    # NULL is reserved for the immutable, ownerless legacy import band. New
-    # creation requests continue to require a real requester at service level.
+    # NULL is reserved for an ownerless legacy import band until the one-time
+    # ownership-claim workflow assigns its first owner. New creation requests
+    # continue to require a real requester at service level.
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
     is_legacy_import = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -156,6 +157,42 @@ class BandInviteCode(db.Model):
     band = db.relationship('Band')
     created_by = db.relationship('AppUser', foreign_keys=[created_by_user_id])
     revoked_by = db.relationship('AppUser', foreign_keys=[revoked_by_user_id])
+
+
+class LegacyBandClaimToken(db.Model):
+    """One-time capability for assigning the first owner of a legacy band.
+
+    The raw 256-bit token never reaches this model: only its SHA-256 digest is
+    persisted.  The partial unique index permits history while allowing one
+    outstanding capability for the one supported purpose on each legacy band.
+    """
+    __tablename__ = 'legacy_band_claim_token'
+
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), nullable=False, index=True)
+    purpose = db.Column(db.String(40), nullable=False, default='initial_owner', server_default='initial_owner')
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    issued_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    invalidated_at = db.Column(db.DateTime, nullable=True)
+    invalidated_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+    redeemed_at = db.Column(db.DateTime, nullable=True)
+    redeemed_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+
+    band = db.relationship('Band')
+    issued_by = db.relationship('AppUser', foreign_keys=[issued_by_user_id])
+    invalidated_by = db.relationship('AppUser', foreign_keys=[invalidated_by_user_id])
+    redeemed_by = db.relationship('AppUser', foreign_keys=[redeemed_by_user_id])
+
+    __table_args__ = (
+        db.Index(
+            'uq_legacy_band_claim_outstanding', 'band_id', 'purpose', unique=True,
+            sqlite_where=db.text('invalidated_at IS NULL AND redeemed_at IS NULL'),
+            postgresql_where=db.text('invalidated_at IS NULL AND redeemed_at IS NULL'),
+        ),
+        db.CheckConstraint("purpose = 'initial_owner'", name='ck_legacy_band_claim_purpose'),
+    )
 
 
 class AuditEvent(db.Model):

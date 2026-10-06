@@ -6,6 +6,7 @@ without relying on SQLite's different writer-lock scheduling.
 """
 
 from flask import g, request
+from datetime import timedelta
 import threading
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -13,14 +14,18 @@ from sqlalchemy.dialects import postgresql
 
 import auth_service
 from band_service import (
-    _locked_invite_by_token_hash, close_band, create_invite, join_invite,
-    revoke_invite, transfer_ownership,
+    _locked_invite_by_token_hash, _locked_outstanding_legacy_claim_query, close_band,
+    create_invite, invalidate_legacy_claim, issue_legacy_claim, join_invite,
+    redeem_legacy_claim, revoke_invite, transfer_ownership,
 )
 from app import create_app
 from config import TestingConfig
 from errors import ValidationError
 from extensions import db
-from models import AppUser, AuditEvent, Band, BandInviteCode, BandMembership
+from models import (
+    AppUser, AuditEvent, Band, BandInviteCode, BandMembership,
+    LegacyBandClaimToken,
+)
 
 
 @pytest.fixture
@@ -32,10 +37,11 @@ def band_app(monkeypatch):
         # enables this switch after the isolated Alembic runner reaches head.
         app.config['BAND_API_SCHEMA_READY'] = True
         users = [
-            AppUser(supabase_user_id='admin-id', email='admin@example.com', is_platform_admin=True),
-            AppUser(supabase_user_id='owner-id', email='owner@example.com'),
-            AppUser(supabase_user_id='member-id', email='member@example.com'),
-            AppUser(supabase_user_id='other-id', email='other@example.com'),
+            AppUser(supabase_user_id='admin-id', email='admin@example.com', is_platform_admin=True,
+                    email_verified=True),
+            AppUser(supabase_user_id='owner-id', email='owner@example.com', email_verified=True),
+            AppUser(supabase_user_id='member-id', email='member@example.com', email_verified=True),
+            AppUser(supabase_user_id='other-id', email='other@example.com', email_verified=True),
         ]
         db.session.add_all(users)
         db.session.commit()
@@ -413,3 +419,222 @@ def test_pending_request_unique_constraint_is_idempotent(band_app):
                          json={'name': 'Once', 'slug': 'once'})
     assert first.status_code == 201
     assert second.status_code == 200 and second.get_json()['created'] is False
+
+
+def _ownerless_legacy_band(app, *, name='Legacy archive', slug='legacy-archive'):
+    with app.app_context():
+        band = Band(name=name, slug=slug, is_legacy_import=True)
+        db.session.add(band)
+        db.session.commit()
+        return band.id
+
+
+def test_legacy_owner_claim_issue_rotate_redeem_and_audit(band_app):
+    client = band_app.test_client()
+    band_id = _ownerless_legacy_band(band_app)
+
+    assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim').status_code == 401
+    assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
+                       headers=_headers('other-id')).status_code == 403
+    first = client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
+                        headers=_headers('admin-id'))
+    assert first.status_code == 201
+    first_payload = first.get_json()
+    assert set(first_payload) == {'claim', 'token'}
+    assert 'token_hash' not in first_payload['claim']
+    raw_first = first_payload['token']
+
+    rotated = client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
+                          headers=_headers('admin-id'))
+    assert rotated.status_code == 201
+    raw_second = rotated.get_json()['token']
+    assert raw_first != raw_second
+    assert client.post(f'/api/v2/bands/{band_id}/legacy-ownership-claim/redeem',
+                       headers=_headers('member-id'), json={'token': raw_first}).status_code == 404
+
+    redeemed = client.post(f'/api/v2/bands/{band_id}/legacy-ownership-claim/redeem',
+                           headers=_headers('member-id'), json={'token': raw_second})
+    assert redeemed.status_code == 200
+    assert redeemed.get_json()['membership']['role'] == 'owner'
+    assert client.post(f'/api/v2/bands/{band_id}/legacy-ownership-claim/redeem',
+                       headers=_headers('member-id'), json={'token': raw_second}).status_code == 404
+    assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
+                       headers=_headers('admin-id')).status_code == 409
+
+    with band_app.app_context():
+        claim = LegacyBandClaimToken.query.filter_by(band_id=band_id).order_by(LegacyBandClaimToken.id.desc()).first()
+        assert claim.token_hash != raw_second
+        assert claim.redeemed_at is not None
+        band = db.session.get(Band, band_id)
+        assert band.created_by_user_id == AppUser.query.filter_by(supabase_user_id='member-id').one().id
+        membership = BandMembership.query.filter_by(band_id=band_id, role='owner', status='active').one()
+        assert membership.user.supabase_user_id == 'member-id'
+        events = [item.event_type for item in AuditEvent.query.filter_by(band_id=band_id).all()]
+        assert {'legacy_band_claim_issued', 'legacy_band_claim_invalidated',
+                'legacy_band_claim_redeemed', 'legacy_band_owner_claimed'} <= set(events)
+        assert raw_first not in ''.join(item.details_json or '' for item in AuditEvent.query.all())
+        assert raw_second not in ''.join(item.details_json or '' for item in AuditEvent.query.all())
+
+
+def test_legacy_owner_claim_rejects_wrong_band_expiry_unverified_and_existing_owner(band_app):
+    client = band_app.test_client()
+    first_id = _ownerless_legacy_band(band_app, name='First legacy', slug='first-legacy')
+    second_id = _ownerless_legacy_band(band_app, name='Second legacy', slug='second-legacy')
+    raw = client.post(f'/api/v2/platform/bands/{first_id}/legacy-ownership-claim',
+                      headers=_headers('admin-id')).get_json()['token']
+    assert client.post(f'/api/v2/bands/{second_id}/legacy-ownership-claim/redeem',
+                       headers=_headers('member-id'), json={'token': raw}).status_code == 404
+
+    with band_app.app_context():
+        AppUser.query.filter_by(supabase_user_id='other-id').one().email_verified = False
+        db.session.commit()
+    assert client.post(f'/api/v2/bands/{first_id}/legacy-ownership-claim/redeem',
+                       headers=_headers('other-id'), json={'token': raw}).status_code == 403
+    with band_app.app_context():
+        claim = LegacyBandClaimToken.query.filter_by(band_id=first_id).one()
+        claim.expires_at = claim.created_at - timedelta(seconds=1)
+        db.session.commit()
+    assert client.post(f'/api/v2/bands/{first_id}/legacy-ownership-claim/redeem',
+                       headers=_headers('member-id'), json={'token': raw}).status_code == 404
+
+    with band_app.app_context():
+        band = db.session.get(Band, second_id)
+        owner = AppUser.query.filter_by(supabase_user_id='owner-id').one()
+        band.created_by_user_id = owner.id
+        db.session.add(BandMembership(band_id=second_id, user_id=owner.id, role='owner', status='active'))
+        db.session.commit()
+    assert client.post(f'/api/v2/platform/bands/{second_id}/legacy-ownership-claim',
+                       headers=_headers('admin-id')).status_code == 409
+
+
+def test_legacy_owner_claim_uses_postgres_row_lock_contract(band_app):
+    with band_app.app_context():
+        statement = _locked_outstanding_legacy_claim_query(1).statement
+        rendered = str(statement.compile(dialect=postgresql.dialect()))
+    assert 'FOR UPDATE' in rendered
+
+
+def test_legacy_owner_claim_service_requires_an_active_platform_admin(band_app):
+    band_id = _ownerless_legacy_band(band_app, name='Service legacy', slug='service-legacy')
+    with band_app.app_context():
+        non_admin = AppUser.query.filter_by(supabase_user_id='member-id').one()
+        with pytest.raises(ValidationError) as issue_error:
+            issue_legacy_claim(non_admin, band_id)
+        assert issue_error.value.status_code == 403
+        with pytest.raises(ValidationError) as invalidate_error:
+            invalidate_legacy_claim(non_admin, band_id)
+        assert invalidate_error.value.status_code == 403
+
+
+def test_sqlite_legacy_claim_concurrent_redeemers_have_one_owner_and_one_winner(tmp_path):
+    config = type('FileSQLiteConfig', (TestingConfig,), {
+        'SQLALCHEMY_DATABASE_URI': f"sqlite:///{(tmp_path / 'legacy-claim-race.db').as_posix()}",
+    })
+    app = create_app(config, start_worker=False)
+    try:
+        with app.app_context():
+            db.create_all()
+            admin = AppUser(supabase_user_id='claim-admin', email='admin@example.com',
+                            is_platform_admin=True, email_verified=True)
+            first = AppUser(supabase_user_id='claim-first', email='first@example.com', email_verified=True)
+            second = AppUser(supabase_user_id='claim-second', email='second@example.com', email_verified=True)
+            db.session.add_all((admin, first, second))
+            db.session.flush()
+            band = Band(name='Claim Race', slug='claim-race', is_legacy_import=True)
+            db.session.add(band)
+            db.session.commit()
+            claim, raw = issue_legacy_claim(admin, band.id)
+            admin_id, first_id, second_id, band_id, claim_id = admin.id, first.id, second.id, band.id, claim.id
+            db.session.remove()
+
+        start = threading.Event()
+        results = []
+        result_lock = threading.Lock()
+
+        def redeem(user_id):
+            with app.app_context():
+                assert start.wait(5)
+                try:
+                    redeem_legacy_claim(db.session.get(AppUser, user_id), band_id, raw)
+                    result = 'redeemed'
+                except ValidationError as error:
+                    result = error.status_code
+                    db.session.rollback()
+                finally:
+                    db.session.remove()
+            with result_lock:
+                results.append(result)
+
+        first_thread = threading.Thread(target=redeem, args=(first_id,))
+        second_thread = threading.Thread(target=redeem, args=(second_id,))
+        first_thread.start()
+        second_thread.start()
+        start.set()
+        first_thread.join(5)
+        second_thread.join(5)
+        assert not first_thread.is_alive() and not second_thread.is_alive()
+        assert sorted(results, key=str) == [404, 'redeemed']
+        with app.app_context():
+            assert BandMembership.query.filter_by(band_id=band_id, role='owner', status='active').count() == 1
+            claim = db.session.get(LegacyBandClaimToken, claim_id)
+            assert claim.redeemed_at is not None
+            assert AuditEvent.query.filter_by(band_id=band_id, event_type='legacy_band_claim_redeemed').count() == 1
+            assert AuditEvent.query.filter_by(band_id=band_id, event_type='legacy_band_owner_claimed').count() == 1
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.drop_all()
+
+
+def test_sqlite_stale_legacy_claim_reader_cannot_redeem_after_rotation(tmp_path):
+    config = type('FileSQLiteConfig', (TestingConfig,), {
+        'SQLALCHEMY_DATABASE_URI': f"sqlite:///{(tmp_path / 'legacy-claim-stale.db').as_posix()}",
+    })
+    app = create_app(config, start_worker=False)
+    try:
+        with app.app_context():
+            db.create_all()
+            admin = AppUser(supabase_user_id='stale-admin', email='admin@example.com',
+                            is_platform_admin=True, email_verified=True)
+            claimant = AppUser(supabase_user_id='stale-claimant', email='claimant@example.com', email_verified=True)
+            db.session.add_all((admin, claimant))
+            db.session.flush()
+            band = Band(name='Stale Claim', slug='stale-claim', is_legacy_import=True)
+            db.session.add(band)
+            db.session.commit()
+            claim, raw = issue_legacy_claim(admin, band.id)
+            admin_id, claimant_id, band_id, claim_id = admin.id, claimant.id, band.id, claim.id
+            db.session.remove()
+
+        cached = threading.Event()
+        rotated = threading.Event()
+        result = {}
+
+        def stale_redeem():
+            with app.app_context():
+                claimant_user = db.session.get(AppUser, claimant_id)
+                assert db.session.get(LegacyBandClaimToken, claim_id).invalidated_at is None
+                cached.set()
+                assert rotated.wait(5)
+                try:
+                    redeem_legacy_claim(claimant_user, band_id, raw)
+                except ValidationError as error:
+                    result['status'] = error.status_code
+                    db.session.rollback()
+                finally:
+                    db.session.remove()
+
+        thread = threading.Thread(target=stale_redeem)
+        thread.start()
+        assert cached.wait(5)
+        with app.app_context():
+            issue_legacy_claim(db.session.get(AppUser, admin_id), band_id)
+            rotated.set()
+            db.session.remove()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert result['status'] == 404
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.drop_all()
