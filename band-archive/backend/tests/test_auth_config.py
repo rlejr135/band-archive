@@ -11,6 +11,7 @@ class AuthEnabledConfig(TestingConfig):
     SUPABASE_JWT_ISSUER = 'https://example.supabase.co/auth/v1'
     SUPABASE_JWT_AUDIENCE = 'authenticated'
     SUPABASE_JWKS_URL = 'https://example.supabase.co/auth/v1/.well-known/jwks.json'
+    SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test'
     SUPABASE_JWKS_CACHE_SECONDS = 60
     SUPABASE_HTTP_TIMEOUT_SECONDS = 1
     SUPABASE_JWT_LEEWAY_SECONDS = 0
@@ -27,6 +28,12 @@ def test_enabled_auth_fails_fast_without_complete_contract():
 
     with pytest.raises(RuntimeError, match='SUPABASE_JWKS_URL'):
         create_app(IncompleteAuthConfig, start_worker=False)
+
+    class MissingPublishableKeyConfig(AuthEnabledConfig):
+        SUPABASE_PUBLISHABLE_KEY = ''
+
+    with pytest.raises(RuntimeError, match='SUPABASE_PUBLISHABLE_KEY'):
+        create_app(MissingPublishableKeyConfig, start_worker=False)
 
 
 def test_enabled_auth_accepts_complete_non_secret_contract():

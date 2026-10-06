@@ -20,7 +20,7 @@ def validate_supabase_auth_config(config):
         return
     required = (
         'SUPABASE_URL', 'SUPABASE_PROJECT_REF', 'SUPABASE_JWT_ISSUER',
-        'SUPABASE_JWT_AUDIENCE', 'SUPABASE_JWKS_URL',
+        'SUPABASE_JWT_AUDIENCE', 'SUPABASE_JWKS_URL', 'SUPABASE_PUBLISHABLE_KEY',
     )
     missing = [name for name in required if not config.get(name)]
     if missing:
@@ -138,6 +138,9 @@ class Config:
         'SUPABASE_JWKS_URL',
         f'{SUPABASE_URL}/auth/v1/.well-known/jwks.json' if SUPABASE_URL else '',
     )
+    # The public key identifies this application to the Auth user endpoint;
+    # user identity remains the separately supplied bearer access token.
+    SUPABASE_PUBLISHABLE_KEY = os.getenv('SUPABASE_PUBLISHABLE_KEY', '')
     SUPABASE_JWKS_CACHE_SECONDS = _env_int('SUPABASE_JWKS_CACHE_SECONDS', 300, minimum=1)
     SUPABASE_HTTP_TIMEOUT_SECONDS = _env_int('SUPABASE_HTTP_TIMEOUT_SECONDS', 5, minimum=1)
     SUPABASE_JWT_LEEWAY_SECONDS = _env_int('SUPABASE_JWT_LEEWAY_SECONDS', 30, minimum=0)

@@ -4,9 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 import pytest
+import requests
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app import create_app
+import auth_service
 from auth_service import JWKSCache
 from config import TestingConfig
 from extensions import db
@@ -20,6 +22,7 @@ class AuthConfig(TestingConfig):
     SUPABASE_JWT_ISSUER = 'https://project.supabase.co/auth/v1'
     SUPABASE_JWT_AUDIENCE = 'authenticated'
     SUPABASE_JWKS_URL = 'https://project.supabase.co/auth/v1/.well-known/jwks.json'
+    SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_test'
     SUPABASE_JWKS_CACHE_SECONDS = 300
     SUPABASE_HTTP_TIMEOUT_SECONDS = 1
     SUPABASE_JWT_LEEWAY_SECONDS = 0
@@ -46,6 +49,22 @@ class _Response:
 
     def json(self):
         return {'keys': self.keys}
+
+
+class _UserResponse:
+    def __init__(self, user, status_code=200):
+        self.user = user
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            error = requests.HTTPError(f'HTTP {self.status_code}')
+            error.response = self
+            raise error
+        return None
+
+    def json(self):
+        return self.user
 
 
 @pytest.fixture
@@ -81,6 +100,8 @@ def _token(private_key, kid='key-1', **overrides):
     claims.update(overrides)
     if claims.pop('_without_nbf', False):
         claims.pop('nbf')
+    if claims.pop('_without_email_verified', False):
+        claims.pop('email_verified')
     return jwt.encode(claims, private_key, algorithm='RS256', headers={'kid': kid})
 
 
@@ -119,6 +140,85 @@ def test_me_rejects_invalid_or_unverified_claims(auth_app, signer, claim, value)
     _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
     response = _get_me(auth_app, _token(signer, **{claim: value}))
     assert response.status_code == 401
+
+
+def test_me_confirms_standard_supabase_token_via_trusted_user_endpoint(auth_app, signer, monkeypatch):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    calls = []
+
+    def fetch(url, headers, timeout, allow_redirects):
+        calls.append((url, headers, timeout, allow_redirects))
+        return _UserResponse({
+            'id': '11111111-1111-1111-1111-111111111111',
+            'email': 'user@example.com',
+            'email_confirmed_at': '2026-10-06T00:00:00Z',
+        })
+
+    monkeypatch.setattr(auth_service.requests, 'get', fetch)
+    response = _get_me(auth_app, _token(signer, _without_email_verified=True))
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0][0] == 'https://project.supabase.co/auth/v1/user'
+    assert calls[0][1]['Authorization'].startswith('Bearer ')
+    assert calls[0][1]['apikey'] == 'sb_publishable_test'
+    assert calls[0][3] is False
+
+
+def test_me_rejects_standard_token_when_user_endpoint_has_no_email_confirmation(auth_app, signer, monkeypatch):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+
+    monkeypatch.setattr(auth_service.requests, 'get', lambda *args, **kwargs: _UserResponse({
+        'id': '11111111-1111-1111-1111-111111111111',
+        'email': 'user@example.com',
+        'email_confirmed_at': None,
+    }))
+    response = _get_me(auth_app, _token(signer, _without_email_verified=True))
+    assert response.status_code == 401
+    assert response.get_json()['error'] == 'email_not_verified'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('id', '22222222-2222-2222-2222-222222222222'),
+    ('email', 'other@example.com'),
+])
+def test_me_rejects_standard_token_when_user_endpoint_identity_does_not_match(auth_app, signer, monkeypatch, field, value):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    user = {
+        'id': '11111111-1111-1111-1111-111111111111',
+        'email': 'user@example.com',
+        'email_confirmed_at': '2026-10-06T00:00:00Z',
+    }
+    user[field] = value
+    monkeypatch.setattr(auth_service.requests, 'get', lambda *args, **kwargs: _UserResponse(user))
+    response = _get_me(auth_app, _token(signer, _without_email_verified=True))
+    assert response.status_code == 401
+    assert response.get_json()['error'] == 'invalid_token'
+
+
+def test_me_fails_closed_when_user_endpoint_redirects_or_is_malformed(auth_app, signer, monkeypatch):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    monkeypatch.setattr(auth_service.requests, 'get', lambda *args, **kwargs: _UserResponse({}, status_code=302))
+    redirected = _get_me(auth_app, _token(signer, _without_email_verified=True))
+    assert redirected.status_code == 503
+    monkeypatch.setattr(auth_service.requests, 'get', lambda *args, **kwargs: _UserResponse(['not-a-user']))
+    malformed = _get_me(auth_app, _token(signer, _without_email_verified=True))
+    assert malformed.status_code == 503
+
+
+def test_me_fails_closed_on_user_endpoint_timeout(auth_app, signer, monkeypatch):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    monkeypatch.setattr(auth_service.requests, 'get', lambda *args, **kwargs: (_ for _ in ()).throw(requests.Timeout()))
+    response = _get_me(auth_app, _token(signer, _without_email_verified=True))
+    assert response.status_code == 503
+
+
+def test_explicit_unverified_claim_wins_over_timestamp(auth_app, signer):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    response = _get_me(auth_app, _token(
+        signer, email_verified=False, email_confirmed_at='2026-10-06T00:00:00Z',
+    ))
+    assert response.status_code == 401
+    assert response.get_json()['error'] == 'email_not_verified'
 
 
 def test_me_rejects_forged_and_unknown_kid_tokens(auth_app, signer):

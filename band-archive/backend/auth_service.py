@@ -184,6 +184,58 @@ def _decode(token, key):
     )
 
 
+def _email_is_confirmed(token, subject, email, claims):
+    """Confirm email when the signed access token has no confirmation claim.
+
+    Supabase's standard access-token contract includes the signed subject and
+    email but does not include the User object's ``email_confirmed_at`` field.
+    An explicit false claim remains an immediate rejection.  For a token that
+    has no confirmation claim at all, ask only the configured, validated
+    Supabase Auth origin for its matching User record.
+    """
+    if 'email_verified' in claims:
+        # Explicit denial always wins, even if a malformed token also carries
+        # a timestamp-like field.
+        return claims['email_verified'] is True
+    if 'email_confirmed_at' in claims:
+        confirmed_at = claims['email_confirmed_at']
+        return isinstance(confirmed_at, str) and bool(confirmed_at.strip())
+    try:
+        response = requests.get(
+            f"{current_app.config['SUPABASE_URL']}/auth/v1/user",
+            headers={
+                'apikey': current_app.config['SUPABASE_PUBLISHABLE_KEY'],
+                'Authorization': f'Bearer {token}',
+            },
+            timeout=current_app.config['SUPABASE_HTTP_TIMEOUT_SECONDS'],
+            # Never forward the bearer token to a redirect destination.
+            allow_redirects=False,
+        )
+        if 300 <= response.status_code < 400:
+            raise AuthError('auth_unavailable', 'Authentication user service is unavailable.', 503)
+        response.raise_for_status()
+        user = response.json()
+        if not isinstance(user, dict):
+            raise AuthError('auth_unavailable', 'Authentication user service is unavailable.', 503)
+        returned_subject = user.get('id')
+        returned_email = user.get('email')
+        if not isinstance(returned_subject, str) or returned_subject.strip() != subject:
+            raise AuthError('invalid_token', 'Token subject does not match the authentication user.', 401)
+        if normalize_email(returned_email) != email:
+            raise AuthError('invalid_token', 'Token email does not match the authentication user.', 401)
+        confirmed_at = user.get('email_confirmed_at')
+        return isinstance(confirmed_at, str) and bool(confirmed_at.strip())
+    except AuthError:
+        raise
+    except requests.HTTPError as error:
+        response = error.response
+        if response is not None and response.status_code in {401, 403}:
+            return False
+        raise AuthError('auth_unavailable', 'Authentication user service is unavailable.', 503) from error
+    except Exception as error:
+        raise AuthError('auth_unavailable', 'Authentication user service is unavailable.', 503) from error
+
+
 def verify_bearer_token(header=None):
     if not current_app.config.get('SUPABASE_AUTH_ENABLED'):
         raise AuthError('auth_unavailable', 'Authentication is not enabled for this deployment.', 503)
@@ -207,14 +259,15 @@ def verify_bearer_token(header=None):
     subject = claims.get('sub')
     if not isinstance(subject, str) or not subject.strip():
         raise AuthError('invalid_token', 'Token subject claim is invalid.')
-    verified = claims.get('email_verified') is True or bool(claims.get('email_confirmed_at'))
-    if not verified:
-        raise AuthError('email_not_verified', 'Verified email is required.')
     metadata = claims.get('user_metadata') if isinstance(claims.get('user_metadata'), dict) else {}
     display_name = metadata.get('full_name') or metadata.get('name')
     if not isinstance(display_name, str):
         display_name = None
-    return VerifiedIdentity(subject.strip(), normalize_email(claims.get('email')), verified, display_name)
+    normalized_subject = subject.strip()
+    email = normalize_email(claims.get('email'))
+    if not _email_is_confirmed(token, normalized_subject, email, claims):
+        raise AuthError('email_not_verified', 'Verified email is required.')
+    return VerifiedIdentity(normalized_subject, email, True, display_name)
 
 
 def _claim_initial_admin(user):
