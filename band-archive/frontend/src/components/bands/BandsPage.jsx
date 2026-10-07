@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
-import { InviteCodeEntry } from './BandOnboarding.jsx';
+import { InviteCodeEntry, LegacyOwnershipClaimPanel } from './BandOnboarding.jsx';
 import './BandsPage.css';
 
 export const BandsPage = () => {
@@ -12,6 +12,7 @@ export const BandsPage = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [account, setAccount] = useState(null);
   const [pendingMemberships, setPendingMemberships] = useState([]);
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
 
@@ -29,6 +30,10 @@ export const BandsPage = () => {
         ]);
         if (!current) return;
         setAvailableBands(bandsResponse?.bands);
+        // Bind account-only controls to the authenticated identity that loaded
+        // them. On an A -> B session switch, state from A can remain until B's
+        // /me response arrives; it must never authorize B's UI in that gap.
+        setAccount({ userId: user?.id ?? null, isPlatformAdmin: me?.user?.is_platform_admin === true });
         // The current server contract returns active memberships in `bands`.
         // Accept a future explicit pending list without inferring it client-side.
         setPendingMemberships(Array.isArray(bandsResponse?.pending_memberships) ? bandsResponse.pending_memberships : []);
@@ -65,6 +70,7 @@ export const BandsPage = () => {
           {pendingMemberships.length === 0 ? <p className="bands-help">가입 대기 중인 밴드가 없습니다.</p> : <ul className="band-list">{pendingMemberships.map((membership) => <li key={membership.id}>{membership.band?.name || '밴드'} — 승인 대기</li>)}</ul>}
         </section>
         <InviteCodeEntry />
+        <LegacyOwnershipClaimPanel key={user?.id || 'unknown'} isPlatformAdmin={account?.userId === (user?.id ?? null) && account?.isPlatformAdmin === true} />
       </>}
     </section>
   );

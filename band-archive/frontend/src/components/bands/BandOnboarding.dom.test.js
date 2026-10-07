@@ -40,6 +40,38 @@ test('invite code stays in a POST body, clears the input, and has a generic inva
   try { const view = render(createElement(auth.AuthContext.Provider, { value: account() }, createElement(onboarding.InviteCodeEntry))); const input = view.getByLabelText('초대 코드'); await userEvent.type(input, 'secret-capability'); await userEvent.click(view.getByRole('button', { name: '가입' })); await view.findByText('초대 코드를 사용할 수 없습니다.'); assert.equal(input.value, ''); assert.equal(writes.length, 1); assert.ok(writes[0][0].endsWith('/api/v2/invite-codes/join')); assert.equal(writes[0][0].includes('secret-capability'), false); assert.deepEqual(JSON.parse(writes[0][1].body), { code: 'secret-capability' }); } finally { globalThis.fetch = previous; }
 });
 
+test('legacy claim selector keeps raw tokens out of URLs and clears the redeem input before POST', async () => {
+  await load(); const previous = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); calls.push([value, options]);
+    if (value.includes('/platform/legacy-ownership-claims/eligible-bands')) return response({ bands: [{ id: 9, name: 'Legacy', slug: 'legacy' }] });
+    if (value.includes('/public/bands')) return response({ bands: [{ id: 9, name: 'Legacy', slug: 'legacy' }], pagination: { total: 1, has_more: false } });
+    if (value.includes('/platform/bands/9/legacy-ownership-claim')) return response({ claim: { id: 1 }, token: 'issued-raw-capability' }, 201);
+    if (value.includes('/bands/9/legacy-ownership-claim/redeem')) return response({ membership: { id: 2, role: 'owner' } });
+    throw new Error(`unexpected ${value}`);
+  };
+  try {
+    const view = render(createElement(auth.AuthContext.Provider, { value: account() }, createElement(onboarding.LegacyOwnershipClaimPanel, { isPlatformAdmin: true })));
+    await view.findByRole('button', { name: '소유권 토큰 발급' });
+    await userEvent.click(view.getByRole('button', { name: '소유권 토큰 발급' }));
+    await view.findByText('issued-raw-capability');
+    const issue = calls.find(([url]) => url.includes('/platform/bands/9/legacy-ownership-claim'));
+    assert.ok(issue); assert.equal(issue[0].includes('issued-raw-capability'), false);
+    assert.deepEqual(JSON.parse(issue[1].body), {});
+
+    const token = view.getByLabelText('소유권 토큰');
+    await userEvent.type(token, 'redeem-raw-capability');
+    await userEvent.click(view.getByRole('button', { name: '소유권 연결' }));
+    await view.findByText('소유권을 설정했습니다. 내 밴드 목록을 새로고침해 주세요.');
+    assert.equal(token.value, '');
+    assert.equal(view.queryByText('issued-raw-capability'), null);
+    const redeem = calls.find(([url]) => url.includes('/bands/9/legacy-ownership-claim/redeem'));
+    assert.ok(redeem); assert.equal(redeem[0].includes('redeem-raw-capability'), false);
+    assert.deepEqual(JSON.parse(redeem[1].body), { token: 'redeem-raw-capability' });
+    assert.equal(window.localStorage.getItem('legacy-ownership-token'), null);
+  } finally { globalThis.fetch = previous; }
+});
+
 test('creation form has one in-flight submit and reports its status', async () => {
   await load(); const previous = globalThis.fetch; const first = deferred(); let writes = 0;
   globalThis.fetch = async (url) => { if (String(url).includes('band-creation-requests')) { writes += 1; return first.promise; } throw new Error('unexpected'); };

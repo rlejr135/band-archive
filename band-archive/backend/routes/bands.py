@@ -7,9 +7,10 @@ from band_access import current_audience, optional_auth, read_scope_for_slug
 from band_service import (
     ACTIVE, MANAGER_ROLES, approve_membership, band_dict, close_band, create_invite,
     create_request, creation_request_dict, invite_dict, join_invite, join_request,
-    invalidate_legacy_claim, issue_legacy_claim, leave_band, legacy_claim_dict,
-    membership_dict, redeem_legacy_claim, require_band_role, review_request,
-    revoke_invite, rotate_invite, set_role, transfer_ownership,
+    eligible_legacy_claim_band_dict, eligible_legacy_claim_bands, invalidate_legacy_claim,
+    issue_legacy_claim, leave_band, legacy_claim_dict, membership_dict,
+    redeem_legacy_claim, require_band_role, review_request, revoke_invite,
+    rotate_invite, set_role, transfer_ownership,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -150,6 +151,13 @@ def issue_legacy_ownership_claim(band_id):
     # This is the only response that contains the raw capability.  It must
     # never be placed in a URL, audit record, or subsequent list response.
     return jsonify({'claim': legacy_claim_dict(claim), 'token': token}), 201
+
+
+@bands_bp.get('/platform/legacy-ownership-claims/eligible-bands')
+@require_auth
+def list_eligible_legacy_ownership_claim_bands():
+    require_platform_admin()
+    return jsonify({'bands': [eligible_legacy_claim_band_dict(band) for band in eligible_legacy_claim_bands()]})
 
 
 @bands_bp.post('/platform/bands/<int:band_id>/legacy-ownership-claim/invalidate')

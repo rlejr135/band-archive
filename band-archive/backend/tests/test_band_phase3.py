@@ -434,6 +434,14 @@ def test_legacy_owner_claim_issue_rotate_redeem_and_audit(band_app):
     band_id = _ownerless_legacy_band(band_app)
 
     assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim').status_code == 401
+    assert client.get('/api/v2/platform/legacy-ownership-claims/eligible-bands',
+                      headers=_headers('other-id')).status_code == 403
+    eligible = client.get('/api/v2/platform/legacy-ownership-claims/eligible-bands',
+                          headers=_headers('admin-id'))
+    assert eligible.status_code == 200
+    assert eligible.get_json()['bands'] == [{
+        'id': band_id, 'name': 'Legacy archive', 'slug': 'legacy-archive', 'description': None,
+    }]
     assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
                        headers=_headers('other-id')).status_code == 403
     first = client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
@@ -460,6 +468,8 @@ def test_legacy_owner_claim_issue_rotate_redeem_and_audit(band_app):
                        headers=_headers('member-id'), json={'token': raw_second}).status_code == 404
     assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
                        headers=_headers('admin-id')).status_code == 409
+    assert client.get('/api/v2/platform/legacy-ownership-claims/eligible-bands',
+                      headers=_headers('admin-id')).get_json()['bands'] == []
 
     with band_app.app_context():
         claim = LegacyBandClaimToken.query.filter_by(band_id=band_id).order_by(LegacyBandClaimToken.id.desc()).first()

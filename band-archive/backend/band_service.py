@@ -428,6 +428,25 @@ def legacy_claim_dict(claim):
     }
 
 
+def eligible_legacy_claim_bands():
+    """Return only server-verified ownerless legacy bands for an admin picker."""
+    active_owner_exists = db.session.query(BandMembership.id).filter(
+        BandMembership.band_id == Band.id,
+        BandMembership.role == 'owner',
+        BandMembership.status == ACTIVE,
+    ).exists()
+    return Band.query.filter(
+        Band.deleted_at.is_(None),
+        Band.is_legacy_import.is_(True),
+        Band.created_by_user_id.is_(None),
+        ~active_owner_exists,
+    ).order_by(Band.name, Band.id).all()
+
+
+def eligible_legacy_claim_band_dict(band):
+    return {'id': band.id, 'name': band.name, 'slug': band.slug, 'description': band.description}
+
+
 def _locked_legacy_band(band_id):
     """Lock the legacy-band transition resource before inspecting its state."""
     band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
