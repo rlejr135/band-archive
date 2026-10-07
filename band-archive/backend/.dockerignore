@@ -12,9 +12,20 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest-tmp/
+.pytest*/
+.codex*/
+.cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+*.stdout.txt
+*.stderr.txt
+*.junit.xml
+
+# Operator-only state can contain snapshots, reports, and private utilities.
+# Runtime migration code remains under migrations/ and is intentionally kept.
+tools/.state/
 
 # Local runtime data and test sources are not needed in the production image.
 uploads/
