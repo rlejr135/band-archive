@@ -26,8 +26,7 @@ current target as its own baseline. Its exact JSON contract is:
   "version": "phase9-preserve-identity-refresh-v1",
   "target_writes_frozen": true,
   "provenance": {
-    "v11_restore": { "file": "v11-restore-report.json", "sha256": "<sha256>" },
-    "v12_apply": { "file": "v12-apply-report.json", "sha256": "<sha256>" },
+    "baseline_proof": { "file": "offline-v11-baseline.json", "sha256": "<sha256>" },
     "post_claim": { "file": "postclaim-proof.json", "sha256": "<sha256>" }
   },
   "protected": { "table_digests": { "<every protected table>": { "count": 0, "sha256": "<digest>" } } },
@@ -36,13 +35,16 @@ current target as its own baseline. Its exact JSON contract is:
 ```
 
 The sidecar pins full typed-row digests for all protected and legacy-domain
-tables. All three referenced files must sit below the sidecar directory; the
-tool hashes and parses them. It requires a stable v11 local restore, the v12
-apply report chained to that restore's object digest, and a successful
-read-only post-claim proof embedding the *same* typed digest maps. A
-self-generated current-target baseline is not valid evidence. The current
-retained post-claim reports must be replaced by such a successful fresh proof
-before this command can run.
+tables. Both referenced files must sit below the sidecar directory; the tool
+hashes and parses them. `build_refresh_baseline_proof.py` derives the first
+map from an expected-SHA-pinned v11 custom dump restored and migrated only in
+a private local PostgreSQL instance, cross-linked to verified v11 restore and
+v12 apply reports. `build_refresh_profile.py` accepts separately approved
+expected SHA-256 values for that proof and a successful fresh read-only
+post-claim proof; it requires the post-claim legacy domain map to equal the
+independently derived baseline exactly. A self-generated current-target
+baseline is not valid evidence. The current retained failed post-claim reports
+must be replaced by a successful fresh proof before this command can run.
 The target must have exactly one active verified platform-admin, one matching
 bootstrap row, one claimed `deutteun-legacy` band, one active owner membership,
 one redeemed initial-owner claim, and exactly three existing audit events.

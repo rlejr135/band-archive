@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -17,6 +18,9 @@ from typing import Any, Mapping
 import click
 from sqlalchemy import MetaData, create_engine, inspect, select, text
 from sqlalchemy.engine import Connection, make_url
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tenant_backfill import LEGACY_BAND_SLUG, TenantBackfillError, validate_relationships
 from tools.legacy_rehearsal.rehearsal import (
@@ -115,8 +119,20 @@ def _table_digests(connection: Connection, tables: frozenset[str], *, band_id: i
     for name in sorted(tables):
         table = metadata.tables[name]
         rows = _all_rows(connection, table) if band_id is None else _scoped_rows(connection, table, band_id)
+        # The claim preserves the existing band row but an independently
+        # restored v11 archive cannot assume its surrogate id. Scope itself is
+        # proven separately; use a typed sentinel only inside the digest.
+        if band_id is not None:
+            rows = _canonical_band_rows(table, rows)
         result[name] = _digest_rows(table, rows)
     return result
+
+
+def _canonical_band_rows(table: Any, rows: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Replace only the proven legacy band surrogate in digest material."""
+    if "band_id" not in table.c:
+        return rows
+    return [{**dict(row), "band_id": 0} for row in rows]
 
 
 def _sha256(value: Any) -> str:
@@ -144,7 +160,7 @@ def load_reviewed_profile(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != required or value.get("version") != PROFILE_VERSION:
         raise RehearsalError("reviewed baseline profile has an invalid shape")
     provenance = value["provenance"]
-    if not isinstance(provenance, dict) or set(provenance) != {"v11_restore", "v12_apply", "post_claim"}:
+    if not isinstance(provenance, dict) or set(provenance) != {"baseline_proof", "post_claim"}:
         raise RehearsalError("reviewed baseline profile provenance is invalid")
     evidence = {}
     for label, item in provenance.items():
@@ -169,14 +185,15 @@ def load_reviewed_profile(path: Path) -> dict[str, Any]:
         raise RehearsalError("reviewed baseline profile legacy-domain proof is invalid")
     _validate_digest_map(protected["table_digests"], PROTECTED_TABLES, "protected")
     _validate_digest_map(domain["table_digests"], REFRESHED_TABLES, "legacy-domain")
-    v11, v12, post_claim = evidence["v11_restore"], evidence["v12_apply"], evidence["post_claim"]
-    if (v11.get("status") != "local_restore_verified" or not v11.get("source_before_after_identical")
-            or not v11.get("restored_matches_source") or v12.get("status") != "staging_v12_verified"
-            or v12.get("expected_source_object_sha256") != v11.get("restored", {}).get("object_sha256")):
-        raise RehearsalError("reviewed baseline profile v11/v12 provenance does not form a verified chain")
+    baseline, post_claim = evidence["baseline_proof"], evidence["post_claim"]
+    if (baseline.get("version") != "phase9-offline-v11-refresh-baseline-v1"
+            or baseline.get("status") != "offline_v11_baseline_verified"
+            or not isinstance(baseline.get("dump_sha256"), str)):
+        raise RehearsalError("reviewed baseline profile offline v11 proof is invalid")
     embedded = post_claim.get("preserve_identity_refresh_profile") if isinstance(post_claim, dict) else None
     if (post_claim.get("status") != "postclaim_verified" or not isinstance(embedded, dict)
-            or embedded.get("protected") != protected or embedded.get("legacy_domain") != domain):
+            or embedded.get("protected") != protected or embedded.get("legacy_domain") != domain
+            or baseline.get("legacy_domain") != domain):
         raise RehearsalError("reviewed baseline profile post-claim evidence does not pin its typed digests")
     return value
 
@@ -383,7 +400,8 @@ def _advance_postgres_sequences_monotonic(connection: Connection, metadata: Meta
 def _source_domain_digests(connection: Connection, source_band_id: int, target_band_id: int) -> dict[str, dict[str, Any]]:
     metadata = _read_metadata(connection)
     return {
-        name: _digest_rows(metadata.tables[name], _source_rows(connection, metadata.tables[name], source_band_id, target_band_id))
+        name: _digest_rows(metadata.tables[name], _canonical_band_rows(
+            metadata.tables[name], _source_rows(connection, metadata.tables[name], source_band_id, target_band_id)))
         for name in sorted(REFRESHED_TABLES)
     }
 
