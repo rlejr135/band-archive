@@ -653,6 +653,69 @@ def test_rehearsal_refuses_extra_nonlegacy_band_without_mutating_bootstrap_rows(
         engine.dispose()
 
 
+def test_legacy_empty_target_import_refuses_a_claimed_identity_target_unchanged(tmp_path):
+    """The one-shot importer must never become the identity-preserving path.
+
+    A later refresh workflow needs a separately named entry point because this
+    historical command is intentionally an empty-target-only operation.
+    """
+    source, target = tmp_path / 'source.sqlite', tmp_path / 'target.sqlite'
+    _legacy_fixture(source)
+    _upgrade(target)
+    engine = create_engine(_url(target))
+    try:
+        with engine.begin() as connection:
+            user_id = connection.execute(text(
+                "INSERT INTO app_user (supabase_user_id, email, status, email_verified, is_platform_admin, "
+                "created_at, updated_at) VALUES ('subject-1', 'owner@example.test', 'active', 1, 1, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING id"
+            )).scalar_one()
+            connection.execute(text(
+                "INSERT INTO auth_bootstrap_state (key, claimed_by_user_id, claimed_at) "
+                "VALUES ('initial_platform_admin', :user_id, CURRENT_TIMESTAMP)"
+            ), {'user_id': user_id})
+            band_id = connection.execute(text(
+                "SELECT id FROM band WHERE is_legacy_import = 1"
+            )).scalar_one()
+            connection.execute(text("UPDATE band SET created_by_user_id=:user_id WHERE id=:band_id"), {
+                'user_id': user_id, 'band_id': band_id,
+            })
+            connection.execute(text(
+                "INSERT INTO band_membership (band_id, user_id, role, status, requested_at, approved_at) "
+                "VALUES (:band_id, :user_id, 'owner', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {'band_id': band_id, 'user_id': user_id})
+            connection.execute(text(
+                "INSERT INTO legacy_band_claim_token (band_id, purpose, token_hash, issued_by_user_id, "
+                "created_at, expires_at, redeemed_at, redeemed_by_user_id) "
+                "VALUES (:band_id, 'initial_owner', :token_hash, :user_id, CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, :user_id)"
+            ), {'band_id': band_id, 'user_id': user_id, 'token_hash': 'a' * 64})
+            for event_type in ('legacy_claim_issued', 'legacy_claim_redeemed', 'legacy_owner_assigned'):
+                connection.execute(text(
+                    "INSERT INTO audit_event (band_id, actor_user_id, event_type, created_at) "
+                    "VALUES (:band_id, :user_id, :event_type, CURRENT_TIMESTAMP)"
+                ), {'band_id': band_id, 'user_id': user_id, 'event_type': event_type})
+        with engine.connect() as connection:
+            before = {
+                table: connection.execute(text(f'SELECT count(*) FROM "{table}"')).scalar_one()
+                for table in ('app_user', 'auth_bootstrap_state', 'band', 'band_membership',
+                              'legacy_band_claim_token', 'audit_event', 'song')
+            }
+
+        with pytest.raises(RehearsalError, match='target must be empty'):
+            run_rehearsal(str(source), _url(target), allow_sqlite_target=True,
+                          sqlite_test_target_path=str(target), write_freeze_attestation=_freeze_attestation(source))
+
+        with engine.connect() as connection:
+            after = {
+                table: connection.execute(text(f'SELECT count(*) FROM "{table}"')).scalar_one()
+                for table in before
+            }
+        assert after == before
+    finally:
+        engine.dispose()
+
+
 def test_rehearsal_rolls_back_a_post_import_reconciliation_failure(tmp_path, monkeypatch):
     source, target = tmp_path / "source.sqlite", tmp_path / "target.sqlite"
     _legacy_fixture(source)
