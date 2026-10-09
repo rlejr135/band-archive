@@ -26,9 +26,9 @@ current target as its own baseline. Its exact JSON contract is:
   "version": "phase9-preserve-identity-refresh-v1",
   "target_writes_frozen": true,
   "provenance": {
-    "reference_snapshot_sha256": "<v11 restore snapshot sha256>",
-    "source_import_report_sha256": "<reviewed source import report sha256>",
-    "post_claim_review_sha256": "<v12 post-claim review sha256>"
+    "v11_restore": { "file": "v11-restore-report.json", "sha256": "<sha256>" },
+    "v12_apply": { "file": "v12-apply-report.json", "sha256": "<sha256>" },
+    "post_claim": { "file": "postclaim-proof.json", "sha256": "<sha256>" }
   },
   "protected": { "table_digests": { "<every protected table>": { "count": 0, "sha256": "<digest>" } } },
   "legacy_domain": { "table_digests": { "<every legacy-domain table>": { "count": 0, "sha256": "<digest>" } } }
@@ -36,7 +36,13 @@ current target as its own baseline. Its exact JSON contract is:
 ```
 
 The sidecar pins full typed-row digests for all protected and legacy-domain
-tables. A self-generated current-target baseline is not valid evidence.
+tables. All three referenced files must sit below the sidecar directory; the
+tool hashes and parses them. It requires a stable v11 local restore, the v12
+apply report chained to that restore's object digest, and a successful
+read-only post-claim proof embedding the *same* typed digest maps. A
+self-generated current-target baseline is not valid evidence. The current
+retained post-claim reports must be replaced by such a successful fresh proof
+before this command can run.
 The target must have exactly one active verified platform-admin, one matching
 bootstrap row, one claimed `deutteun-legacy` band, one active owner membership,
 one redeemed initial-owner claim, and exactly three existing audit events.
@@ -60,6 +66,7 @@ Push-Location backend
   --expected-target-schema public `
   --write-freeze-attestation E:\operator\attestations\fly-latest-freeze.json `
   --reviewed-baseline-profile E:\operator\evidence\v11-v12-reviewed-profile.json `
+  --readonly-object-manifest-proof E:\operator\evidence\fly-latest-r2-list-head.json `
   --report-output E:\operator\reports\refresh-dry-run-1.json `
   --dry-run
 Pop-Location
@@ -71,9 +78,11 @@ advisory lock and fail-fast table locks, re-proves the sidecar under lock,
 deletes only the proven legacy-domain graph child-to-parent, inserts frozen
 source rows parent-to-child while remapping only the legacy `band_id`, resets
 sequences, and proves protected identity is unchanged. Source rows requiring
-membership/account mapping are refused. Atomic report publication happens
-before commit; any profile, source, FK, object-manifest, or report failure
-rolls back the transaction.
+membership/account mapping are refused. A separate snapshot-bound read-only
+R2 list/head proof is required and compared with the refreshed manifest; the
+tool cannot list or mutate R2 itself. Atomic report publication happens before
+commit; any profile, source, FK, object-manifest, or report failure rolls back
+the transaction.
 
 No Fly-volume action, deployment, Supabase DDL, R2 action, or git push is part
 of this command. A new source snapshot is required immediately before every

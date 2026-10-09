@@ -18,16 +18,17 @@ import click
 from sqlalchemy import MetaData, create_engine, inspect, select, text
 from sqlalchemy.engine import Connection, make_url
 
-from tenant_backfill import LEGACY_BAND_SLUG
+from tenant_backfill import LEGACY_BAND_SLUG, TenantBackfillError, validate_relationships
 from tools.legacy_rehearsal.rehearsal import (
     RehearsalError, _ReservedReportOutput, _copy_and_backfill, _file_fingerprint,
-    _head_revisions, _ordered_tables, _read_metadata, _reset_postgres_sequences,
+    _head_revisions, _ordered_tables, _read_metadata,
     _stable_column_value, _validate_target_url, load_write_freeze_attestation,
     preflight_sqlite_snapshot, reconcile, safe_target_identity,
 )
 
 
 PROFILE_VERSION = "phase9-preserve-identity-refresh-v1"
+OBJECT_PROOF_VERSION = "phase9-r2-readonly-manifest-v1"
 PROTECTED_TABLES = frozenset({
     "app_user", "auth_bootstrap_state", "band", "band_membership",
     "legacy_band_claim_token", "audit_event", "tenant_backfill_state",
@@ -76,6 +77,14 @@ def _assert_schema(connection: Connection) -> MetaData:
     if revisions != _head_revisions():
         raise RehearsalError("refresh target is not at the current Alembic head")
     return _read_metadata(connection)
+
+
+def _validate_refresh_url(database_url: str) -> None:
+    """Reject libpq query overrides before an engine can interpret them."""
+    url = make_url(database_url)
+    forbidden = {"host", "hostaddr", "port", "dbname", "database", "service", "servicefile", "options"}
+    if url.get_backend_name() != "postgresql" or forbidden & set(url.query):
+        raise RehearsalError("refresh target URL has an unsafe connection identity override")
 
 
 def _all_rows(connection: Connection, table: Any) -> list[Mapping[str, Any]]:
@@ -135,13 +144,22 @@ def load_reviewed_profile(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != required or value.get("version") != PROFILE_VERSION:
         raise RehearsalError("reviewed baseline profile has an invalid shape")
     provenance = value["provenance"]
-    if not isinstance(provenance, dict) or set(provenance) != {
-        "reference_snapshot_sha256", "source_import_report_sha256", "post_claim_review_sha256",
-    }:
+    if not isinstance(provenance, dict) or set(provenance) != {"v11_restore", "v12_apply", "post_claim"}:
         raise RehearsalError("reviewed baseline profile provenance is invalid")
-    for item in provenance.values():
-        if not isinstance(item, str) or len(item) != 64 or any(char not in "0123456789abcdef" for char in item):
+    evidence = {}
+    for label, item in provenance.items():
+        if (not isinstance(item, dict) or set(item) != {"file", "sha256"} or not isinstance(item["file"], str)
+                or not item["file"] or Path(item["file"]).is_absolute() or ".." in Path(item["file"]).parts
+                or not isinstance(item["sha256"], str) or len(item["sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in item["sha256"])):
             raise RehearsalError("reviewed baseline profile provenance is invalid")
+        try:
+            raw = (path.parent / item["file"]).read_bytes()
+            evidence[label] = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RehearsalError("reviewed baseline profile evidence is unavailable") from error
+        if hashlib.sha256(raw).hexdigest() != item["sha256"]:
+            raise RehearsalError("reviewed baseline profile evidence digest differs")
     if value["target_writes_frozen"] is not True:
         raise RehearsalError("reviewed baseline profile does not attest target writers are frozen")
     protected, domain = value["protected"], value["legacy_domain"]
@@ -151,6 +169,34 @@ def load_reviewed_profile(path: Path) -> dict[str, Any]:
         raise RehearsalError("reviewed baseline profile legacy-domain proof is invalid")
     _validate_digest_map(protected["table_digests"], PROTECTED_TABLES, "protected")
     _validate_digest_map(domain["table_digests"], REFRESHED_TABLES, "legacy-domain")
+    v11, v12, post_claim = evidence["v11_restore"], evidence["v12_apply"], evidence["post_claim"]
+    if (v11.get("status") != "local_restore_verified" or not v11.get("source_before_after_identical")
+            or not v11.get("restored_matches_source") or v12.get("status") != "staging_v12_verified"
+            or v12.get("expected_source_object_sha256") != v11.get("restored", {}).get("object_sha256")):
+        raise RehearsalError("reviewed baseline profile v11/v12 provenance does not form a verified chain")
+    embedded = post_claim.get("preserve_identity_refresh_profile") if isinstance(post_claim, dict) else None
+    if (post_claim.get("status") != "postclaim_verified" or not isinstance(embedded, dict)
+            or embedded.get("protected") != protected or embedded.get("legacy_domain") != domain):
+        raise RehearsalError("reviewed baseline profile post-claim evidence does not pin its typed digests")
+    return value
+
+
+def load_readonly_object_proof(path: Path, source_fingerprint: Mapping[str, Any]) -> dict[str, Any]:
+    """Load a snapshot-bound list/head result; no storage client is available here."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RehearsalError("read-only object manifest proof is not readable JSON") from error
+    if not isinstance(value, dict) or set(value) != {"version", "source_snapshot", "objects"}:
+        raise RehearsalError("read-only object manifest proof has an invalid shape")
+    if value["version"] != OBJECT_PROOF_VERSION or value["source_snapshot"] != dict(source_fingerprint):
+        raise RehearsalError("read-only object manifest proof is not bound to the frozen source snapshot")
+    if not isinstance(value["objects"], list):
+        raise RehearsalError("read-only object manifest proof has invalid objects")
+    for item in value["objects"]:
+        if (not isinstance(item, dict) or set(item) - {"key", "size"} or not isinstance(item.get("key"), str)
+                or not item["key"] or ("size" in item and (type(item["size"]) is not int or item["size"] < 0))):
+            raise RehearsalError("read-only object manifest proof has invalid objects")
     return value
 
 
@@ -237,6 +283,24 @@ def _source_band_id(connection: Connection) -> int:
     return rows[0]["id"]
 
 
+def _assert_source_has_no_external_identity_references(connection: Connection) -> None:
+    """Only the generated legacy band relationship may cross into identity."""
+    metadata = _read_metadata(connection)
+    for table in metadata.sorted_tables:
+        if table.name not in REFRESHED_TABLES:
+            continue
+        for foreign_key in table.foreign_key_constraints:
+            referred = foreign_key.referred_table.name
+            columns = [column.name for column in foreign_key.columns]
+            if referred not in PROTECTED_TABLES:
+                continue
+            if referred == "band" and columns == ["band_id"]:
+                continue
+            predicate = " OR ".join(f"{_quote(column)} IS NOT NULL" for column in columns)
+            if connection.execute(text(f"SELECT count(*) FROM {_quote(table.name)} WHERE {predicate}")).scalar_one():
+                raise RehearsalError("source content requires an unsupported external identity mapping")
+
+
 def _source_rows(connection: Connection, table: Any, source_band_id: int, target_band_id: int) -> list[dict[str, Any]]:
     rows = _scoped_rows(connection, table, source_band_id)
     converted = []
@@ -279,6 +343,43 @@ def _insert_source_domain(source: Connection, target: Connection, source_band_id
     return inserted
 
 
+def _advance_postgres_sequences_monotonic(connection: Connection, metadata: MetaData) -> None:
+    """Advance only: PostgreSQL ``setval`` survives rollback, so never lower it.
+
+    A later failure can leave a harmless gap but must not reuse a reserved or
+    previously issued id. This intentionally replaces the empty-import helper,
+    whose exact-reset behaviour is appropriate only for a disposable target.
+    """
+    preparer = connection.dialect.identifier_preparer
+    for table in metadata.sorted_tables:
+        if table.name not in REFRESHED_TABLES:
+            continue
+        primary_key = list(table.primary_key.columns)
+        if len(primary_key) != 1:
+            continue
+        column = primary_key[0]
+        sequence = connection.execute(text("SELECT pg_get_serial_sequence(:table_name, :column_name)"), {
+            "table_name": table.name, "column_name": column.name,
+        }).scalar_one()
+        if not sequence:
+            continue
+        maximum = connection.execute(text(
+            f"SELECT max({preparer.quote(column.name)}) FROM {preparer.quote(table.name)}"
+        )).scalar_one()
+        if maximum is None:
+            continue
+        current = connection.execute(text(
+            "SELECT last_value FROM pg_sequences WHERE schemaname=current_schema() "
+            "AND sequencename=regexp_replace(:sequence, '^.*\\.', '')"
+        ), {"sequence": sequence}).scalar_one_or_none()
+        if current is None:
+            raise RehearsalError("refresh sequence is outside the expected schema")
+        if maximum > current:
+            connection.execute(text("SELECT setval(:sequence, :value, true)"), {
+                "sequence": sequence, "value": maximum,
+            })
+
+
 def _source_domain_digests(connection: Connection, source_band_id: int, target_band_id: int) -> dict[str, dict[str, Any]]:
     metadata = _read_metadata(connection)
     return {
@@ -290,9 +391,10 @@ def _source_domain_digests(connection: Connection, source_band_id: int, target_b
 def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expected_target_host: str,
                                   expected_target_database: str, expected_target_schema: str,
                                   source_write_freeze_attestation: Mapping[str, Any],
-                                  reviewed_profile: Mapping[str, Any], dry_run: bool = False,
+                                  reviewed_profile: Mapping[str, Any], object_proof: Mapping[str, Any], dry_run: bool = False,
                                   report_publisher: Any = None) -> dict[str, Any]:
     """Run one reviewed refresh.  Caller must have loaded strict sidecars first."""
+    _validate_refresh_url(target_url)
     identity = _validate_target_url(target_url, expected_target_host=expected_target_host,
                                     expected_target_database=expected_target_database,
                                     expected_target_schema=expected_target_schema,
@@ -316,16 +418,20 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
             try:
                 with source_engine.connect() as source:
                     source_band_id = _source_band_id(source)
+                    _assert_source_has_no_external_identity_references(source)
                     with engine.connect() as target:
                         if target.execute(text("SELECT current_schema()")).scalar_one() != identity["schema"]:
                             raise RehearsalError("refresh target schema does not match the explicit expected schema")
+                        if target.execute(text("SELECT current_database()")).scalar_one() != expected_target_database:
+                            raise RehearsalError("refresh target database does not match the explicit expected identity")
                         target_band_id = _assert_profile(target, reviewed_profile)
                     expected_domain = _source_domain_digests(source, source_band_id, target_band_id)
                     result = {
                         "mode": "preserve_identity_refresh", "dry_run": dry_run,
                         "target": safe_target_identity(target_url), "source_files": source_files,
                         "source_write_freeze": write_freeze, "backfill": backfill,
-                        "reviewed_profile": {"version": reviewed_profile["version"], "provenance": reviewed_profile["provenance"],
+                        "reviewed_profile": {"version": reviewed_profile["version"],
+                                             "evidence_sha256": {key: value["sha256"] for key, value in reviewed_profile["provenance"].items()},
                                              "sha256": _sha256(reviewed_profile)},
                         "expected_domain": expected_domain,
                     }
@@ -341,19 +447,36 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
                         target.execute(text("SELECT pg_advisory_xact_lock(hashtext('phase9-preserve-identity-refresh-v1'))"))
                         target.execute(text("LOCK TABLE " + ", ".join(_quote(name) for name in sorted(MANAGED_TABLES)) +
                                             " IN SHARE ROW EXCLUSIVE MODE"))
+                        if target.execute(text("SELECT current_database()")).scalar_one() != expected_target_database:
+                            raise RehearsalError("refresh target database changed before lock")
                         target_band_id = _assert_profile(target, reviewed_profile)
                         protected_before = _table_digests(target, PROTECTED_TABLES)
                         _delete_legacy_domain(target, _read_metadata(target), target_band_id)
                         inserted = _insert_source_domain(source, target, source_band_id, target_band_id)
-                        _reset_postgres_sequences(target, _read_metadata(target))
+                        _advance_postgres_sequences_monotonic(target, _read_metadata(target))
                         if _table_digests(target, PROTECTED_TABLES) != protected_before:
                             raise RehearsalError("refresh changed protected identity state; transaction rolled back")
                         if _table_digests(target, REFRESHED_TABLES, band_id=target_band_id) != expected_domain:
                             raise RehearsalError("refresh domain digest differs from frozen source; transaction rolled back")
                         _assert_empty_tables(target, MUST_BE_EMPTY_TABLES | QUARANTINED_TABLES, "refresh target")
-                        reconciliation = reconcile(target)
+                        reconciliation = reconcile(target, actual_objects=object_proof["objects"])
                         if reconciliation["foreign_key_orphans"] or reconciliation["object_defects"]:
                             raise RehearsalError("refresh reconciliation reported relationship or object defects; transaction rolled back")
+                        if (reconciliation["song_votes"]["cached_score_mismatches"]
+                                or reconciliation["media_votes"]["cached_score_mismatches"]):
+                            raise RehearsalError("refresh reconciliation reported cached vote-score mismatch; transaction rolled back")
+                        comments = reconciliation["comments"]
+                        if comments["missing_parents"] or comments["root_target_fields"] != comments["roots"]:
+                            raise RehearsalError("refresh reconciliation reported invalid comment roots; transaction rolled back")
+                        try:
+                            relationship_defects, _ = validate_relationships(target, target_band_id)
+                        except TenantBackfillError as error:
+                            raise RehearsalError("refresh reconciliation reported invalid comment or tenant graph; transaction rolled back") from error
+                        if relationship_defects:
+                            raise RehearsalError("refresh reconciliation reported cross-scope graph defects; transaction rolled back")
+                        comparison = reconciliation.get("object_comparison", {})
+                        if comparison.get("missing_required") or comparison.get("size_mismatches"):
+                            raise RehearsalError("refresh read-only object proof differs from refreshed manifest; transaction rolled back")
                         result.update({"inserted": inserted, "after_domain": expected_domain,
                                        "protected_identity_unchanged": True,
                                        "reconciliation": reconciliation})
@@ -383,11 +506,12 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
 @click.option("--expected-target-schema", required=True)
 @click.option("--write-freeze-attestation", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--reviewed-baseline-profile", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--readonly-object-manifest-proof", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--report-output", required=True, type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--dry-run", is_flag=True)
 def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expected_target_database: str,
         expected_target_schema: str, write_freeze_attestation: Path, reviewed_baseline_profile: Path,
-        report_output: Path, dry_run: bool) -> None:
+        readonly_object_manifest_proof: Path, report_output: Path, dry_run: bool) -> None:
     """Refresh only an already-reviewed, claimed staging legacy archive."""
     reservation = None
     try:
@@ -395,10 +519,11 @@ def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expecte
         profile = load_reviewed_profile(reviewed_baseline_profile)
         source_fingerprint = _file_fingerprint(preflight_sqlite_snapshot(str(source_sqlite)))
         attestation = load_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
+        object_proof = load_readonly_object_proof(readonly_object_manifest_proof, source_fingerprint)
         run_preserve_identity_refresh(
             str(source_sqlite), target_url, expected_target_host=expected_target_host,
             expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
-            source_write_freeze_attestation=attestation, reviewed_profile=profile, dry_run=dry_run,
+            source_write_freeze_attestation=attestation, reviewed_profile=profile, object_proof=object_proof, dry_run=dry_run,
             report_publisher=reservation.publish,
         )
         click.echo(f"report_written sha256={reservation.retain()}")

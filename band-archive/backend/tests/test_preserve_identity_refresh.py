@@ -111,8 +111,8 @@ def test_reviewed_profile_rejects_missing_provenance(tmp_path):
 def test_refresh_rejects_sqlite_before_source_or_target_mutation(tmp_path):
     source, target = tmp_path / 'source.sqlite', tmp_path / 'target.sqlite'
     source.touch()
-    with pytest.raises(RehearsalError, match='SQLite target'):
+    with pytest.raises(RehearsalError, match='unsafe connection identity override'):
         run_preserve_identity_refresh(
             str(source), _url(target), expected_target_host='example.test', expected_target_database='db',
-            expected_target_schema='public', source_write_freeze_attestation={}, reviewed_profile={}, dry_run=True,
+            expected_target_schema='public', source_write_freeze_attestation={}, reviewed_profile={}, object_proof={}, dry_run=True,
         )
