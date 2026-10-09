@@ -79,6 +79,16 @@ CLI as the only operator-facing final-import entrypoint; the Python
 `run_rehearsal` function is an internal/test seam and its injected report
 publisher is not an operator workflow.
 
+### Claimed staging refresh exception
+
+The empty-target CLI must not be pointed at the already-claimed staging legacy
+band. When a separately approved latest-Fly-to-claimed-staging refresh is
+needed, use only the PostgreSQL-only contract in
+[`backend/tools/README-preserve-identity-refresh.md`](../../backend/tools/README-preserve-identity-refresh.md).
+It requires a fresh source freeze and a reviewed v11/v12 provenance-pinned
+baseline sidecar, preserves all account/claim/audit identity rows, and has no
+R2 mutation capability.
+
 After import, reconcile database rows, FKs, score aggregates, comment trees,
 and the R2 manifest before deploying the PostgreSQL backend. Keep SQLite and
 its Fly volume snapshot as recovery material.

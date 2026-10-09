@@ -53,9 +53,11 @@
 [`phase9-postgres-cutover-preflight.md`](phase9-postgres-cutover-preflight.md)
 절차를 진행한다.
 
-현재 staging에는 수령 계정 1건이 있고, 소유권 수령 뒤에는 owner membership
-1건이 추가될 예정이다. Phase 9 final import 도구는 빈 대상만 받으므로, 이
-staging 대상으로 final import를 실행해서는 안 된다. 실제 final import 전에
-이 계정과 수령 뒤의 owner membership을 보존하는 정확한 전략을 별도로 승인하고,
-격리된 복사본에서 복원·검증해야 한다. 이를 위해 기존 행을 자동 삭제하거나
-production에 쓰기를 수행하지 않는다.
+현재 staging에는 수령 계정 1건, active owner membership 1건, redeemed claim
+1건, audit 3건이 있다. Phase 9 final import 도구는 여전히 빈 대상만 받으므로,
+이 staging 대상으로 실행해서는 안 된다. 최신 Fly archive를 이 claimed staging
+band로 갱신하는 별도 승인 경로는
+[`README-preserve-identity-refresh.md`](../../backend/tools/README-preserve-identity-refresh.md)를
+따른다. 이 경로는 reviewed v11/v12 baseline proof와 새 source snapshot을 모두
+요구하며, AppUser·bootstrap·Band·membership·claim·audit identity는 갱신 대상에서
+제외한다.
