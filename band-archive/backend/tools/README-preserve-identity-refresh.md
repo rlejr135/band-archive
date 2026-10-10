@@ -52,6 +52,36 @@ Any new user, other band, membership, claim, audit event, pending request or
 invite, direct upload, suggestion vote, multipart row, or domain-content
 change stops the tool.
 
+The target must already be migrated to Alembic head `20261010_13`. That
+one-way PostgreSQL migration disables browser Data API access to the reviewed
+application tables; it is not a production cutover authorization. It refuses
+to begin if the migration owner has unsafe global default ACLs for `PUBLIC`,
+`anon`, or `authenticated`. Remediating such global defaults is a separate,
+reviewed database-security operation; do not alter them merely to make this
+refresh command proceed.
+
+The v2 read-only object proof is a separately reviewed JSON document. It must
+contain the exact frozen-source fingerprint and a complete list/head inventory:
+`version: "phase9-r2-readonly-manifest-v2"`, a `capture` with method
+`operator-readonly-list-head`, capture ID, complete flag, count, canonical
+inventory SHA-256, account SHA-256, and bucket SHA-256, plus unique
+`{key, size}` entries. The complete proof bytes, and separately the expected
+account and bucket SHA-256 values, are supplied independently to the CLI; the
+canonical inventory SHA-256 is recomputed from the proof entries. For every
+inventory object classified by reconciliation as orphaned or
+retired-but-still-present, a second, SHA-pinned approval document must provide
+exactly one source/account/bucket/inventory/capture-bound,
+`operator-reviewed`, `retain_no_mutation` disposition. It can only retain;
+it cannot approve object mutation.
+
+These pins prove that an operator reviewed the supplied local bytes; they do
+not authenticate a remote R2 response. This repository has no approved
+read-only R2 capture adapter that creates this v2 proof. A real, independently
+retained list/head capture and the corresponding reviewed disposition approval
+are therefore still required before any refresh is eligible to run. Do not
+invent a proof from this guide, from a database manifest, or from a test
+fixture; until the capture exists this is a no-go gate.
+
 ## Invocation
 
 Use an approved secure launcher to inject `REHEARSAL_TARGET_URL` only into the
@@ -69,7 +99,13 @@ Push-Location backend
   --approved-tls-ca-sha256 '<reviewed CA bundle SHA-256>' `
   --write-freeze-attestation E:\operator\attestations\fly-latest-freeze.json `
   --reviewed-baseline-profile E:\operator\evidence\v11-v12-reviewed-profile.json `
+  --expected-reviewed-baseline-profile-sha256 '<reviewed profile SHA-256>' `
   --readonly-object-manifest-proof E:\operator\evidence\fly-latest-r2-list-head.json `
+  --expected-readonly-object-manifest-proof-sha256 '<reviewed proof SHA-256>' `
+  --expected-object-account-sha256 '<approved R2 account SHA-256>' `
+  --expected-object-bucket-sha256 '<approved R2 bucket SHA-256>' `
+  --approved-object-disposition-manifest E:\operator\evidence\fly-latest-r2-dispositions.json `
+  --expected-approved-object-disposition-manifest-sha256 '<reviewed disposition SHA-256>' `
   --report-output E:\operator\reports\refresh-dry-run-1.json `
   --dry-run
 Pop-Location
@@ -82,13 +118,15 @@ deletes only the proven legacy-domain graph child-to-parent, inserts frozen
 source rows parent-to-child while remapping only the legacy `band_id`, resets
 sequences, and proves protected identity is unchanged. Source rows requiring
 membership/account mapping are refused. A separate snapshot-bound read-only
-R2 list/head proof is required and compared with the refreshed manifest; the
-tool cannot list or mutate R2 itself. The immutable main report is published
-before commit with `status: "prepared"`; only after PostgreSQL commits and the
-tool reconnects to verify the database does it atomically publish the adjacent
-`.committed` marker. A prepared report is never success evidence. Any
-pre-commit profile, source, FK, object-manifest, or report failure rolls back
-the transaction; a post-commit marker failure leaves no completed marker.
+R2 list/head proof and a complete retain-only disposition approval are required
+and compared with the refreshed manifest; the tool cannot capture, list, or
+mutate R2 itself. The immutable main report is published before commit with
+`status: "prepared"`; only after PostgreSQL commits and the tool reconnects to
+verify the database does it atomically publish the adjacent `.committed`
+marker. A prepared report is never success evidence. Any pre-commit profile,
+source, FK, object-manifest, disposition, or report failure rolls back the
+transaction; a post-commit marker failure leaves no completed marker and the
+prepared report remains retained evidence.
 
 Every operator-facing PostgreSQL URL must include `sslmode=verify-full` and an
 `sslrootcert` file. The tool hashes that exact CA bundle and refuses to connect
