@@ -1,94 +1,111 @@
-# Supabase Auth configuration contract
+# Supabase Auth and production cutover readiness
 
-Phase 2 uses Supabase only as the identity provider.  Browser and native apps
-use Supabase Auth for email/password signup, email verification, password reset
-and token refresh; they must not query application domain tables through the
-Supabase Data API.  All songs, media, bands and memberships continue to go
-through Flask.
+Supabase Auth is the identity provider for browser and native clients. Flask
+remains the only application-domain API; clients must not query domain tables
+through the Supabase Data API. This document records configuration and release
+gates; it is not authorization for a production change.
 
-## Required deployment settings
+## Current state — 2026-10-11 KST
 
-Set `SUPABASE_AUTH_ENABLED=true` only after all of the following are present
-in Fly secrets or the equivalent environment-specific secret store:
+- The selected path is to promote the existing `anything-staging` Supabase
+  project for production use. A separate Supabase project is not a requirement
+  of this contract. Confirm and replace environment-specific URLs, keys,
+  issuer/JWKS settings, Auth URL configuration and SMTP settings as part of the
+  separately approved promotion.
+- Supabase has remote schema revision `20261010_13` (Data API security
+  hardening). This does **not** mean the application database has been cut over:
+  the production Fly service still uses SQLite and its current v48 release does
+  not expose `/api/v2/me` (404). The current Pages origin is permitted by the
+  existing backend CORS policy, but that does not prove v2 route readiness.
+- The checked-in `frontend/.env.production` names the API and map variables but
+  not the Supabase browser variables below. Cloudflare Pages build settings may
+  supply them, but their current external values/settings have not been
+  verified; confirm them before a production build.
+- The latest compatible backend release and PostgreSQL cutover must precede a
+  frontend release that exposes authenticated band/v2 screens. Keep
+  `SUPABASE_AUTH_ENABLED=false` until the database and backend release are ready.
 
-- `SUPABASE_URL` and `SUPABASE_PROJECT_REF`
-- `SUPABASE_JWT_ISSUER` and `SUPABASE_JWT_AUDIENCE=authenticated`
-- `SUPABASE_JWKS_URL`, cache TTL, HTTP timeout and JWT leeway
-- `BOOTSTRAP_PLATFORM_ADMIN_EMAIL` for the one-time initial platform admin
+## Required configuration
 
-No service-role key, SMTP app password, Supabase database password, or client
-refresh token belongs in this repository, Cloudflare public variables, or the
-Flask configuration.  The backend only fetches public JWKS documents and
-verifies bearer tokens locally.
+Cloudflare Pages injects Vite variables at build time. Production must have:
 
-## Environments and rollout gate
+- `VITE_API_URL` pointing at the approved production Flask API.
+- `VITE_NAVER_MAP_CLIENT_ID` for the map integration.
+- `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. The latter carries the
+  Supabase public anon/publishable key; it is public client configuration, not
+  a service-role credential. Set production and preview values deliberately;
+  never put a `service_role` key in a frontend build.
 
-Create separate Supabase Tokyo staging and production projects. Enable email
-confirmation, set redirect URLs to the matching Cloudflare Pages domain, use
-Gmail SMTP only for small beta volume, and configure Turnstile before exposing
-signup. Test JWKS rotation, email verification, reset links and CORS against
-staging before enabling production auth.
+The Fly backend auth contract requires `SUPABASE_URL`,
+`SUPABASE_PROJECT_REF`, `SUPABASE_JWT_ISSUER`,
+`SUPABASE_JWT_AUDIENCE=authenticated`, `SUPABASE_JWKS_URL`, its configured
+cache/timeout/leeway values, `SUPABASE_PUBLISHABLE_KEY`, and
+`BOOTSTRAP_PLATFORM_ADMIN_EMAIL` for the one-time initial platform admin.
+These belong in Fly secrets or the approved secret store, not in the frontend
+bundle or repository. Do not use a Supabase `service_role` key for this
+contract.
 
-`SUPABASE_AUTH_ENABLED=false` is intentional during compatibility work:
-existing public v1 routes continue to boot. Once it is true, startup fails if
-the complete non-secret contract is missing. The current SQLite migration path
-remains unchanged; use only `python migration_runner.py --database-url ...`
-for formal migrations, never `flask db upgrade`.
+When Flask moves from SQLite to Supabase PostgreSQL, it also needs a
+`DATABASE_URL` secret containing the approved database connection, including
+its password. The password is not stored in source, a checked-in env file, or
+as an unrelated standalone application setting; putting it in the protected
+connection secret is necessary for PostgreSQL access. This is distinct from
+not storing a database password in a browser or frontend bundle. SMTP app
+passwords belong only in the chosen mail provider's protected SMTP settings;
+they do not belong in Cloudflare or the frontend.
 
-## Required release order
+Use the approved database hostname with `sslmode=verify-full` and the
+independently pinned CA certificate. `sslmode=require` alone is insufficient
+because it does not verify the server hostname. Keep the connection secret and
+CA material out of logs and public evidence; follow the PostgreSQL cutover
+runbook for the approved operator procedure.
 
-1. Stop the backend or keep `SUPABASE_AUTH_ENABLED=false`.
-2. Back up the database, stamp a verified legacy database if necessary, then
-   run `python migration_runner.py --database-url ... upgrade`.
-3. Verify the Alembic head and `app_user`/`auth_bootstrap_state` tables on a
-   staging copy.
-4. Enable `SUPABASE_AUTH_ENABLED=true` and start the backend.
+## Supabase Auth URLs and signup protection
 
-The normal app factory deliberately creates only the historical v1 metadata.
-It never creates Alembic-managed auth tables. With auth enabled it checks both
-the required tables and Alembic head, then refuses startup until this release
-order has been completed.
+Set the Supabase Auth Site URL to the production Pages origin
+(`https://band-archive.pages.dev`). The frontend sends confirmation links to
+`<current-origin>/verify-email` and password-reset links to
+`<current-origin>/reset-password`. Allow those exact production callbacks in
+Supabase Auth URL Configuration. Add a preview/staging callback only when that
+origin is intentionally being tested; do not use a broad redirect wildcard.
 
-## Local staging rehearsal
+The current signup form does not render a Turnstile challenge or send a
+challenge token. Enabling Supabase CAPTCHA/Turnstile enforcement now will make
+signup fail. Before publicly promoting signup, explicitly choose either to
+implement and test the challenge flow or to authorize a time-limited beta
+exception with an accepted abuse-control plan. Configuration alone is not
+enough, and this choice remains open.
 
-`backend/.env.staging-auth.local` is an ignored, non-secret staging contract.
-It deliberately keeps `SUPABASE_AUTH_ENABLED=false`. It is not loaded by
-`app.py`'s default `load_dotenv()` call, so from the repository root use the
-dotenv runner explicitly whenever using it:
+Native clients persist Supabase session material through the platform secure
+storage plugin. Their email callback is not proven by the web configuration:
+the frontend derives callback URLs from the running origin, and native
+deep-link / universal-link completion requires separate platform URL setup and
+device testing. Treat native auth as a separate release gate; a successful
+Cloudflare web flow does not verify native callbacks.
 
-```powershell
-& backend\.venv-test\Scripts\python.exe -m dotenv -f backend\.env.staging-auth.local run -- `
-  backend\.venv-test\Scripts\python.exe -c "import sys; sys.path.insert(0, 'backend'); from config import DevelopmentConfig, validate_supabase_auth_config; c={k:getattr(DevelopmentConfig,k) for k in dir(DevelopmentConfig) if k.isupper()}; assert not c['SUPABASE_AUTH_ENABLED']; c['SUPABASE_AUTH_ENABLED']=True; validate_supabase_auth_config(c); print('staging auth contract validated; auth remains disabled')"
-```
+## Safe release order
 
-The validation command checks the full configuration that would be required
-when auth is enabled, but does not create an app, contact Supabase, or change
-the disabled setting. The backend must be launched with the same explicit
-dotenv wrapper only *after* the database is at the checked-in Alembic head:
+1. Confirm the intended promotion of `anything-staging`, then configure its
+   production Auth Site URL, exact redirect allowlist, email confirmation and
+   approved mail settings. Keep any new production values in the relevant
+   protected environment.
+2. Complete the separately authorized database cutover from Fly SQLite to
+   PostgreSQL, with a verified backup and the approved `verify-full`/pinned-CA
+   connection. Revision `20261010_13` is already applied; it is not an app-data
+   import or Fly cutover.
+3. Release the latest compatible backend only after its PostgreSQL target and
+   required auth contract are ready. Set `SUPABASE_AUTH_ENABLED=true` only
+   after the expected Alembic head/tables and configuration are verified.
+4. Before publishing frontend v2 screens, smoke-test `/api/v2/me`, public and
+   authenticated band APIs, signup/confirmation, password reset, legacy
+   compatibility, and Pages-origin CORS against that backend. The current v48
+   `/api/v2/me` 404 is a known pre-release state, not a passing smoke test.
+5. Build the frontend with the approved Cloudflare Production variables and
+   verify the deployed asset, API target and CORS only after separate
+   authorization to publish. Keep native builds/releases independent.
 
-```powershell
-Push-Location backend
-& .\.venv-test\Scripts\python.exe -m dotenv -f .env.staging-auth.local run -- `
-  .\.venv-test\Scripts\python.exe app.py
-Pop-Location
-```
-
-Keep the database password in the process environment (for example, an
-ephemeral operator variable), never in this file. Use the current pooler host,
-username, and `sslmode=require`; do not reuse a stale host or user embedded in
-an older connection URL. Before changing remote schema, take a restorable
-backup, run the read-only snapshot/preflight check, then run the isolated
-runner with the process `DATABASE_URL`:
-
-```powershell
-Push-Location backend
-& .\.venv-test\Scripts\python.exe migration_runner.py upgrade
-Pop-Location
-```
-
-That command performs the migration preflight before any DDL. Do not use
-`flask db upgrade`, do not start the normal application as a migration tool,
-and do not set `SUPABASE_AUTH_ENABLED=true` until the command completes and
-the recorded revision equals the checked-in head. Turnstile is not enabled in
-this rollout: there is currently no client-side challenge/token submission
-coverage, so enabling it would make signup fail.
+Do not run `flask db upgrade` or use normal application startup as a migration
+tool. Formal schema changes must follow the approved migration/cutover
+procedure and its backup, preflight, and review gates. Turnstile enforcement,
+native auth callbacks, identity refresh, and application cutover each retain
+their own readiness/approval gates.

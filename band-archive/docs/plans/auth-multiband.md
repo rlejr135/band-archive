@@ -73,8 +73,9 @@ SQLite 데이터, R2 객체, 기존 API 및 `db.create_all()` 시작 동작을 �
 1. **계약과 마이그레이션 기반** — 본 문서와 현재 모델 기준 Alembic
    baseline, fresh DB upgrade 및 existing SQLite safe-stamp 도구를 추가한다.
    기존 시작 마이그레이션과 `db.create_all()`은 이후 전환까지 유지한다.
-2. **Supabase 개발/스테이징** — Tokyo 프로젝트, 이메일 확인, Gmail SMTP,
-   Cloudflare Turnstile, JWT JWKS 검증과 환경 설정을 추가한다.
+2. **Supabase Auth 설정** — 현재 선택은 기존 `anything-staging` 프로젝트를
+   운영으로 승격하는 것이다. 별도 프로젝트는 필수 조건이 아니다. 이메일
+   확인, production redirect URL, SMTP와 JWT/JWKS 설정을 검증한다.
 3. **밴드/멤버십/RBAC** — 새 모델, migration, 가입·초대·승인·소유권 이전
    API와 역할 테스트를 구현한다.
 4. **기존 테이블 확장** — nullable `band_id`, 작성자, 공개 범위, object key를
@@ -112,15 +113,19 @@ SQLite 데이터, R2 객체, 기존 API 및 `db.create_all()` 시작 동작을 �
 
 ## 외부 선행 조건
 
-- Supabase Tokyo 프로젝트를 만들고 staging과 production을 분리한다. 프로젝트
-  URL, anon key, JWT issuer/audience/JWKS URL 및 Postgres 연결 정보는 환경
-  변수/비밀 관리에만 저장한다.
+- 현재 선택한 기존 `anything-staging` Supabase 프로젝트를 production 용도로
+  승격한다. 별도 프로젝트는 필수가 아니며, 다른 프로젝트를 추가할 경우
+  별도 승인과 환경 분리를 거친다. URL, public anon/publishable key, JWT
+  issuer/audience/JWKS URL 및 Postgres 연결 정보는 환경 변수/비밀 관리에만
+  저장한다.
 - Supabase Auth에서 이메일 확인과 redirect URL을 Cloudflare Pages의 실제
   도메인으로 설정한다. Gmail SMTP app password는 저장소/Fly 이미지에 넣지
   않는다. 공개 서비스에서 일 30건 수준을 넘거나 전달 문제가 나면 Resend 등
   전용 발송 서비스로 교체한다.
-- Cloudflare Turnstile 사이트/비밀 키와 허용 도메인을 준비한다. 서버만 secret
-  key를 검증한다.
+- 현재 가입 폼은 Turnstile challenge/token을 제출하지 않는다. 공개 가입 전에
+  challenge 검증을 구현·시험하거나, 시간 제한이 있는 베타 예외와 승인된
+  abuse-control 방안을 명시적으로 결정한다. Turnstile enforcement만 먼저
+  켜면 가입이 실패하므로 현재 활성화하지 않는다.
 - Fly SQLite volume snapshot을 복구 가능하게 확보하고, R2 object key·크기
   manifest를 별도 안전 위치에 보관한다. 이 단계에서는 R2 삭제를 절대 하지
   않는다.
