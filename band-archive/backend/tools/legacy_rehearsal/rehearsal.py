@@ -221,10 +221,20 @@ class _ReservedReportOutput:
 
     def publish(self, report: dict[str, Any]) -> str:
         """Durably publish once; callers invoke this before DB commit."""
+        return self.publish_bytes(_report_payload(report))
+
+    def publish_bytes(self, payload: bytes) -> str:
+        """Durably publish already-serialized private evidence once.
+
+        Unlike :meth:`publish`, this intentionally performs no redaction.  It
+        is only for operator-private artifacts whose schema is validated by
+        their caller and which must retain exact object metadata bytes.
+        """
         if (self.published or self.descriptor < 0 or self.temporary is None
                 or self._temporary_identity is None):
             raise RehearsalError("report output reservation is no longer writable")
-        payload = _report_payload(report)
+        if not isinstance(payload, bytes):
+            raise RehearsalError("private evidence payload must be bytes")
         try:
             if _path_identity(self.temporary) != self._temporary_identity:
                 raise RehearsalError("report output temporary identity changed")

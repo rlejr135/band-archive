@@ -75,12 +75,43 @@ exactly one source/account/bucket/inventory/capture-bound,
 it cannot approve object mutation.
 
 These pins prove that an operator reviewed the supplied local bytes; they do
-not authenticate a remote R2 response. This repository has no approved
-read-only R2 capture adapter that creates this v2 proof. A real, independently
-retained list/head capture and the corresponding reviewed disposition approval
-are therefore still required before any refresh is eligible to run. Do not
-invent a proof from this guide, from a database manifest, or from a test
-fixture; until the capture exists this is a no-go gate.
+not authenticate a remote R2 response. The repository provides three separate
+operator helpers, but none authorizes remote access, transport, a writer
+freeze, or a refresh by itself:
+
+1. `capture_sqlite_snapshot.py` runs only on the approved source machine. It
+   opens the named `/data` SQLite source with `mode=ro`, creates a SQLite
+   `backup()` in an owned `/tmp` workspace, integrity-checks that backup, and
+   writes a private capture manifest. Its status is always
+   `captured_not_frozen`; it does not copy a raw WAL main file and cannot issue
+   `phase9-write-freeze-v1` authority.
+2. `capture_readonly_r2_inventory.py --plan` makes no request and reports the
+   fixed request ceiling. The capture mode uses only existing Fly `S3_*`
+   environment credentials, derives and hashes the canonical HTTPS R2 account
+   from the endpoint, lists the exact configured bucket through every cursor,
+   heads every key, and requires two full passes to agree on key, size, ETag,
+   and LastModified. It fails closed on pagination ambiguity, mutation, or the
+   default 1,000-object ceiling rather than retaining a partial inventory. Its
+   plan reports a conservative two-pass request maximum (including short
+   truncated pages) before it constructs a provider client.
+   Its private raw artifact contains keys and metadata; terminal output carries
+   only the digest, actual count, and request totals. It has no put, copy,
+   delete, upload, multipart, or re-encode operation.
+3. After an approved manual transfer of the private source backup, source
+   manifest, and raw R2 artifact, run `build_readonly_object_proof.py` locally.
+   It requires independently supplied SHA-256 pins for both transferred
+   manifests and produces the strict v2 proof plus a provenance sidecar. That
+   sidecar deliberately says `local_file_identity_only` and
+   `writer_freeze_attestation: false`: it binds exact local files, not a claim
+   that the R2 observation and SQLite backup were simultaneous.
+
+The raw capture, local binding sidecar, and a real reviewed retain-only
+disposition approval are therefore still required before any refresh is
+eligible to run. Do not invent a proof from this guide, from a database
+manifest, or from a test fixture; until those artifacts and separate writer
+freeze approval exist this is a no-go gate. Capture consistency is also not a
+schema/model or cross-source verdict: preserve the existing rehearsal and
+refresh reconciliation gates separately.
 
 ## Invocation
 
