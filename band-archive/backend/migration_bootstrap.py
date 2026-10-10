@@ -34,7 +34,16 @@ PHASE8_REVISION = '20261002_08'
 PHASE9_REVISION = '20261002_09'
 PHASE10_REVISION = '20261003_10'
 PHASE11_REVISION = '20261004_11'
+PHASE12_REVISION = '20261006_12'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
+DATA_API_MANAGED_TABLES = (
+    'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
+    'band_creation_request', 'band_invite_code', 'band_membership', 'comment', 'direct_upload_session',
+    'gallery_image', 'legacy_band_claim_token', 'media', 'media_vote', 'member', 'multipart_upload_part',
+    'multipart_upload_session', 'personal_log', 'personal_log_multipart_upload_part',
+    'personal_log_multipart_upload_session', 'rehearsal', 'rehearsal_songs', 'song', 'song_suggestion',
+    'song_suggestion_vote', 'song_vote', 'tenant_backfill_state',
+)
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -247,6 +256,21 @@ def phase11_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
+    return metadata
+
+
+def phase12_metadata():
+    """Exact revision-12 structural snapshot before Data API hardening.
+
+    Revision 13 changes PostgreSQL ACL/RLS state only.  Keep a dedicated
+    structural copy nevertheless: future model changes must not invalidate a
+    legitimate v12 database during upgrade preflight.
+    """
+    # Build from the preceding historical snapshot, then add only revision
+    # 12's table.  Do not make the v12 contract a bare alias of current ORM
+    # metadata; future schema changes must update this builder deliberately.
+    metadata = phase11_metadata()
+    db.metadata.tables['legacy_band_claim_token'].to_metadata(metadata)
     return metadata
 
 
@@ -1002,6 +1026,8 @@ def schema_contract_differences(connection, inspector_override=None, metadata=No
     # append-only guard explicitly rather than trusting the ORM event hook.
     if ('audit_event' in actual_tables and _current_version(connection) == (migration_head_revision(),)):
         differences.extend(_audit_trigger_differences(connection))
+    if _current_version(connection) == (migration_head_revision(),):
+        differences.extend(_data_api_security_differences(connection))
     return differences
 
 
@@ -1212,6 +1238,103 @@ def _parse_postgres_predicate_atom(atom):
     return left, right
 
 
+def _data_api_security_differences(connection):
+    """Verify PostgreSQL ACL/RLS state that ORM metadata cannot express."""
+    if connection.dialect.name != 'postgresql':
+        return []
+    rows = connection.execute(text("""
+        SELECT cls.relname, cls.relrowsecurity, cls.relforcerowsecurity
+        FROM pg_class AS cls
+        JOIN pg_namespace AS namespace ON namespace.oid = cls.relnamespace
+        WHERE namespace.nspname = 'public' AND cls.relkind IN ('r', 'p')
+        ORDER BY cls.relname
+    """)).all()
+    if {row[0] for row in rows} != set(DATA_API_MANAGED_TABLES):
+        return ['Data API security table allowlist does not match public tables']
+    differences = []
+    if any(not enabled or forced for _, enabled, forced in rows):
+        differences.append('Data API security requires enabled, non-forced RLS on every managed table')
+    policy_count = connection.execute(text("""
+        SELECT count(*) FROM pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY(:table_names)
+    """), {'table_names': list(DATA_API_MANAGED_TABLES)}).scalar_one()
+    if policy_count:
+        differences.append('Data API security requires no managed-table RLS policies')
+    roles = connection.execute(text(
+        "SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')"
+    )).scalars().all()
+    if roles:
+        table_grants = connection.execute(text("""
+            SELECT count(*)
+            FROM pg_class AS cls
+            JOIN pg_namespace AS namespace ON namespace.oid = cls.relnamespace
+            CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'),
+                        ('REFERENCES'), ('TRIGGER'), ('MAINTAIN')) AS privilege(name)
+            CROSS JOIN (SELECT rolname FROM pg_roles WHERE rolname = ANY(:roles)) AS role_name
+            WHERE namespace.nspname = 'public'
+              AND cls.relname = ANY(:table_names)
+              AND has_table_privilege(role_name.rolname, cls.oid, privilege.name)
+        """), {'roles': list(roles), 'table_names': list(DATA_API_MANAGED_TABLES)}).scalar_one()
+        if table_grants:
+            differences.append('Data API client role retains effective table privileges')
+        sequence_grants = connection.execute(text("""
+            SELECT count(*)
+            FROM pg_class AS sequence_class
+            JOIN pg_depend AS dependency
+              ON dependency.classid = 'pg_class'::regclass
+             AND dependency.objid = sequence_class.oid
+             AND dependency.refclassid = 'pg_class'::regclass
+             AND dependency.deptype IN ('a', 'i')
+            JOIN pg_class AS table_class ON table_class.oid = dependency.refobjid
+            JOIN pg_namespace AS table_namespace ON table_namespace.oid = table_class.relnamespace
+            CROSS JOIN (VALUES ('USAGE'), ('SELECT'), ('UPDATE')) AS privilege(name)
+            CROSS JOIN (SELECT rolname FROM pg_roles WHERE rolname = ANY(:roles)) AS role_name
+            WHERE sequence_class.relkind = 'S'
+              AND table_namespace.nspname = 'public'
+              AND table_class.relname = ANY(:table_names)
+              AND has_sequence_privilege(role_name.rolname, sequence_class.oid, privilege.name)
+        """), {'roles': list(roles), 'table_names': list(DATA_API_MANAGED_TABLES)}).scalar_one()
+        if sequence_grants:
+            differences.append('Data API client role retains effective sequence privileges')
+    public_grants = connection.execute(text("""
+        SELECT count(*)
+        FROM pg_class AS cls
+        JOIN pg_namespace AS namespace ON namespace.oid = cls.relnamespace
+        CROSS JOIN LATERAL aclexplode(COALESCE(cls.relacl, acldefault('r', cls.relowner))) AS acl
+        WHERE namespace.nspname = 'public'
+          AND cls.relname = ANY(:table_names) AND acl.grantee = 0
+    """), {'table_names': list(DATA_API_MANAGED_TABLES)}).scalar_one()
+    if public_grants:
+        differences.append('PUBLIC retains managed-table privileges')
+    default_grants = connection.execute(text("""
+        SELECT count(*)
+        FROM pg_default_acl AS defaults
+        CROSS JOIN LATERAL aclexplode(defaults.defaclacl) AS acl
+        WHERE defaults.defaclrole = current_user::regrole
+          AND defaults.defaclnamespace = 'public'::regnamespace
+          AND defaults.defaclobjtype IN ('r', 'S')
+          AND (acl.grantee = 0 OR acl.grantee IN (
+              SELECT oid FROM pg_roles WHERE rolname IN ('anon', 'authenticated')
+          ))
+    """)).scalar_one()
+    if default_grants:
+        differences.append('Migration owner has unsafe public-schema default privileges')
+    global_default_grants = connection.execute(text("""
+        SELECT count(*)
+        FROM pg_default_acl AS defaults
+        CROSS JOIN LATERAL aclexplode(defaults.defaclacl) AS acl
+        WHERE defaults.defaclrole = current_user::regrole
+          AND defaults.defaclnamespace = 0
+          AND defaults.defaclobjtype IN ('r', 'S')
+          AND (acl.grantee = 0 OR acl.grantee IN (
+              SELECT oid FROM pg_roles WHERE rolname IN ('anon', 'authenticated')
+          ))
+    """)).scalar_one()
+    if global_default_grants:
+        differences.append('Migration owner has unsafe global default privileges')
+    return differences
+
+
 def _audit_trigger_differences(connection):
     """Return explicit append-only trigger contract defects, fail closed."""
     dialect = connection.dialect.name
@@ -1367,6 +1490,8 @@ def metadata_for_recorded_revision(revision):
         return phase10_metadata()
     if revision == PHASE11_REVISION:
         return phase11_metadata()
+    if revision == PHASE12_REVISION:
+        return phase12_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(
