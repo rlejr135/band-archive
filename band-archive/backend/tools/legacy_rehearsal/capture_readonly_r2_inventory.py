@@ -69,12 +69,12 @@ def _account_from_endpoint(endpoint: str) -> str:
     return account
 
 
-def _normalized_last_modified(value: Any) -> str:
+def _normalized_last_modified(value: Any, *, timespec: str = "microseconds") -> str:
     if not isinstance(value, datetime):
         raise RehearsalError("R2 object metadata lacks a valid LastModified value")
     if value.tzinfo is None:
         raise RehearsalError("R2 object metadata LastModified lacks a timezone")
-    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return value.astimezone(timezone.utc).isoformat(timespec=timespec).replace("+00:00", "Z")
 
 
 def _object_metadata(listed: Mapping[str, Any], headed: Mapping[str, Any]) -> dict[str, Any]:
@@ -86,14 +86,18 @@ def _object_metadata(listed: Mapping[str, Any], headed: Mapping[str, Any]) -> di
     size, etag = headed.get("ContentLength"), headed.get("ETag")
     listed_modified = _normalized_last_modified(listed.get("LastModified"))
     headed_modified = _normalized_last_modified(headed.get("LastModified"))
+    listed_modified_second = _normalized_last_modified(listed.get("LastModified"), timespec="seconds")
+    headed_modified_second = _normalized_last_modified(headed.get("LastModified"), timespec="seconds")
     if (type(size) is not int or size < 0 or size != listed_size or not isinstance(etag, str) or not etag
-            or etag != listed_etag or headed_modified != listed_modified):
+            or etag != listed_etag or headed_modified_second != listed_modified_second):
         raise RehearsalError("R2 list/head object metadata differs")
     return {
         "key": key,
         "size": size,
         "etag": etag,
-        "last_modified": headed_modified,
+        # Keep LIST's full precision for strict two-pass change detection;
+        # HEAD's HTTP date may expose only whole seconds.
+        "last_modified": listed_modified,
     }
 
 

@@ -91,6 +91,17 @@ def test_r2_capture_pages_all_keys_heads_metadata_twice_without_mutations():
         r2_capture._account_from_endpoint("http://abcdefgh.r2.cloudflarestorage.com")
 
 
+def test_r2_capture_accepts_subsecond_list_time_and_preserves_it_across_passes():
+    pages = _pages()
+    for index in (0, 2):
+        pages[index]["Contents"][0]["LastModified"] = NOW.replace(microsecond=123_000)
+    raw = r2_capture.capture_two_pass_inventory(
+        FakeReadOnlyR2(pages, _heads()), bucket=BUCKET, endpoint=ENDPOINT, max_objects=10,
+        capture_id="00000000-0000-0000-0000-000000000007", captured_at="2026-10-10T00:00:00Z",
+    )
+    assert raw["objects"][0]["last_modified"] == "2026-10-10T00:00:00.123000Z"
+
+
 def test_r2_plan_reports_bounded_budget_without_constructing_a_client(monkeypatch):
     monkeypatch.setattr(r2_capture, "_environment_client", lambda: (_ for _ in ()).throw(AssertionError("network")))
     result = CliRunner().invoke(r2_capture.cli, ["--plan", "--max-objects", "10"])
@@ -230,9 +241,23 @@ def test_r2_capture_refuses_same_size_overwrite_or_partial_cursor():
     with pytest.raises(RehearsalError, match="list/head"):
         r2_capture.capture_inventory_pass(FakeReadOnlyR2(pages, _heads()), BUCKET, max_objects=10)
     pages = _pages()
+    pages[0]["Contents"][0]["Size"] = 9
+    with pytest.raises(RehearsalError, match="list/head"):
+        r2_capture.capture_inventory_pass(FakeReadOnlyR2(pages, _heads()), BUCKET, max_objects=10)
+    pages = _pages()
     pages[0]["Contents"][0]["LastModified"] = NOW.replace(hour=1)
     with pytest.raises(RehearsalError, match="list/head"):
         r2_capture.capture_inventory_pass(FakeReadOnlyR2(pages, _heads()), BUCKET, max_objects=10)
+
+
+def test_r2_capture_rejects_subsecond_change_between_full_passes():
+    pages = _pages()
+    pages[0]["Contents"][0]["LastModified"] = NOW.replace(microsecond=123_000)
+    pages[2]["Contents"][0]["LastModified"] = NOW.replace(microsecond=456_000)
+    with pytest.raises(RehearsalError, match="changed between"):
+        r2_capture.capture_two_pass_inventory(
+            FakeReadOnlyR2(pages, _heads()), bucket=BUCKET, endpoint=ENDPOINT, max_objects=10,
+        )
 
 
 def test_sqlite_backup_and_local_binding_keep_nonfreeze_provenance(tmp_path):

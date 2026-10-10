@@ -90,7 +90,10 @@ freeze, or a refresh by itself:
    environment credentials, derives and hashes the canonical HTTPS R2 account
    from the endpoint, lists the exact configured bucket through every cursor,
    heads every key, and requires two full passes to agree on key, size, ETag,
-   and LastModified. It fails closed on pagination ambiguity, mutation, or the
+   and the full-precision listed LastModified. LIST and HEAD timestamps must
+   agree at UTC-second precision because HEAD's HTTP date can omit fractions;
+   the listed fraction remains in the artifact so changes between passes fail
+   closed. It fails closed on pagination ambiguity, mutation, or the
    default 1,000-object ceiling rather than retaining a partial inventory. Its
    plan reports a conservative two-pass request maximum (including short
    truncated pages) before it constructs a provider client.
