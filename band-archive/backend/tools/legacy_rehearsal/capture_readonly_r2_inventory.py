@@ -97,6 +97,158 @@ def _object_metadata(listed: Mapping[str, Any], headed: Mapping[str, Any]) -> di
     }
 
 
+def _diagnostic_last_modified(value: Any) -> dict[str, bool]:
+    """Return only precision classifications, never a provider timestamp."""
+    is_datetime = isinstance(value, datetime)
+    has_timezone = is_datetime and value.tzinfo is not None
+    microsecond = value.microsecond if is_datetime else 0
+    return {
+        "is_datetime": is_datetime,
+        "has_timezone": has_timezone,
+        "has_subsecond": is_datetime and microsecond != 0,
+        "is_millisecond_aligned": is_datetime and microsecond % 1_000 == 0,
+    }
+
+
+def _diagnostic_list_object(value: Any) -> tuple[dict[str, bool], str | None]:
+    """Classify one listed object without returning its key or metadata."""
+    if not isinstance(value, Mapping):
+        return {
+            "is_mapping": False,
+            "key_usable": False,
+            "size_valid": False,
+            "etag_usable": False,
+            **{f"last_modified_{name}": flag for name, flag in _diagnostic_last_modified(None).items()},
+        }, None
+    key, size, etag = value.get("Key"), value.get("Size"), value.get("ETag")
+    return {
+        "is_mapping": True,
+        "key_usable": isinstance(key, str) and bool(key),
+        "size_valid": type(size) is int and size >= 0,
+        "etag_usable": isinstance(etag, str) and bool(etag),
+        **{f"last_modified_{name}": flag
+           for name, flag in _diagnostic_last_modified(value.get("LastModified")).items()},
+    }, key if isinstance(key, str) and key else None
+
+
+def _diagnostic_head_object(value: Any) -> dict[str, bool]:
+    """Classify one head response without returning its metadata."""
+    if not isinstance(value, Mapping):
+        return {
+            "is_mapping": False,
+            "size_valid": False,
+            "etag_usable": False,
+            **{f"last_modified_{name}": flag for name, flag in _diagnostic_last_modified(None).items()},
+        }
+    size, etag = value.get("ContentLength"), value.get("ETag")
+    return {
+        "is_mapping": True,
+        "size_valid": type(size) is int and size >= 0,
+        "etag_usable": isinstance(etag, str) and bool(etag),
+        **{f"last_modified_{name}": flag
+           for name, flag in _diagnostic_last_modified(value.get("LastModified")).items()},
+    }
+
+
+def _diagnostic_parity(listed: Mapping[str, Any], headed: Mapping[str, Any]) -> dict[str, bool]:
+    """Compare retained-in-memory metadata, emitting only equality booleans."""
+    listed_size, headed_size = listed.get("Size"), headed.get("ContentLength")
+    listed_etag, headed_etag = listed.get("ETag"), headed.get("ETag")
+    listed_modified, headed_modified = listed.get("LastModified"), headed.get("LastModified")
+    sizes_comparable = type(listed_size) is int and listed_size >= 0 and type(headed_size) is int and headed_size >= 0
+    etags_comparable = isinstance(listed_etag, str) and bool(listed_etag) and isinstance(headed_etag, str) and bool(headed_etag)
+    modified_comparable = (
+        isinstance(listed_modified, datetime) and listed_modified.tzinfo is not None
+        and isinstance(headed_modified, datetime) and headed_modified.tzinfo is not None
+    )
+    return {
+        "checked": True,
+        "sizes_comparable": sizes_comparable,
+        "size_equal": sizes_comparable and listed_size == headed_size,
+        "etags_comparable": etags_comparable,
+        "etag_equal": etags_comparable and listed_etag == headed_etag,
+        "last_modified_comparable": modified_comparable,
+        "last_modified_equal": modified_comparable and listed_modified == headed_modified,
+        "last_modified_second_equal": modified_comparable and (
+            listed_modified.replace(microsecond=0) == headed_modified.replace(microsecond=0)
+        ),
+    }
+
+
+def diagnose_first_r2_object() -> dict[str, Any]:
+    """Make one list request and, at most, one head request for safe diagnosis.
+
+    This is deliberately not a capture mode: it cannot enumerate an inventory,
+    publish an artifact, or report keys, timestamps, endpoint material, or
+    provider exception details.
+    """
+    endpoint, bucket = os.environ.get("S3_ENDPOINT_URL", ""), os.environ.get("S3_BUCKET_NAME", "")
+    access_key, secret_key = os.environ.get("S3_ACCESS_KEY", ""), os.environ.get("S3_SECRET_KEY", "")
+    all_present = bool(endpoint and bucket and access_key and secret_key)
+    try:
+        _account_from_endpoint(endpoint)
+        endpoint_canonical = True
+    except RehearsalError:
+        endpoint_canonical = False
+    result: dict[str, Any] = {
+        "status": "config_invalid",
+        "request_count": {"list": 0, "head": 0},
+        "config": {"all_s3_variables_present": all_present, "endpoint_canonical": endpoint_canonical},
+    }
+    if not all_present or not endpoint_canonical:
+        return result
+    try:
+        client, bucket, _endpoint = _environment_client()
+    except Exception:
+        return result
+    try:
+        response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+    except Exception:
+        result["status"] = "list_request_failed"
+        result["request_count"]["list"] = 1
+        return result
+    result["request_count"]["list"] = 1
+    if not isinstance(response, Mapping):
+        result["status"] = "list_response_invalid"
+        result["list"] = {"is_mapping": False}
+        return result
+    contents = response.get("Contents", [])
+    list_result: dict[str, Any] = {
+        "is_mapping": True,
+        "explicit_completeness": type(response.get("IsTruncated")) is bool,
+        "contents_is_list": isinstance(contents, list),
+    }
+    result["list"] = list_result
+    if not isinstance(contents, list):
+        result["status"] = "list_response_invalid"
+        return result
+    list_result["first_object_present"] = bool(contents)
+    if not contents:
+        result["status"] = "observed"
+        return result
+    listed = contents[0]
+    listed_flags, key = _diagnostic_list_object(listed)
+    list_result["first_object"] = listed_flags
+    if key is None:
+        result["status"] = "list_response_invalid"
+        return result
+    try:
+        headed = client.head_object(Bucket=bucket, Key=key)
+    except Exception:
+        result["status"] = "head_request_failed"
+        result["request_count"]["head"] = 1
+        return result
+    result["request_count"]["head"] = 1
+    head_result = _diagnostic_head_object(headed)
+    result["head"] = head_result
+    if not isinstance(headed, Mapping):
+        result["status"] = "head_response_invalid"
+        return result
+    result["parity"] = _diagnostic_parity(listed, headed)
+    result["status"] = "observed"
+    return result
+
+
 def capture_inventory_pass(client: Any, bucket: str, *, max_objects: int) -> tuple[list[dict[str, Any]], dict[str, int | None]]:
     """Enumerate every object once, requiring a valid terminal cursor."""
     if not isinstance(bucket, str) or not bucket:
@@ -215,10 +367,17 @@ def _private_payload(value: Mapping[str, Any]) -> bytes:
 @click.option("--max-objects", default=DEFAULT_MAX_OBJECTS, show_default=True,
               type=click.IntRange(min=1, max=1_000_000))
 @click.option("--plan", "plan_only", is_flag=True, help="Print the bounded request budget without contacting R2.")
-def cli(output: Path | None, max_objects: int, plan_only: bool) -> None:
+@click.option("--diagnose-first-object", is_flag=True,
+              help="Make one list request and at most one head request; emits no object metadata.")
+def cli(output: Path | None, max_objects: int, plan_only: bool, diagnose_first_object: bool) -> None:
     """Create private raw R2 evidence; stdout never contains object keys."""
     reservation = None
     try:
+        if diagnose_first_object:
+            if output is not None or plan_only:
+                raise RehearsalError("R2 diagnostic mode must not combine with output or plan")
+            click.echo(json.dumps(diagnose_first_r2_object(), sort_keys=True))
+            return
         if plan_only:
             click.echo(json.dumps({"status": "plan", "max_objects": max_objects,
                                    "max_list_requests": 2 * (max_objects + 1),

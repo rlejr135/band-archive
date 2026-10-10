@@ -100,6 +100,117 @@ def test_r2_plan_reports_bounded_budget_without_constructing_a_client(monkeypatc
     }
 
 
+def test_r2_diagnostic_is_bounded_and_redacts_first_object_metadata(monkeypatch):
+    listed_modified = NOW.replace(microsecond=123_000)
+    headed_modified = NOW
+    client = FakeReadOnlyR2(
+        [{"IsTruncated": False, "Contents": [{"Key": "private-object-key", "Size": 1,
+                                                  "ETag": "private-list-etag", "LastModified": listed_modified}]}],
+        {"private-object-key": [{"ContentLength": 1, "ETag": "private-list-etag",
+                                  "LastModified": headed_modified}]},
+    )
+    monkeypatch.setenv("S3_ENDPOINT_URL", ENDPOINT)
+    monkeypatch.setenv("S3_BUCKET_NAME", BUCKET)
+    monkeypatch.setenv("S3_ACCESS_KEY", "private-access-key")
+    monkeypatch.setenv("S3_SECRET_KEY", "private-secret-key")
+    monkeypatch.setattr(r2_capture, "_environment_client", lambda: (client, BUCKET, ENDPOINT))
+    result = CliRunner().invoke(r2_capture.cli, ["--diagnose-first-object"])
+    assert result.exit_code == 0
+    observed = json.loads(result.output)
+    assert observed["status"] == "observed"
+    assert observed["request_count"] == {"list": 1, "head": 1}
+    assert observed["parity"]["size_equal"] is True
+    assert observed["parity"]["etag_equal"] is True
+    assert observed["parity"]["last_modified_equal"] is False
+    assert observed["parity"]["last_modified_second_equal"] is True
+    assert observed["list"]["first_object"]["last_modified_has_subsecond"] is True
+    assert observed["head"]["last_modified_has_subsecond"] is False
+    assert [name for name, _ in client.calls] == ["list", "head"]
+    for secret in ("private-object-key", "private-list-etag", "private-access-key", "private-secret-key", ENDPOINT):
+        assert secret not in result.output
+
+
+def test_r2_diagnostic_never_requests_provider_for_invalid_config_or_mode_combinations(monkeypatch, tmp_path):
+    monkeypatch.delenv("S3_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("S3_SECRET_KEY", raising=False)
+    monkeypatch.setattr(r2_capture, "_environment_client", lambda: (_ for _ in ()).throw(AssertionError("network")))
+    result = CliRunner().invoke(r2_capture.cli, ["--diagnose-first-object"])
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "config": {"all_s3_variables_present": False, "endpoint_canonical": False},
+        "request_count": {"head": 0, "list": 0},
+        "status": "config_invalid",
+    }
+    for arguments in (("--diagnose-first-object", "--plan"),
+                      ("--diagnose-first-object", "--output", str(tmp_path / "private.json"))):
+        result = CliRunner().invoke(r2_capture.cli, list(arguments))
+        assert result.exit_code != 0
+        assert result.output == "Error: readonly_r2_inventory_capture_failed\n"
+    assert not (tmp_path / "private.json").exists()
+
+
+def test_r2_diagnostic_suppresses_provider_failure_details(monkeypatch):
+    class FailingList:
+        def list_objects_v2(self, **kwargs):
+            raise RuntimeError("https://private-endpoint private-object-key")
+
+    monkeypatch.setenv("S3_ENDPOINT_URL", ENDPOINT)
+    monkeypatch.setenv("S3_BUCKET_NAME", BUCKET)
+    monkeypatch.setenv("S3_ACCESS_KEY", "private-access-key")
+    monkeypatch.setenv("S3_SECRET_KEY", "private-secret-key")
+    monkeypatch.setattr(r2_capture, "_environment_client", lambda: (FailingList(), BUCKET, ENDPOINT))
+    result = CliRunner().invoke(r2_capture.cli, ["--diagnose-first-object"])
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "config": {"all_s3_variables_present": True, "endpoint_canonical": True},
+        "request_count": {"head": 0, "list": 1},
+        "status": "list_request_failed",
+    }
+    assert "private" not in result.output
+
+
+def test_r2_diagnostic_suppresses_head_failure_details(monkeypatch):
+    class FailingHead:
+        def list_objects_v2(self, **kwargs):
+            return {"IsTruncated": False, "Contents": [{"Key": "private-object-key", "Size": 1,
+                                                            "ETag": "private-list-etag", "LastModified": NOW}]}
+
+        def head_object(self, **kwargs):
+            raise RuntimeError("https://private-endpoint private-object-key")
+
+    monkeypatch.setenv("S3_ENDPOINT_URL", ENDPOINT)
+    monkeypatch.setenv("S3_BUCKET_NAME", BUCKET)
+    monkeypatch.setenv("S3_ACCESS_KEY", "private-access-key")
+    monkeypatch.setenv("S3_SECRET_KEY", "private-secret-key")
+    monkeypatch.setattr(r2_capture, "_environment_client", lambda: (FailingHead(), BUCKET, ENDPOINT))
+    result = CliRunner().invoke(r2_capture.cli, ["--diagnose-first-object"])
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "config": {"all_s3_variables_present": True, "endpoint_canonical": True},
+        "list": {
+            "contents_is_list": True,
+            "explicit_completeness": True,
+            "first_object": {
+                "etag_usable": True,
+                "is_mapping": True,
+                "key_usable": True,
+                "last_modified_has_subsecond": False,
+                "last_modified_has_timezone": True,
+                "last_modified_is_datetime": True,
+                "last_modified_is_millisecond_aligned": True,
+                "size_valid": True,
+            },
+            "first_object_present": True,
+            "is_mapping": True,
+        },
+        "request_count": {"head": 1, "list": 1},
+        "status": "head_request_failed",
+    }
+    assert "private" not in result.output
+
+
 def test_r2_capture_refuses_same_size_overwrite_or_partial_cursor():
     changed_pages = _pages()
     changed_pages[2]["Contents"][0]["ETag"] = "etag-overwritten"
