@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import shutil
 from pathlib import Path
 
 import click
@@ -64,7 +65,12 @@ def _load_verified_reports(restore_report: Path, v12_apply_report: Path, dump_sh
         restore, apply = json.loads(restore_raw), json.loads(apply_raw)
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise RehearsalError("baseline evidence reports are not readable JSON") from error
-    if (restore.get("status") != "local_restore_verified" or not restore.get("restored_matches_source")
+    # The retained verification utility emits the combined status after it has
+    # both restored the immutable v11 dump and upgraded that private copy to
+    # v12.  Do not accept an arbitrary success-looking report: these are the
+    # only two documented, complete restore attestations.
+    if (restore.get("status") not in {"local_restore_verified", "local_restore_and_v12_upgrade_verified"}
+            or not restore.get("restored_matches_source")
             or not restore.get("source_before_after_identical") or restore.get("dump_sha256") != dump_sha256
             or apply.get("status") != "staging_v12_verified"
             or apply.get("expected_source_object_sha256") != restore.get("restored", {}).get("object_sha256")):
@@ -77,7 +83,7 @@ def _domain_digests(connection) -> dict:
     if not REFRESHED_TABLES <= set(metadata.tables):
         raise RehearsalError("offline baseline dump lacks refresh-domain tables")
     rows = connection.execute(text(
-        "SELECT id FROM band WHERE slug=:slug AND is_legacy_import=1 AND created_by_user_id IS NULL"
+        "SELECT id FROM band WHERE slug=:slug AND is_legacy_import IS TRUE AND created_by_user_id IS NULL"
     ), {"slug": LEGACY_BAND_SLUG}).scalars().all()
     if len(rows) != 1:
         raise RehearsalError("offline baseline does not have one ownerless legacy band")
@@ -117,8 +123,8 @@ def cli(baseline_dump: Path, expected_dump_sha256: str, verified_restore_report:
         restore_sha, apply_sha = _load_verified_reports(verified_restore_report, verified_v12_apply_report,
                                                         expected_dump_sha256)
         reservation = _ReservedReportOutput(report_output)
-        with tempfile.TemporaryDirectory(prefix="refresh-baseline-", dir=state_root) as work:
-            work_path = Path(work)
+        work_path = Path(tempfile.mkdtemp(prefix="refresh-baseline-", dir=state_root))
+        try:
             data, log, port = work_path / "pgdata", work_path / "postgres.log", _free_port()
             subprocess.run([str(pg_bin / "initdb.exe"), "--no-locale", "--encoding=UTF8", "--username=postgres",
                             "--auth=trust", "--pgdata", str(data)], check=True, stdout=subprocess.PIPE,
@@ -147,6 +153,19 @@ def cli(baseline_dump: Path, expected_dump_sha256: str, verified_restore_report:
                     domain = _domain_digests(connection)
             finally:
                 engine.dispose()
+        finally:
+            if server is not None:
+                server.terminate()
+                try:
+                    server.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+                    server.wait(timeout=15)
+                server = None
+            if log_handle is not None:
+                log_handle.close()
+                log_handle = None
+            shutil.rmtree(work_path)
         report = {"version": BASELINE_PROOF_VERSION, "status": "offline_v11_baseline_verified",
                   "dump_sha256": expected_dump_sha256, "verified_restore_report_sha256": restore_sha,
                   "verified_v12_apply_report_sha256": apply_sha, "legacy_domain": {"table_digests": domain}}

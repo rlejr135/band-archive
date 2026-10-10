@@ -66,6 +66,7 @@ Push-Location backend
   --expected-target-host '<approved staging pooler host>' `
   --expected-target-database '<approved staging database>' `
   --expected-target-schema public `
+  --approved-tls-ca-sha256 '<reviewed CA bundle SHA-256>' `
   --write-freeze-attestation E:\operator\attestations\fly-latest-freeze.json `
   --reviewed-baseline-profile E:\operator\evidence\v11-v12-reviewed-profile.json `
   --readonly-object-manifest-proof E:\operator\evidence\fly-latest-r2-list-head.json `
@@ -82,9 +83,19 @@ source rows parent-to-child while remapping only the legacy `band_id`, resets
 sequences, and proves protected identity is unchanged. Source rows requiring
 membership/account mapping are refused. A separate snapshot-bound read-only
 R2 list/head proof is required and compared with the refreshed manifest; the
-tool cannot list or mutate R2 itself. Atomic report publication happens before
-commit; any profile, source, FK, object-manifest, or report failure rolls back
-the transaction.
+tool cannot list or mutate R2 itself. The immutable main report is published
+before commit with `status: "prepared"`; only after PostgreSQL commits and the
+tool reconnects to verify the database does it atomically publish the adjacent
+`.committed` marker. A prepared report is never success evidence. Any
+pre-commit profile, source, FK, object-manifest, or report failure rolls back
+the transaction; a post-commit marker failure leaves no completed marker.
+
+Every operator-facing PostgreSQL URL must include `sslmode=verify-full` and an
+`sslrootcert` file. The tool hashes that exact CA bundle and refuses to connect
+unless it equals `--approved-tls-ca-sha256`; libpq host, database, service, and
+options overrides are also refused. The private localhost PostgreSQL instance
+used by the offline baseline builder is a separate internal fixture and never
+accepts an operator target URL.
 
 No Fly-volume action, deployment, Supabase DDL, R2 action, or git push is part
 of this command. A new source snapshot is required immediately before every

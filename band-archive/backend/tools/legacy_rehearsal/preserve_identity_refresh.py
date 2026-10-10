@@ -83,12 +83,24 @@ def _assert_schema(connection: Connection) -> MetaData:
     return _read_metadata(connection)
 
 
-def _validate_refresh_url(database_url: str) -> None:
-    """Reject libpq query overrides before an engine can interpret them."""
+def _validate_refresh_url(database_url: str, *, approved_tls_ca_sha256: str) -> None:
+    """Reject connection indirection and require a pinned verify-full CA."""
     url = make_url(database_url)
     forbidden = {"host", "hostaddr", "port", "dbname", "database", "service", "servicefile", "options"}
     if url.get_backend_name() != "postgresql" or forbidden & set(url.query):
         raise RehearsalError("refresh target URL has an unsafe connection identity override")
+    if (not isinstance(approved_tls_ca_sha256, str) or len(approved_tls_ca_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in approved_tls_ca_sha256)):
+        raise RehearsalError("refresh target TLS CA approval is invalid")
+    if url.query.get("sslmode") != "verify-full" or not isinstance(url.query.get("sslrootcert"), str):
+        raise RehearsalError("refresh target must use sslmode=verify-full with an approved TLS CA")
+    try:
+        ca_path = Path(url.query["sslrootcert"])
+        ca_digest = hashlib.sha256(ca_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise RehearsalError("refresh target approved TLS CA is unavailable") from error
+    if ca_digest != approved_tls_ca_sha256:
+        raise RehearsalError("refresh target TLS CA differs from the approved fingerprint")
 
 
 def _all_rows(connection: Connection, table: Any) -> list[Mapping[str, Any]]:
@@ -220,7 +232,7 @@ def load_readonly_object_proof(path: Path, source_fingerprint: Mapping[str, Any]
 def _target_identity(connection: Connection) -> tuple[int, int]:
     """Prove the single claimed legacy topology, returning user/band ids privately."""
     user_rows = connection.execute(text(
-        "SELECT id FROM app_user WHERE status='active' AND email_verified=1 AND is_platform_admin=1"
+        "SELECT id FROM app_user WHERE status='active' AND email_verified IS TRUE AND is_platform_admin IS TRUE"
     )).scalars().all()
     if len(user_rows) != 1 or connection.execute(text("SELECT count(*) FROM app_user")).scalar_one() != 1:
         raise RehearsalError("refresh target has unexpected users")
@@ -229,7 +241,7 @@ def _target_identity(connection: Connection) -> tuple[int, int]:
     if bootstrap != [user_id]:
         raise RehearsalError("refresh target bootstrap identity is inconsistent")
     bands = connection.execute(text(
-        "SELECT id, created_by_user_id FROM band WHERE slug=:slug AND is_legacy_import=1"
+        "SELECT id, created_by_user_id FROM band WHERE slug=:slug AND is_legacy_import IS TRUE"
     ), {"slug": LEGACY_BAND_SLUG}).mappings().all()
     if len(bands) != 1 or connection.execute(text("SELECT count(*) FROM band")).scalar_one() != 1:
         raise RehearsalError("refresh target has unexpected or ambiguous bands")
@@ -278,7 +290,7 @@ def _assert_profile(connection: Connection, profile: Mapping[str, Any]) -> int:
 
 def _source_band_id(connection: Connection) -> int:
     rows = connection.execute(text(
-        "SELECT id, created_by_user_id FROM band WHERE slug=:slug AND is_legacy_import=1"
+        "SELECT id, created_by_user_id FROM band WHERE slug=:slug AND is_legacy_import IS TRUE"
     ), {"slug": LEGACY_BAND_SLUG}).mappings().all()
     if len(rows) != 1 or rows[0]["created_by_user_id"] is not None:
         raise RehearsalError("source backfill did not create one ownerless legacy band")
@@ -409,10 +421,12 @@ def _source_domain_digests(connection: Connection, source_band_id: int, target_b
 def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expected_target_host: str,
                                   expected_target_database: str, expected_target_schema: str,
                                   source_write_freeze_attestation: Mapping[str, Any],
-                                  reviewed_profile: Mapping[str, Any], object_proof: Mapping[str, Any], dry_run: bool = False,
-                                  report_publisher: Any = None) -> dict[str, Any]:
+                                  reviewed_profile: Mapping[str, Any], object_proof: Mapping[str, Any],
+                                  approved_tls_ca_sha256: str = "",
+                                  dry_run: bool = False,
+                                  report_publisher: Any = None, committed_marker_publisher: Any = None) -> dict[str, Any]:
     """Run one reviewed refresh.  Caller must have loaded strict sidecars first."""
-    _validate_refresh_url(target_url)
+    _validate_refresh_url(target_url, approved_tls_ca_sha256=approved_tls_ca_sha256)
     identity = _validate_target_url(target_url, expected_target_host=expected_target_host,
                                     expected_target_database=expected_target_database,
                                     expected_target_schema=expected_target_schema,
@@ -460,6 +474,7 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
                         if report_publisher:
                             report_publisher(result)
                         return result
+                    prepared_report_sha256 = None
                     with engine.begin() as target:
                         target.execute(text("SET LOCAL lock_timeout = '1s'"))
                         target.execute(text("SELECT pg_advisory_xact_lock(hashtext('phase9-preserve-identity-refresh-v1'))"))
@@ -497,13 +512,31 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
                             raise RehearsalError("refresh read-only object proof differs from refreshed manifest; transaction rolled back")
                         result.update({"inserted": inserted, "after_domain": expected_domain,
                                        "protected_identity_unchanged": True,
-                                       "reconciliation": reconciliation})
+                                       "reconciliation": reconciliation, "status": "prepared"})
                         result["source_files"]["source_after"] = _file_fingerprint(source_path)
                         if result["source_files"]["source_before"] != result["source_files"]["source_after"]:
                             raise RehearsalError("source SQLite snapshot changed during refresh")
-                        if report_publisher:
-                            report_publisher(result)
-                        return result
+                        prepared_report_sha256 = report_publisher(result) if report_publisher else None
+                    # ``engine.begin`` has committed successfully at this point.
+                    # Reconnect to prove the durable state before issuing the
+                    # separate committed marker; the immutable prepared report
+                    # must never claim success by itself.
+                    with engine.connect() as target:
+                        if (target.execute(text("SELECT current_schema()")).scalar_one() != identity["schema"]
+                                or target.execute(text("SELECT current_database()")).scalar_one() != expected_target_database):
+                            raise RehearsalError("refresh target identity changed after commit")
+                        if _table_digests(target, PROTECTED_TABLES) != protected_before:
+                            raise RehearsalError("refresh protected identity differs after commit")
+                        if _table_digests(target, REFRESHED_TABLES, band_id=target_band_id) != expected_domain:
+                            raise RehearsalError("refresh domain differs after commit")
+                    if committed_marker_publisher:
+                        committed_marker_publisher({
+                            "version": "phase9-preserve-identity-refresh-commit-v1",
+                            "status": "committed", "prepared_report_sha256": prepared_report_sha256,
+                            "target": safe_target_identity(target_url),
+                            "protected_identity_unchanged": True, "after_domain": expected_domain,
+                        })
+                    return result
             finally:
                 source_engine.dispose()
     except RehearsalError:
@@ -522,18 +555,22 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
 @click.option("--expected-target-host", required=True)
 @click.option("--expected-target-database", required=True)
 @click.option("--expected-target-schema", required=True)
+@click.option("--approved-tls-ca-sha256", required=True)
 @click.option("--write-freeze-attestation", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--reviewed-baseline-profile", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--readonly-object-manifest-proof", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--report-output", required=True, type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--dry-run", is_flag=True)
 def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expected_target_database: str,
-        expected_target_schema: str, write_freeze_attestation: Path, reviewed_baseline_profile: Path,
+        expected_target_schema: str, approved_tls_ca_sha256: str, write_freeze_attestation: Path, reviewed_baseline_profile: Path,
         readonly_object_manifest_proof: Path, report_output: Path, dry_run: bool) -> None:
     """Refresh only an already-reviewed, claimed staging legacy archive."""
     reservation = None
+    committed_reservation = None
     try:
         reservation = _ReservedReportOutput(report_output)
+        if not dry_run:
+            committed_reservation = _ReservedReportOutput(Path(f"{report_output}.committed"))
         profile = load_reviewed_profile(reviewed_baseline_profile)
         source_fingerprint = _file_fingerprint(preflight_sqlite_snapshot(str(source_sqlite)))
         attestation = load_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
@@ -541,11 +578,19 @@ def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expecte
         run_preserve_identity_refresh(
             str(source_sqlite), target_url, expected_target_host=expected_target_host,
             expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
-            source_write_freeze_attestation=attestation, reviewed_profile=profile, object_proof=object_proof, dry_run=dry_run,
+            source_write_freeze_attestation=attestation, reviewed_profile=profile, object_proof=object_proof,
+            approved_tls_ca_sha256=approved_tls_ca_sha256, dry_run=dry_run,
             report_publisher=reservation.publish,
+            committed_marker_publisher=committed_reservation.publish if committed_reservation else None,
         )
-        click.echo(f"report_written sha256={reservation.retain()}")
+        prepared_sha = reservation.retain()
+        if committed_reservation is not None:
+            click.echo(f"prepared_report_sha256={prepared_sha} committed_marker_sha256={committed_reservation.retain()}")
+        else:
+            click.echo(f"report_written sha256={prepared_sha}")
     except Exception as error:
+        if committed_reservation is not None:
+            committed_reservation.abort()
         if reservation is not None:
             reservation.abort()
         raise click.ClickException("preserve_identity_refresh_failed") from error
