@@ -89,6 +89,49 @@ It requires a fresh source freeze and a reviewed v11/v12 provenance-pinned
 baseline sidecar, preserves all account/claim/audit identity rows, and has no
 R2 mutation capability.
 
+#### Verified preparation checkpoint — 2026-10-11 KST (not GO or approval)
+
+The following local preparation checks are complete; they do not authorize a
+remote migration or cutover:
+
+- The official Supabase Dashboard production CA bundle (`prod-ca-2021.crt`)
+  was fingerprint-pinned. A `verify-full` connection passed the required
+  hostname and TLS checks.
+- A public-only v12 backup was restored into a newly owned local PostgreSQL
+  17.11 instance. The source inventory matched the pre- and post-backup
+  inventories, and the backup dump SHA-256 was independently verified. The
+  restore matched across all 28 tables for row counts, catalog, foreign keys,
+  sequences, and ownership.
+- A local v13 migration simulation preserved account, claim, audit, and content
+  data. The v12 baseline had RLS disabled; v13 enabled non-forced RLS on all 28
+  tables. The v13 migration reduced anonymous/authenticated table and sequence
+  grants and default ACL grants to zero. Owner CRUD privilege checks covered
+  four privileges across all 28 tables; an actual single CRUD probe was rolled
+  back and verified. The owned local cluster is stopped.
+- Focused helper tests (13), read-only capture adapter tests (12), and direct
+  CLI checks (11) passed.
+- The latest preliminary Fly snapshot and R2 inventory comparison observed 143
+  objects. All 142 required references were present, with no missing required
+  objects, size mismatches, foreign-key or object-manifest defects; 55 retired
+  references were absent. One unreferenced object remains present and retained;
+  it has no deletion approval. This preliminary snapshot is not frozen, and
+  the old staging content has not been refreshed from it.
+
+Remote Supabase remains at v12. No remote DDL, Fly or Cloudflare deployment,
+Git push, R2 mutation, or writer freeze occurred. The local operator helper
+and its ignored evidence are private preparation artifacts, not a portable
+public workflow; follow the existing refresh contract linked above rather
+than inventing commands or transferring private artifacts into public
+documentation. Backup Auth/Storage material is excluded from this checkpoint.
+Do not publish operator-private evidence or include account emails, URLs,
+credentials, bucket names, object paths, or signed URLs in reports.
+
+Next gates remain separate: explicit approval for remote v13 after a verified
+backup; then, before any identity refresh, a final writer freeze and fresh
+snapshot, independently approved account/bucket pins, review of the retained
+orphan, and the protected baseline profile. Cutover deployment requires its
+own further approval. This checkpoint is not a GO decision.
+
 After import, reconcile database rows, FKs, score aggregates, comment trees,
 and the R2 manifest before deploying the PostgreSQL backend. Keep SQLite and
 its Fly volume snapshot as recovery material.
