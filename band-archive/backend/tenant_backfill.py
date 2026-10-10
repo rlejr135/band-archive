@@ -87,7 +87,7 @@ def _counts(connection):
 def _legacy_band(connection):
     rows = connection.execute(text(
         'SELECT id, slug, is_legacy_import, created_by_user_id FROM band '
-        'WHERE is_legacy_import = 1 OR slug = :slug ORDER BY id'
+        'WHERE is_legacy_import IS TRUE OR slug = :slug ORDER BY id'
     ), {'slug': LEGACY_BAND_SLUG}).mappings().all()
     if len(rows) > 1:
         raise TenantBackfillError('ambiguous legacy band: more than one legacy marker/slug exists')
@@ -105,7 +105,7 @@ def _legacy_band(connection):
     connection.execute(text(
         'INSERT INTO band (name, slug, description, default_visibility, member_roster_public, '
         'storage_quota_bytes, created_by_user_id, is_legacy_import, created_at, updated_at) '
-        'VALUES (:name, :slug, :description, :visibility, :roster, :quota, NULL, 1, :now, :now)'
+        'VALUES (:name, :slug, :description, :visibility, :roster, :quota, NULL, TRUE, :now, :now)'
     ), {'name': LEGACY_BAND_NAME, 'slug': slug, 'description': 'Imported legacy archive; ownerless until claimed.',
         'visibility': 'PUBLIC', 'roster': True, 'quota': 20 * 1024 * 1024 * 1024, 'now': _now()})
     return connection.execute(text('SELECT id FROM band WHERE slug = :slug'), {'slug': slug}).scalar_one()
@@ -238,7 +238,7 @@ def plan(connection):
     """Read-only preflight report. Calling this never opens a transaction to write."""
     state = connection.execute(text('SELECT status, report_json FROM tenant_backfill_state WHERE key=:key'),
                                {'key': STATE_KEY}).mappings().first()
-    band_rows = connection.execute(text('SELECT id FROM band WHERE is_legacy_import=1')).scalars().all()
+    band_rows = connection.execute(text('SELECT id FROM band WHERE is_legacy_import IS TRUE')).scalars().all()
     if len(band_rows) > 1:
         raise TenantBackfillError('ambiguous legacy band markers')
     # Existing marker permits a resumable re-plan; absent marker uses a virtual
@@ -279,7 +279,7 @@ def apply(connection):
         connection.execute(text(f'UPDATE {table} SET band_id=:band WHERE band_id IS NULL'), {'band': band_id})
     for table in ('song_vote', 'media_vote', 'comment', 'multipart_upload_session',
                   'personal_log_multipart_upload_session'):
-        connection.execute(text(f'UPDATE {table} SET is_legacy=1'))
+        connection.execute(text(f'UPDATE {table} SET is_legacy=TRUE'))
     updates, unresolved = _object_manifest(connection)
     if unresolved:
         raise TenantBackfillError('unresolved object keys during apply')
@@ -289,7 +289,7 @@ def apply(connection):
     if defects:
         raise TenantBackfillError('cross-scope relationships: ' + json.dumps(defects))
     for comment_id, scoped_band_id in comment_scopes.items():
-        connection.execute(text('UPDATE comment SET band_id=:band, is_legacy=1 WHERE id=:id'),
+        connection.execute(text('UPDATE comment SET band_id=:band, is_legacy=TRUE WHERE id=:id'),
                            {'band': scoped_band_id, 'id': comment_id})
     # Recheck after recursive comment assignment and capture only non-secret
     # metadata in the operator marker.

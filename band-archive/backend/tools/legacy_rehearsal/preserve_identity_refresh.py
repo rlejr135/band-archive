@@ -397,13 +397,16 @@ def _advance_postgres_sequences_monotonic(connection: Connection, metadata: Meta
         )).scalar_one()
         if maximum is None:
             continue
-        current = connection.execute(text(
-            "SELECT last_value FROM pg_sequences WHERE schemaname=current_schema() "
-            "AND sequencename=regexp_replace(:sequence, '^.*\\.', '')"
-        ), {"sequence": sequence}).scalar_one_or_none()
-        if current is None:
+        sequence_state = connection.execute(text(
+            "SELECT s.last_value, s.schemaname FROM pg_sequences s "
+            "JOIN pg_class c ON c.relname=s.sequencename "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname=s.schemaname "
+            "WHERE c.oid=to_regclass(:sequence)"
+        ), {"sequence": sequence}).one_or_none()
+        if sequence_state is None or sequence_state.schemaname != connection.execute(text("SELECT current_schema()")).scalar_one():
             raise RehearsalError("refresh sequence is outside the expected schema")
-        if maximum > current:
+        current = sequence_state.last_value
+        if current is None or maximum > current:
             connection.execute(text("SELECT setval(:sequence, :value, true)"), {
                 "sequence": sequence, "value": maximum,
             })
@@ -592,6 +595,11 @@ def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expecte
         if committed_reservation is not None:
             committed_reservation.abort()
         if reservation is not None:
+            # Once the prepared report is durable, a commit or committed-marker
+            # failure must leave it behind as evidence.  Its status is still
+            # prepared, so it cannot be mistaken for a completed refresh.
+            if reservation.published:
+                reservation.retain()
             reservation.abort()
         raise click.ClickException("preserve_identity_refresh_failed") from error
 

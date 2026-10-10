@@ -262,7 +262,13 @@ class _ReservedReportOutput:
         if self.descriptor >= 0:
             os.close(self.descriptor)
             self.descriptor = -1
-        if self._destination_linked and self._published_identity is not None and os.path.lexists(self.destination):
+        # A caller that explicitly retained a published report has crossed a
+        # durable evidence boundary (for example, a target commit may already
+        # have happened).  Never erase that prepared evidence during later
+        # cleanup; an absent committed marker communicates the incomplete
+        # outcome.
+        if (not self.retained and self._destination_linked and self._published_identity is not None
+                and os.path.lexists(self.destination)):
             try:
                 _unlink_owned_path(self.destination, self._published_identity)
             except OSError:
