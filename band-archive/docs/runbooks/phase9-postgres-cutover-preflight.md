@@ -117,20 +117,43 @@ remote migration or cutover:
   it has no deletion approval. This preliminary snapshot is not frozen, and
   the old staging content has not been refreshed from it.
 
-Remote Supabase remains at v12. No remote DDL, Fly or Cloudflare deployment,
-Git push, R2 mutation, or writer freeze occurred. The local operator helper
-and its ignored evidence are private preparation artifacts, not a portable
-public workflow; follow the existing refresh contract linked above rather
-than inventing commands or transferring private artifacts into public
-documentation. Backup Auth/Storage material is excluded from this checkpoint.
-Do not publish operator-private evidence or include account emails, URLs,
-credentials, bucket names, object paths, or signed URLs in reports.
+At that preparation checkpoint, remote Supabase was still at v12; no remote
+DDL, Fly or Cloudflare deployment, Git push, R2 mutation, or writer freeze had
+occurred. The local operator helper and its ignored evidence are private
+preparation artifacts, not a portable public workflow; follow the existing
+refresh contract linked above rather than inventing commands or transferring
+private artifacts into public documentation. Backup Auth/Storage material is
+excluded. Do not publish operator-private evidence or include account emails,
+URLs, credentials, bucket names, object paths, or signed URLs in reports.
 
-Next gates remain separate: explicit approval for remote v13 after a verified
-backup; then, before any identity refresh, a final writer freeze and fresh
-snapshot, independently approved account/bucket pins, review of the retained
-orphan, and the protected baseline profile. Cutover deployment requires its
-own further approval. This checkpoint is not a GO decision.
+#### Verified Supabase security checkpoint — 2026-10-11 KST (not cutover approval)
+
+The separately approved remote v12-to-v13 security migration completed and was
+independently verified through a fresh read-only connection:
+
+- Revision `20261010_13` is applied. All 28 public application tables have
+  non-forced RLS enabled. PUBLIC table and sequence grants, effective
+  `anon`/`authenticated` table and sequence privileges, and unsafe global or
+  schema defaults are zero.
+- Owner CRUD privilege checks cover four privileges across all 28 tables.
+  The trusted service-role privilege matrix and reviewed role attributes were
+  preserved. Account, claim, audit, and content rows, catalog, and sequence
+  state match the pre-migration evidence.
+- With the public key, protected Data API reads for the four representative
+  application tables returned permission-denied responses (`401`, code
+  `42501`) after the migration; before it, each returned `200` with an empty
+  result. The operator and migration test suites passed (10 operator tests;
+  61 migration tests).
+
+This checkpoint records only the approved security hardening. The Fly SQLite
+snapshot remains unchanged, and old staging content has not been refreshed
+from it. No deployment, Git push, R2 mutation, or writer freeze occurred. This
+is not approval for identity refresh or application cutover.
+
+Before any identity refresh, require separate authority, a final writer freeze
+and fresh snapshot, independently approved account and bucket pins, review of
+the retained orphan, and the protected baseline profile. Cutover deployment
+requires its own further approval. These gates remain open.
 
 After import, reconcile database rows, FKs, score aggregates, comment trees,
 and the R2 manifest before deploying the PostgreSQL backend. Keep SQLite and
