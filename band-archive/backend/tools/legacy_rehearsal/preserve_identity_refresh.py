@@ -32,7 +32,8 @@ from tools.legacy_rehearsal.rehearsal import (
 
 
 PROFILE_VERSION = "phase9-preserve-identity-refresh-v1"
-OBJECT_PROOF_VERSION = "phase9-r2-readonly-manifest-v1"
+OBJECT_PROOF_VERSION = "phase9-r2-readonly-manifest-v2"
+OBJECT_DISPOSITION_APPROVAL_VERSION = "phase9-r2-readonly-disposition-approval-v1"
 PROTECTED_TABLES = frozenset({
     "app_user", "auth_bootstrap_state", "band", "band_membership",
     "legacy_band_claim_token", "audit_event", "tenant_backfill_state",
@@ -151,6 +152,25 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _is_sha256(value: Any) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
+
+
+def _require_pinned_file_digest(raw: bytes, expected_sha256: str, label: str) -> None:
+    """Require an out-of-band pin before trusting a local operator sidecar."""
+    if not _is_sha256(expected_sha256):
+        raise RehearsalError(f"{label} expected SHA-256 is invalid")
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise RehearsalError(f"{label} differs from its externally approved SHA-256")
+
+
+def _inventory_sha256(objects: list[Mapping[str, Any]]) -> str:
+    """Hash a complete, key-sorted list/head inventory with no implied R2 access."""
+    return _sha256(sorted(({"key": item["key"], "size": item["size"]} for item in objects),
+                          key=lambda item: item["key"]))
+
+
 def _validate_digest_map(value: Any, tables: frozenset[str], label: str) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict) or set(value) != set(tables):
         raise RehearsalError(f"reviewed profile {label} table set is invalid")
@@ -162,10 +182,13 @@ def _validate_digest_map(value: Any, tables: frozenset[str], label: str) -> dict
     return value
 
 
-def load_reviewed_profile(path: Path) -> dict[str, Any]:
+def load_reviewed_profile(path: Path, expected_sha256: str | None = None) -> dict[str, Any]:
     """Read a pre-reviewed sidecar; this module intentionally cannot create it."""
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        if expected_sha256 is not None:
+            _require_pinned_file_digest(raw, expected_sha256, "reviewed baseline profile")
+        value = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise RehearsalError("reviewed baseline profile is not readable JSON") from error
     required = {"version", "target_writes_frozen", "provenance", "protected", "legacy_domain"}
@@ -210,23 +233,101 @@ def load_reviewed_profile(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_readonly_object_proof(path: Path, source_fingerprint: Mapping[str, Any]) -> dict[str, Any]:
-    """Load a snapshot-bound list/head result; no storage client is available here."""
+def load_readonly_object_proof(path: Path, source_fingerprint: Mapping[str, Any], *, expected_sha256: str,
+                               expected_account_sha256: str, expected_bucket_sha256: str) -> dict[str, Any]:
+    """Load a complete, snapshot-bound list/head assertion; no storage client is available here."""
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        _require_pinned_file_digest(raw, expected_sha256, "read-only object manifest proof")
+        value = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise RehearsalError("read-only object manifest proof is not readable JSON") from error
-    if not isinstance(value, dict) or set(value) != {"version", "source_snapshot", "objects"}:
+    if not isinstance(value, dict) or set(value) != {"version", "source_snapshot", "capture", "objects"}:
         raise RehearsalError("read-only object manifest proof has an invalid shape")
     if value["version"] != OBJECT_PROOF_VERSION or value["source_snapshot"] != dict(source_fingerprint):
         raise RehearsalError("read-only object manifest proof is not bound to the frozen source snapshot")
+    capture = value["capture"]
+    capture_keys = {"method", "capture_id", "inventory_complete", "inventory_count", "inventory_sha256",
+                    "account_sha256", "bucket_sha256"}
+    if (not isinstance(capture, dict) or set(capture) != capture_keys
+            or capture["method"] != "operator-readonly-list-head"
+            or not isinstance(capture["capture_id"], str) or not capture["capture_id"]
+            or capture["inventory_complete"] is not True or type(capture["inventory_count"]) is not int
+            or capture["inventory_count"] < 0 or not _is_sha256(capture["inventory_sha256"])
+            or not _is_sha256(capture["account_sha256"]) or not _is_sha256(capture["bucket_sha256"])):
+        raise RehearsalError("read-only object manifest proof capture identity is invalid")
+    if (not _is_sha256(expected_account_sha256) or not _is_sha256(expected_bucket_sha256)
+            or capture["account_sha256"] != expected_account_sha256
+            or capture["bucket_sha256"] != expected_bucket_sha256):
+        raise RehearsalError("read-only object manifest proof account or bucket differs from the approved identity")
     if not isinstance(value["objects"], list):
         raise RehearsalError("read-only object manifest proof has invalid objects")
+    keys = set()
     for item in value["objects"]:
-        if (not isinstance(item, dict) or set(item) - {"key", "size"} or not isinstance(item.get("key"), str)
-                or not item["key"] or ("size" in item and (type(item["size"]) is not int or item["size"] < 0))):
+        if (not isinstance(item, dict) or set(item) != {"key", "size"} or not isinstance(item.get("key"), str)
+                or not item["key"] or type(item["size"]) is not int or item["size"] < 0 or item["key"] in keys):
             raise RehearsalError("read-only object manifest proof has invalid objects")
+        keys.add(item["key"])
+    if (capture["inventory_count"] != len(value["objects"])
+            or capture["inventory_sha256"] != _inventory_sha256(value["objects"])):
+        raise RehearsalError("read-only object manifest proof inventory is incomplete or differs from its capture identity")
     return value
+
+
+def load_approved_object_dispositions(path: Path, *, expected_sha256: str,
+                                      source_fingerprint: Mapping[str, Any],
+                                      object_proof: Mapping[str, Any]) -> dict[str, Any]:
+    """Load reviewed, retain-only exceptions bound to one immutable inventory."""
+    try:
+        raw = path.read_bytes()
+        _require_pinned_file_digest(raw, expected_sha256, "object disposition approval")
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RehearsalError("object disposition approval is not readable JSON") from error
+    if (not isinstance(value, dict) or set(value) != {"version", "dispositions"}
+            or value["version"] != OBJECT_DISPOSITION_APPROVAL_VERSION or not isinstance(value["dispositions"], list)):
+        raise RehearsalError("object disposition approval has an invalid shape")
+    capture = object_proof.get("capture") if isinstance(object_proof, Mapping) else None
+    if not isinstance(capture, Mapping):
+        raise RehearsalError("object disposition approval lacks a validated object-proof capture")
+    required = {"key", "kind", "action", "source_snapshot", "account_sha256", "bucket_sha256",
+                "inventory_sha256", "capture_id", "approval_provenance"}
+    seen = set()
+    for item in value["dispositions"]:
+        if (not isinstance(item, dict) or set(item) != required or not isinstance(item["key"], str) or not item["key"]
+                or item["key"] in seen or item["kind"] not in {"orphan", "retired"}
+                or item["action"] != "retain_no_mutation" or item["source_snapshot"] != dict(source_fingerprint)
+                or item["account_sha256"] != capture["account_sha256"]
+                or item["bucket_sha256"] != capture["bucket_sha256"]
+                or item["inventory_sha256"] != capture["inventory_sha256"]
+                or item["capture_id"] != capture["capture_id"]
+                or item["approval_provenance"] != "operator-reviewed"):
+            raise RehearsalError("object disposition approval is not bound to the reviewed source and inventory")
+        seen.add(item["key"])
+    return value
+
+
+def _assert_object_inventory_dispositions(reconciliation: Mapping[str, Any], object_proof: Mapping[str, Any],
+                                          approved_dispositions: Mapping[str, Any] | None) -> None:
+    """Require every surplus/retired object to have one retain-only reviewed disposition."""
+    comparison = reconciliation.get("object_comparison", {})
+    manifest = reconciliation.get("object_manifest", [])
+    if not isinstance(comparison, Mapping) or not isinstance(manifest, list):
+        raise RehearsalError("refresh reconciliation has no object lifecycle evidence")
+    expected = {item["key"]: item for item in manifest if isinstance(item, Mapping) and isinstance(item.get("key"), str)}
+    actual_keys = {item["key"] for item in object_proof.get("objects", []) if isinstance(item, Mapping)}
+    retired_present = set(comparison.get("retired_still_present", []))
+    orphaned = actual_keys - set(expected)
+    required_dispositions = {
+        **{key: "retired" for key in retired_present},
+        **{key: "orphan" for key in orphaned},
+    }
+    approved = approved_dispositions.get("dispositions", []) if isinstance(approved_dispositions, Mapping) else []
+    approved_by_key = {item["key"]: item for item in approved if isinstance(item, Mapping) and isinstance(item.get("key"), str)}
+    if set(approved_by_key) != set(required_dispositions):
+        raise RehearsalError("read-only object inventory has unreviewed or stale object dispositions")
+    if any(approved_by_key[key].get("kind") != kind for key, kind in required_dispositions.items()):
+        raise RehearsalError("read-only object inventory disposition kind differs from reconciliation")
 
 
 def _target_identity(connection: Connection) -> tuple[int, int]:
@@ -425,6 +526,7 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
                                   expected_target_database: str, expected_target_schema: str,
                                   source_write_freeze_attestation: Mapping[str, Any],
                                   reviewed_profile: Mapping[str, Any], object_proof: Mapping[str, Any],
+                                  approved_object_dispositions: Mapping[str, Any] | None = None,
                                   approved_tls_ca_sha256: str = "",
                                   dry_run: bool = False,
                                   report_publisher: Any = None, committed_marker_publisher: Any = None) -> dict[str, Any]:
@@ -513,6 +615,7 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
                         comparison = reconciliation.get("object_comparison", {})
                         if comparison.get("missing_required") or comparison.get("size_mismatches"):
                             raise RehearsalError("refresh read-only object proof differs from refreshed manifest; transaction rolled back")
+                        _assert_object_inventory_dispositions(reconciliation, object_proof, approved_object_dispositions)
                         result.update({"inserted": inserted, "after_domain": expected_domain,
                                        "protected_identity_unchanged": True,
                                        "reconciliation": reconciliation, "status": "prepared"})
@@ -561,12 +664,21 @@ def run_preserve_identity_refresh(source_sqlite: str, target_url: str, *, expect
 @click.option("--approved-tls-ca-sha256", required=True)
 @click.option("--write-freeze-attestation", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--reviewed-baseline-profile", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--expected-reviewed-baseline-profile-sha256", required=True)
 @click.option("--readonly-object-manifest-proof", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--expected-readonly-object-manifest-proof-sha256", required=True)
+@click.option("--expected-object-account-sha256", required=True)
+@click.option("--expected-object-bucket-sha256", required=True)
+@click.option("--approved-object-disposition-manifest", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--expected-approved-object-disposition-manifest-sha256", required=True)
 @click.option("--report-output", required=True, type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--dry-run", is_flag=True)
 def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expected_target_database: str,
         expected_target_schema: str, approved_tls_ca_sha256: str, write_freeze_attestation: Path, reviewed_baseline_profile: Path,
-        readonly_object_manifest_proof: Path, report_output: Path, dry_run: bool) -> None:
+        expected_reviewed_baseline_profile_sha256: str, readonly_object_manifest_proof: Path,
+        expected_readonly_object_manifest_proof_sha256: str, expected_object_account_sha256: str,
+        expected_object_bucket_sha256: str, approved_object_disposition_manifest: Path,
+        expected_approved_object_disposition_manifest_sha256: str, report_output: Path, dry_run: bool) -> None:
     """Refresh only an already-reviewed, claimed staging legacy archive."""
     reservation = None
     committed_reservation = None
@@ -574,14 +686,27 @@ def cli(source_sqlite: Path, target_url: str, expected_target_host: str, expecte
         reservation = _ReservedReportOutput(report_output)
         if not dry_run:
             committed_reservation = _ReservedReportOutput(Path(f"{report_output}.committed"))
-        profile = load_reviewed_profile(reviewed_baseline_profile)
+        # Pin every operator artifact before the target engine is opened.  The
+        # pins attest local review, not authenticity of a remote R2 response.
+        profile = load_reviewed_profile(reviewed_baseline_profile, expected_reviewed_baseline_profile_sha256)
         source_fingerprint = _file_fingerprint(preflight_sqlite_snapshot(str(source_sqlite)))
         attestation = load_write_freeze_attestation(write_freeze_attestation, source_fingerprint)
-        object_proof = load_readonly_object_proof(readonly_object_manifest_proof, source_fingerprint)
+        object_proof = load_readonly_object_proof(
+            readonly_object_manifest_proof, source_fingerprint,
+            expected_sha256=expected_readonly_object_manifest_proof_sha256,
+            expected_account_sha256=expected_object_account_sha256,
+            expected_bucket_sha256=expected_object_bucket_sha256,
+        )
+        object_dispositions = load_approved_object_dispositions(
+            approved_object_disposition_manifest,
+            expected_sha256=expected_approved_object_disposition_manifest_sha256,
+            source_fingerprint=source_fingerprint, object_proof=object_proof,
+        )
         run_preserve_identity_refresh(
             str(source_sqlite), target_url, expected_target_host=expected_target_host,
             expected_target_database=expected_target_database, expected_target_schema=expected_target_schema,
             source_write_freeze_attestation=attestation, reviewed_profile=profile, object_proof=object_proof,
+            approved_object_dispositions=object_dispositions,
             approved_tls_ca_sha256=approved_tls_ca_sha256, dry_run=dry_run,
             report_publisher=reservation.publish,
             committed_marker_publisher=committed_reservation.publish if committed_reservation else None,

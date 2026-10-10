@@ -13,9 +13,10 @@ def test_cli_keeps_prepared_report_when_post_publication_step_fails(tmp_path, mo
     sqlite3.connect(source).close()
 
     import tools.legacy_rehearsal.preserve_identity_refresh as refresh
-    monkeypatch.setattr(refresh, "load_reviewed_profile", lambda path: {"version": "phase9-preserve-identity-refresh-v1"})
+    monkeypatch.setattr(refresh, "load_reviewed_profile", lambda path, digest: {"version": "phase9-preserve-identity-refresh-v1"})
     monkeypatch.setattr(refresh, "load_write_freeze_attestation", lambda path, fingerprint: {})
-    monkeypatch.setattr(refresh, "load_readonly_object_proof", lambda path, fingerprint: {"objects": []})
+    monkeypatch.setattr(refresh, "load_readonly_object_proof", lambda path, fingerprint, **kwargs: {"objects": []})
+    monkeypatch.setattr(refresh, "load_approved_object_dispositions", lambda path, **kwargs: {"dispositions": []})
 
     def fail_after_prepared(*args, report_publisher, **kwargs):
         report_publisher({"status": "prepared", "mode": "preserve_identity_refresh"})
@@ -27,7 +28,12 @@ def test_cli_keeps_prepared_report_when_post_publication_step_fails(tmp_path, mo
         "--expected-target-host", "example.test", "--expected-target-database", "database",
         "--expected-target-schema", "public", "--approved-tls-ca-sha256", "a" * 64,
         "--write-freeze-attestation", str(source), "--reviewed-baseline-profile", str(source),
-        "--readonly-object-manifest-proof", str(source), "--report-output", str(output),
+        "--expected-reviewed-baseline-profile-sha256", "b" * 64,
+        "--readonly-object-manifest-proof", str(source), "--expected-readonly-object-manifest-proof-sha256", "c" * 64,
+        "--expected-object-account-sha256", "d" * 64, "--expected-object-bucket-sha256", "e" * 64,
+        "--approved-object-disposition-manifest", str(source),
+        "--expected-approved-object-disposition-manifest-sha256", "f" * 64,
+        "--report-output", str(output),
     ])
 
     assert result.exit_code != 0
