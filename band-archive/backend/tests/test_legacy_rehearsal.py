@@ -1199,6 +1199,7 @@ def test_cli_error_never_exposes_driver_sql_or_credentials(tmp_path, monkeypatch
     result = CliRunner().invoke(cli, [
         "--source-sqlite", str(source), "--target-url", "postgresql://user:sensitive-value@host/db",
         "--expected-target-host", "host", "--expected-target-database", "db", "--expected-target-schema", "public",
+        "--dry-run",
     ])
     assert result.exit_code != 0
     assert "rehearsal_failed correlation_id=" in result.output

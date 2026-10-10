@@ -17,6 +17,7 @@ from migration_bootstrap import (
     phase4_metadata,
     phase6_metadata,
     phase7_metadata,
+    phase8_metadata,
     schema_contract_differences,
     schema_differences,
 )
@@ -253,8 +254,9 @@ def test_suggestion_vote_revision_sqlite_round_trip_and_nonempty_downgrade_guard
             assert 'uq_song_suggestion_vote_user' in {
                 item['name'] for item in inspector.get_indexes('song_suggestion_vote')
             }
-            assert schema_differences(db.session.connection()) == []
-            assert schema_contract_differences(db.session.connection()) == []
+            # v08 is not the current ORM schema once later migrations exist.
+            assert schema_differences(db.session.connection(), metadata=phase8_metadata()) == []
+            assert schema_contract_differences(db.session.connection(), metadata=phase8_metadata()) == []
 
             downgrade(revision=CONTENT_WRITE_REVISION, directory=str(MIGRATIONS_DIRECTORY))
             assert db.session.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == CONTENT_WRITE_REVISION
