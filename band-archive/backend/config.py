@@ -122,6 +122,10 @@ class Config:
     AUDIO_PROCESSING_HEARTBEAT_SECONDS = int(os.getenv('AUDIO_PROCESSING_HEARTBEAT_SECONDS', '15'))
     AUDIO_PROCESSING_STALE_SECONDS = int(os.getenv('AUDIO_PROCESSING_STALE_SECONDS', '3600'))
     AUDIO_WORKER_POLL_SECONDS = float(os.getenv('AUDIO_WORKER_POLL_SECONDS', '5'))
+    # PostgreSQL cutover must not silently resume imported jobs or provider
+    # upload sessions. These independent opt-ins do not affect SQLite.
+    PG_AUDIO_WORKER_ENABLED = _env_flag('PG_AUDIO_WORKER_ENABLED')
+    PG_MULTIPART_RECOVERY_ENABLED = _env_flag('PG_MULTIPART_RECOVERY_ENABLED')
 
     # Supabase Auth is intentionally optional during the v1 compatibility
     # period.  Production enables it only after every required setting is set;

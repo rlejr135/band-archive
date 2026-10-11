@@ -172,3 +172,30 @@ accepts an operator target URL.
 No Fly-volume action, deployment, Supabase DDL, R2 action, or git push is part
 of this command. A new source snapshot is required immediately before every
 actual mutation.
+
+## PostgreSQL application startup after cutover
+
+Application startup never creates, stamps, migrates, or repairs PostgreSQL
+tables. Before storage initialization, upload-session recovery, or an audio
+worker, it verifies a bounded read-only snapshot of the exact Alembic head,
+full schema contract, uniquely validated tenant marker, owner CRUD access,
+and Data API RLS/ACL isolation. A failure prevents startup; use the separately
+reviewed operator path rather than weakening the gate. SQLite retains its
+existing compatibility startup behavior.
+
+Keep `PG_AUDIO_WORKER_ENABLED=false` and
+`PG_MULTIPART_RECOVERY_ENABLED=false` during cutover. These are independent,
+PostgreSQL-only explicit opt-ins. `start_worker=False` always suppresses the
+factory worker; `start_worker=True` cannot bypass the PostgreSQL audio flag,
+even in tests. Direct worker startup also requires the successful internal
+validation marker and the audio flag. New video records may remain `queued`
+while audio processing is disabled; normal wake/enqueue behavior is unchanged.
+
+Enabling the audio flag recovers stale processing rows and processes the
+existing media/personal-log video backlog, including FFmpeg and R2 writes.
+It therefore needs separate CPU/media-processing approval. Enabling multipart
+startup recovery can update session rows and abort expired R2 uploads and
+requires separate provider-mutation approval. Neither flag is a writer-freeze
+attestation or a dynamic stop mechanism for an already running process.
+API writers, owner clients, existing presigned URLs, and in-flight uploads
+still require the separately reviewed freeze/drain procedure before refresh.

@@ -227,6 +227,9 @@ def _save_record_and_start(app, record):
 def start_worker(app):
     """Recover stale work and start/reuse this process's one worker."""
     with app.app_context():
+        from startup_guard import postgres_automation_allowed
+        if not postgres_automation_allowed(app, db.engine, 'PG_AUDIO_WORKER_ENABLED'):
+            return None
         recover_stale_processing(app.config['AUDIO_PROCESSING_STALE_SECONDS'])
     worker = app.extensions.get('audio_worker')
     if worker is None:

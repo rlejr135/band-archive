@@ -32,6 +32,7 @@ from routes.auth import auth_bp
 from routes.bands import bands_bp
 from routes.content_reads import content_reads_bp
 from config import DevelopmentConfig, validate_supabase_auth_config
+from startup_guard import assert_postgres_startup_ready, postgres_automation_allowed
 
 load_dotenv()
 
@@ -446,9 +447,7 @@ def create_app(config_class=None, start_worker=None):
         return response
 
     db.init_app(app)
-    # Keep Flask-Migrate pointed at the checked-in baseline.  The existing
-    # create_all/startup migration path below remains the production path
-    # until the later Postgres cutover; this only establishes the toolchain.
+    # Register the toolchain only; PostgreSQL startup never invokes migrations.
     Migrate(app, db, directory=str(MIGRATIONS_DIRECTORY))
     register_error_handlers(app)
 
@@ -480,27 +479,40 @@ def create_app(config_class=None, start_worker=None):
     app.register_blueprint(gallery_bp)
     app.register_blueprint(uploads_bp)
 
+    with app.app_context():
+        postgres_runtime = db.engine.dialect.name == 'postgresql'
+        # Reset this internal marker even if a config class supplied it. Only
+        # successful read-only validation can authorize PG startup automation.
+        app.config['POSTGRES_STARTUP_VALIDATED'] = False
+        if postgres_runtime:
+            assert_postgres_startup_ready(db.engine)
+            app.config['POSTGRES_STARTUP_VALIDATED'] = True
+
     storage.init_app(app)
 
     with app.app_context():
         # The v1 compatibility path may create only the historical schema.
         # Alembic-managed auth and later multiband tables must be created by
         # migration_runner before a process enables the protected API.
-        baseline_metadata().create_all(db.engine)
-        _run_migrations(app)
-        # v2 routes remain registered for a deterministic response, but are
-        # disabled until the isolated migration runner has produced head.
-        app.config['BAND_API_SCHEMA_READY'] = _band_schema_ready()
-        app.config['PHASE4_ORM_SCHEMA_READY'] = _phase4_orm_schema_ready(app)
-        from routes.uploads import recover_multipart_upload_sessions
-        recover_multipart_upload_sessions(app)
+        if postgres_runtime:
+            app.config['BAND_API_SCHEMA_READY'] = True
+            app.config['PHASE4_ORM_SCHEMA_READY'] = True
+        else:
+            baseline_metadata().create_all(db.engine)
+            _run_migrations(app)
+            # SQLite retains the historical compatibility expansion/gates.
+            app.config['BAND_API_SCHEMA_READY'] = _band_schema_ready()
+            app.config['PHASE4_ORM_SCHEMA_READY'] = _phase4_orm_schema_ready(app)
+        if postgres_automation_allowed(app, db.engine, 'PG_MULTIPART_RECOVERY_ENABLED'):
+            from routes.uploads import recover_multipart_upload_sessions
+            recover_multipart_upload_sessions(app)
         if app.config.get('SUPABASE_AUTH_ENABLED'):
             from auth_service import assert_auth_schema_ready
             assert_auth_schema_ready()
 
     if start_worker is None:
         start_worker = not app.testing
-    if start_worker:
+    if start_worker and (not postgres_runtime or app.config.get('PG_AUDIO_WORKER_ENABLED') is True):
         from media_processing import start_worker as start_audio_worker
         start_audio_worker(app)
 

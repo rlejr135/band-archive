@@ -8,6 +8,8 @@
 # Local Python environments, bytecode, and test/tool caches.
 venv/
 .venv/
+.venv-test/
+.venv-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
