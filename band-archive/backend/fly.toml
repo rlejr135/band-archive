@@ -8,6 +8,10 @@ primary_region = 'nrt'
 
 [build]
 
+[[files]]
+  guest_path = '/app/certs/supabase-prod-ca-2021.crt'
+  local_path = 'certs/supabase-prod-ca-2021.crt'
+
 [env]
   FLASK_CONFIG = 'config.ProductionConfig'
   CORS_ALLOWED_ORIGINS = 'https://rlejr135.github.io,https://band-archive.pages.dev'

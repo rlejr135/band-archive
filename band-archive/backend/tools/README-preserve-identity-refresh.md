@@ -169,6 +169,13 @@ options overrides are also refused. The private localhost PostgreSQL instance
 used by the offline baseline builder is a separate internal fixture and never
 accepts an operator target URL.
 
+For the Fly production app, `fly.toml` places the tracked public Supabase root
+CA at `/app/certs/supabase-prod-ca-2021.crt` on every deploy. The production
+`DATABASE_URL` must retain `sslmode=verify-full` and set `sslrootcert` to that
+exact path. Keep the focused packaging test in `tests/test_fly_ca_packaging.py`
+passing when updating either the CA or its Fly file mapping; do not replace
+hostname verification with `sslmode=require`.
+
 No Fly-volume action, deployment, Supabase DDL, R2 action, or git push is part
 of this command. A new source snapshot is required immediately before every
 actual mutation.
