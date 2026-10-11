@@ -1,7 +1,7 @@
 
 from datetime import datetime, timedelta, timezone
 import uuid
-from sqlalchemy import event, text
+from sqlalchemy import event, select, text
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
@@ -834,9 +834,12 @@ def _legacy_band_id(connection):
         except RuntimeError:
             pass
         raise TenantScopeUnavailable('Phase 4 tenant backfill is not validated.')
-    band_id = connection.execute(text(
-        'SELECT id FROM band WHERE is_legacy_import = 1 AND created_by_user_id IS NULL'
-    )).scalar_one_or_none()
+    # The import tenant remains the v1 boundary after an owner claims it.
+    # Typed Boolean predicates work on both SQLite and PostgreSQL; creator
+    # identity is ownership metadata, not an import-tenant eligibility gate.
+    band_id = connection.execute(
+        select(Band.id).where(Band.is_legacy_import.is_(True))
+    ).scalar_one_or_none()
     if band_id is None:
         raise TenantScopeUnavailable('Validated legacy tenant band is missing.')
     return band_id
