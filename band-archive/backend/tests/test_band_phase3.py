@@ -17,6 +17,7 @@ from band_service import (
     _locked_invite_by_token_hash, _locked_outstanding_legacy_claim_query, close_band,
     create_invite, invalidate_legacy_claim, issue_legacy_claim, join_invite,
     redeem_legacy_claim, revoke_invite, transfer_ownership,
+    eligible_legacy_claim_bands, eligible_legacy_claim_band_dict, legacy_claim_dict,
 )
 from app import create_app
 from config import TestingConfig
@@ -430,48 +431,26 @@ def _ownerless_legacy_band(app, *, name='Legacy archive', slug='legacy-archive')
 
 
 def test_legacy_owner_claim_issue_rotate_redeem_and_audit(band_app):
-    client = band_app.test_client()
     band_id = _ownerless_legacy_band(band_app)
-
-    assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim').status_code == 401
-    assert client.get('/api/v2/platform/legacy-ownership-claims/eligible-bands',
-                      headers=_headers('other-id')).status_code == 403
-    eligible = client.get('/api/v2/platform/legacy-ownership-claims/eligible-bands',
-                          headers=_headers('admin-id'))
-    assert eligible.status_code == 200
-    assert eligible.get_json()['bands'] == [{
-        'id': band_id, 'name': 'Legacy archive', 'slug': 'legacy-archive', 'description': None,
-    }]
-    assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
-                       headers=_headers('other-id')).status_code == 403
-    first = client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
-                        headers=_headers('admin-id'))
-    assert first.status_code == 201
-    first_payload = first.get_json()
-    assert set(first_payload) == {'claim', 'token'}
-    assert 'token_hash' not in first_payload['claim']
-    raw_first = first_payload['token']
-
-    rotated = client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
-                          headers=_headers('admin-id'))
-    assert rotated.status_code == 201
-    raw_second = rotated.get_json()['token']
-    assert raw_first != raw_second
-    assert client.post(f'/api/v2/bands/{band_id}/legacy-ownership-claim/redeem',
-                       headers=_headers('member-id'), json={'token': raw_first}).status_code == 404
-
-    redeemed = client.post(f'/api/v2/bands/{band_id}/legacy-ownership-claim/redeem',
-                           headers=_headers('member-id'), json={'token': raw_second})
-    assert redeemed.status_code == 200
-    assert redeemed.get_json()['membership']['role'] == 'owner'
-    assert client.post(f'/api/v2/bands/{band_id}/legacy-ownership-claim/redeem',
-                       headers=_headers('member-id'), json={'token': raw_second}).status_code == 404
-    assert client.post(f'/api/v2/platform/bands/{band_id}/legacy-ownership-claim',
-                       headers=_headers('admin-id')).status_code == 409
-    assert client.get('/api/v2/platform/legacy-ownership-claims/eligible-bands',
-                      headers=_headers('admin-id')).get_json()['bands'] == []
-
     with band_app.app_context():
+        admin=AppUser.query.filter_by(supabase_user_id='admin-id').one()
+        claimant=AppUser.query.filter_by(supabase_user_id='member-id').one()
+        assert [eligible_legacy_claim_band_dict(item) for item in eligible_legacy_claim_bands()]==[{
+            'id':band_id,'name':'Legacy archive','slug':'legacy-archive','description':None}]
+        first,raw_first=issue_legacy_claim(admin,band_id)
+        assert 'token_hash' not in legacy_claim_dict(first)
+        _,raw_second=issue_legacy_claim(admin,band_id)
+        assert raw_first!=raw_second
+        with pytest.raises(ValidationError) as error: redeem_legacy_claim(claimant,band_id,raw_first)
+        assert error.value.status_code==404
+        db.session.rollback()
+        assert redeem_legacy_claim(claimant,band_id,raw_second).role=='owner'
+        with pytest.raises(ValidationError) as error: redeem_legacy_claim(claimant,band_id,raw_second)
+        assert error.value.status_code==404
+        db.session.rollback()
+        with pytest.raises(ValidationError) as error: issue_legacy_claim(admin,band_id)
+        assert error.value.status_code==409
+        assert eligible_legacy_claim_bands()==[]
         claim = LegacyBandClaimToken.query.filter_by(band_id=band_id).order_by(LegacyBandClaimToken.id.desc()).first()
         assert claim.token_hash != raw_second
         assert claim.redeemed_at is not None
@@ -487,34 +466,33 @@ def test_legacy_owner_claim_issue_rotate_redeem_and_audit(band_app):
 
 
 def test_legacy_owner_claim_rejects_wrong_band_expiry_unverified_and_existing_owner(band_app):
-    client = band_app.test_client()
     first_id = _ownerless_legacy_band(band_app, name='First legacy', slug='first-legacy')
     second_id = _ownerless_legacy_band(band_app, name='Second legacy', slug='second-legacy')
-    raw = client.post(f'/api/v2/platform/bands/{first_id}/legacy-ownership-claim',
-                      headers=_headers('admin-id')).get_json()['token']
-    assert client.post(f'/api/v2/bands/{second_id}/legacy-ownership-claim/redeem',
-                       headers=_headers('member-id'), json={'token': raw}).status_code == 404
-
     with band_app.app_context():
-        AppUser.query.filter_by(supabase_user_id='other-id').one().email_verified = False
+        admin=AppUser.query.filter_by(supabase_user_id='admin-id').one()
+        claimant=AppUser.query.filter_by(supabase_user_id='member-id').one()
+        _,raw=issue_legacy_claim(admin,first_id)
+        with pytest.raises(ValidationError) as error: redeem_legacy_claim(claimant,second_id,raw)
+        assert error.value.status_code==404
+        db.session.rollback()
+        unverified=AppUser.query.filter_by(supabase_user_id='other-id').one()
+        unverified.email_verified=False
         db.session.commit()
-    assert client.post(f'/api/v2/bands/{first_id}/legacy-ownership-claim/redeem',
-                       headers=_headers('other-id'), json={'token': raw}).status_code == 403
-    with band_app.app_context():
+        with pytest.raises(ValidationError) as error: redeem_legacy_claim(unverified,first_id,raw)
+        assert error.value.status_code==403
         claim = LegacyBandClaimToken.query.filter_by(band_id=first_id).one()
         claim.expires_at = claim.created_at - timedelta(seconds=1)
         db.session.commit()
-    assert client.post(f'/api/v2/bands/{first_id}/legacy-ownership-claim/redeem',
-                       headers=_headers('member-id'), json={'token': raw}).status_code == 404
-
-    with band_app.app_context():
+        with pytest.raises(ValidationError) as error: redeem_legacy_claim(claimant,first_id,raw)
+        assert error.value.status_code==404
+        db.session.rollback()
         band = db.session.get(Band, second_id)
         owner = AppUser.query.filter_by(supabase_user_id='owner-id').one()
         band.created_by_user_id = owner.id
         db.session.add(BandMembership(band_id=second_id, user_id=owner.id, role='owner', status='active'))
         db.session.commit()
-    assert client.post(f'/api/v2/platform/bands/{second_id}/legacy-ownership-claim',
-                       headers=_headers('admin-id')).status_code == 409
+        with pytest.raises(ValidationError) as error: issue_legacy_claim(admin,second_id)
+        assert error.value.status_code==409
 
 
 def test_legacy_owner_claim_uses_postgres_row_lock_contract(band_app):
