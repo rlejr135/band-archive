@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { createSubmissionGuard } from '../../services/authSubmission.js';
 import './BandsPage.css';
@@ -20,7 +21,7 @@ const useApi = () => {
 const safeBandPath = (slug) => `/bands/${encodeURIComponent(slug)}`;
 const genericFailure = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
 
-export const InviteCodeEntry = () => {
+export const InviteCodeEntry = ({ onJoined }) => {
   const api = useApi();
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -36,7 +37,8 @@ export const InviteCodeEntry = () => {
     setCode('');
     try {
       await api.requestJson('/api/v2/invite-codes/join', requestOptions('POST', { code: submitted }));
-      setNotice('초대 코드로 밴드에 가입했습니다. 내 밴드 목록을 새로고침해 주세요.');
+      await onJoined?.();
+      setNotice('초대 코드로 밴드에 가입했습니다. 밴드 목록을 새로 불러옵니다…');
     } catch {
       // Invalid, expired, and revoked are intentionally indistinguishable.
       setNotice('초대 코드를 사용할 수 없습니다.');
@@ -57,13 +59,12 @@ export const InviteCodeEntry = () => {
 
 export const DiscoverBandsPage = () => {
   const { user } = useAuth();
+  const { activeBands, pendingMemberships, bandsLoaded, reload: reloadMemberships } = useBands();
   const api = useApi();
-  const authenticated = Boolean(user);
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [state, setState] = useState({ loading: true, bands: [], pagination: { has_more: false, total: 0 } });
-  const [own, setOwn] = useState({ active: new Set(), pending: new Set() });
   const [joining, setJoining] = useState(new Set());
   const [error, setError] = useState('');
   const pageSize = 20;
@@ -83,18 +84,10 @@ export const DiscoverBandsPage = () => {
     return () => { current = false; };
   }, [api, page, query]);
 
-  useEffect(() => {
-    let current = true;
-    if (!authenticated) { setOwn({ active: new Set(), pending: new Set() }); return () => { current = false; }; }
-    api.requestJson('/api/v2/bands').then((data) => {
-      if (!current) return;
-      setOwn({
-        active: new Set((data?.bands || []).map((band) => Number(band.id))),
-        pending: new Set((data?.pending_memberships || []).map((membership) => Number(membership.band?.id))),
-      });
-    }).catch(() => { if (current) setOwn({ active: new Set(), pending: new Set() }); });
-    return () => { current = false; };
-  }, [api, authenticated, user?.id]);
+  const own = useMemo(() => ({
+    active: new Set((activeBands || []).map((band) => Number(band.id))),
+    pending: new Set((pendingMemberships || []).map((membership) => Number(membership.band?.id))),
+  }), [activeBands, pendingMemberships]);
 
   const join = async (band) => {
     if (!user) { navigate(`/login?returnTo=${encodeURIComponent('/bands/discover')}`); return; }
@@ -103,7 +96,7 @@ export const DiscoverBandsPage = () => {
     setJoining((previous) => new Set(previous).add(bandId)); setError('');
     try {
       const result = await api.requestJson(`/api/v2/bands/${bandId}/join-requests`, requestOptions('POST', {}));
-      if (result?.created || result?.membership) setOwn((previous) => ({ ...previous, pending: new Set(previous.pending).add(bandId) }));
+      if (result?.created || result?.membership) await reloadMemberships();
     } catch { setError(genericFailure); }
     finally { setJoining((previous) => { const next = new Set(previous); next.delete(bandId); return next; }); }
   };
@@ -116,7 +109,7 @@ export const DiscoverBandsPage = () => {
     {state.loading ? <p aria-live="polite">공개 밴드를 불러오는 중입니다…</p> : <>
       {state.bands.length === 0 ? <p className="bands-help">조건에 맞는 공개 밴드가 없습니다.</p> : <ul className="band-list">{state.bands.map((band) => {
         const id = Number(band.id); const active = own.active.has(id); const pending = own.pending.has(id);
-        return <li key={id}><div><strong>{band.name}</strong><p className="bands-help">{band.description || '공개된 밴드 공간입니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>공개 공간 보기</button>{active ? <button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>작업 공간 열기</button> : <button type="button" className="secondary-btn" disabled={pending || joining.has(id)} onClick={() => join(band)}>{pending ? '승인 대기 중' : joining.has(id) ? '요청 중…' : user ? '가입 요청' : '로그인 후 가입 요청'}</button>}</div></li>;
+        return <li key={id}><div><strong>{band.name}</strong><p className="bands-help">{band.description || '공개된 밴드 공간입니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>공개 공간 보기</button>{active ? <button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>작업 공간 열기</button> : <button type="button" className="secondary-btn" disabled={(Boolean(user) && !bandsLoaded) || pending || joining.has(id)} onClick={() => join(band)}>{pending ? '승인 대기 중' : joining.has(id) ? '요청 중…' : user && !bandsLoaded ? '멤버십 확인 중…' : user ? '가입 요청' : '로그인 후 가입 요청'}</button>}</div></li>;
       })}</ul>}
       <nav className="bands-pagination" aria-label="공개 밴드 페이지"><button type="button" className="secondary-btn" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>이전</button><span>{state.pagination.total}개 중 {page + 1}페이지</span><button type="button" className="secondary-btn" disabled={!state.pagination.has_more} onClick={() => setPage((value) => value + 1)}>다음</button></nav>
     </>}

@@ -13,14 +13,15 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-let vite; let onboarding; let auth;
-const load = async () => { if (onboarding) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); };
+let vite; let onboarding; let auth; let bands;
+const load = async () => { if (onboarding) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
 const account = (id = 'u1') => ({ user: id ? { id } : null, getAccessToken: async () => id, refreshSession: async () => id, loading: false });
 const Login = () => createElement('p', null, `login:${useLocation().search}`);
 const Go = ({ target }) => { const navigate = useNavigate(); useEffect(() => { navigate(target); }, [navigate, target]); return null; };
-const App = ({ entry, authValue = account(), manage = false, discover = false, create = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), createElement(Routes, null,
-  discover ? createElement(Route, { path: '/bands/discover', element: createElement(onboarding.DiscoverBandsPage) }) : null,
+const App = ({ entry, authValue = account(), manage = false, discover = false, create = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, discover ? createElement(bands.BandProvider, null, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null,
+  createElement(Route, { path: '/bands/discover', element: createElement(onboarding.DiscoverBandsPage) }),
+  createElement(Route, { path: '/login', element: createElement(Login) })))) : createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), createElement(Routes, null,
   create ? createElement(Route, { path: '/bands/request', element: createElement(onboarding.BandCreationRequestPage) }) : null,
   manage ? createElement(Route, { path: '/bands/:bandSlug/manage', element: createElement(onboarding.BandManageRoute) }) : null,
   createElement(Route, { path: '/login', element: createElement(Login) }))));
@@ -29,7 +30,7 @@ test('visitor discover preserves a safe login return and join becomes pending on
   await load(); const previous = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, request = {}) => { calls.push([String(url), request]); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
   try { const visitor = render(createElement(App, { entry: '/bands/discover', authValue: account(null), discover: true })); await visitor.findByText('Public'); await userEvent.click(visitor.getByRole('button', { name: '로그인 후 가입 요청' })); await visitor.findByText('login:?returnTo=%2Fbands%2Fdiscover'); assert.ok(calls.every(([url]) => !url.includes('invite'))); visitor.unmount();
-    let joined = 0; globalThis.fetch = async (url) => { if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] }); if (String(url).includes('join-requests')) { joined += 1; return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
+    let joined = 0; let membershipReads = 0; globalThis.fetch = async (url) => { if (String(url).endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (String(url).includes('join-requests')) { joined += 1; return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
     const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); await waitFor(() => assert.equal(joined, 1)); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
   } finally { globalThis.fetch = previous; }
 });

@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './AuthContext.jsx';
+import { createAuthenticatedApiClient } from '../services/authApiClient.js';
 import { activeBandsOnly, selectValidBand } from './bandSelection.js';
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -19,23 +20,48 @@ const writeSelectedId = (userId, id) => {
 };
 
 const BandStateProvider = ({ children, userId }) => {
-  const [state, setState] = useState({ userId: null, activeBands: [], bandsLoaded: false, selectedBandId: null });
-  // Previous-account data is never exposed while this account is loading.
-  const scopedState = state.userId === userId ? state : { userId, activeBands: [], bandsLoaded: false, selectedBandId: null };
+  const { getAccessToken, refreshSession } = useAuth();
+  const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
+  const [state, setState] = useState(() => ({
+    activeBands: [], pendingMemberships: [], bandsLoaded: false, loading: Boolean(userId), error: '',
+    selectedBandId: userId ? readSelectedId(userId) : null,
+  }));
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const requestRef = useRef(null);
+  const requestGeneration = useRef(0);
 
-  const setAvailableBands = useCallback((bands) => {
-    const activeBands = activeBandsOnly(bands);
-    setState((previous) => {
-      const candidate = previous.userId === userId ? previous.selectedBandId ?? readSelectedId(userId) : readSelectedId(userId);
-      const selected = selectValidBand(candidate, activeBands);
-      writeSelectedId(userId, selected?.id ?? null);
-      return { userId, activeBands, bandsLoaded: true, selectedBandId: selected?.id ?? null };
+  const readMemberships = useCallback(() => {
+    if (requestRef.current) return requestRef.current;
+    const request = api.requestJson('/api/v2/bands');
+    requestRef.current = request;
+    const clear = () => { if (requestRef.current === request) requestRef.current = null; };
+    request.then(clear, clear);
+    return request;
+  }, [api]);
+
+  useEffect(() => {
+    if (!userId) return undefined;
+    let current = true;
+    const generation = requestGeneration.current;
+    readMemberships().then((response) => {
+      if (!current || generation !== requestGeneration.current) return;
+      const activeBands = activeBandsOnly(response?.bands);
+      const pendingMemberships = Array.isArray(response?.pending_memberships) ? response.pending_memberships : [];
+      setState((previous) => {
+        const saved = previous.selectedBandId ?? readSelectedId(userId);
+        const selected = selectValidBand(saved, activeBands) || activeBands[0] || null;
+        writeSelectedId(userId, selected?.id ?? null);
+        return { activeBands, pendingMemberships, bandsLoaded: true, loading: false, error: '', selectedBandId: selected?.id ?? null };
+      });
+    }).catch(() => {
+      if (!current || generation !== requestGeneration.current) return;
+      setState((previous) => ({ ...previous, bandsLoaded: true, loading: false, error: '밴드 정보를 불러오지 못했습니다. 다시 시도해 주세요.' }));
     });
-  }, [userId]);
+    return () => { current = false; };
+  }, [readMemberships, reloadVersion, userId]);
 
   const selectBand = useCallback((bandId) => {
     setState((previous) => {
-      if (!userId || previous.userId !== userId) return { userId, activeBands: [], bandsLoaded: false, selectedBandId: null };
       const selected = selectValidBand(bandId, previous.activeBands);
       writeSelectedId(userId, selected?.id ?? null);
       return { ...previous, selectedBandId: selected?.id ?? null };
@@ -43,25 +69,39 @@ const BandStateProvider = ({ children, userId }) => {
   }, [userId]);
 
   const clearSelectedBand = useCallback(() => {
+    writeSelectedId(userId, null);
     setState((previous) => ({ ...previous, selectedBandId: null }));
-  }, []);
+  }, [userId]);
 
-  const selectedBand = selectValidBand(scopedState.selectedBandId, scopedState.activeBands);
+  const reload = useCallback(() => {
+    if (!userId) return;
+    // An explicit refresh must observe state after the triggering action,
+    // rather than silently joining a read that began before it.
+    requestGeneration.current += 1;
+    requestRef.current = null;
+    setState((previous) => ({ ...previous, activeBands: [], pendingMemberships: [], bandsLoaded: false, loading: true, error: '' }));
+    setReloadVersion((version) => version + 1);
+  }, [userId]);
+
+  const selectedBand = selectValidBand(state.selectedBandId, state.activeBands);
   const value = useMemo(() => ({
-    activeBands: scopedState.activeBands,
-    bandsLoaded: scopedState.bandsLoaded,
+    activeBands: state.activeBands,
+    pendingMemberships: state.pendingMemberships,
+    bandsLoaded: state.bandsLoaded,
+    loading: state.loading,
+    error: state.error,
     selectedBand,
-    setAvailableBands,
     selectBand,
     clearSelectedBand,
-  }), [clearSelectedBand, scopedState.activeBands, scopedState.bandsLoaded, selectBand, selectedBand, setAvailableBands]);
+    reload,
+  }), [clearSelectedBand, reload, selectedBand, selectBand, state.activeBands, state.bandsLoaded, state.error, state.loading, state.pendingMemberships]);
   return <BandContext.Provider value={value}>{children}</BandContext.Provider>;
 };
 
 export const BandProvider = ({ children }) => {
   const { user } = useAuth();
-  // Remount state on every account boundary. A previous account's fetched
-  // memberships cannot briefly appear while the new account is loading.
+  // Remount state on every account boundary; pending requests from the prior
+  // identity may finish, but cannot write into the next account's provider.
   return <BandStateProvider key={user?.id ?? 'anonymous'} userId={user?.id ?? null}>{children}</BandStateProvider>;
 };
 

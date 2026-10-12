@@ -81,6 +81,22 @@ test('dashboard safely distinguishes an absent announcement from a visible publi
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('dashboard displays the actual band membership role as informational access level', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/owner-band')) return response({ band: { id: 321, slug: 'owner-band', name: '소유자 밴드', membership: { id: 91, role: 'owner' }, permissions: {} } });
+    if (url.includes('/songs?') || url.includes('/rehearsals?')) return response({ songs: [], rehearsals: [], pagination: { total: 0 } });
+    return response({ announcement: null });
+  };
+  try {
+    const member = { user: { id: 'owner' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/owner-band', authValue: member }));
+    await view.findByText('현재 접근 권한');
+    assert.ok(view.getByText('소유자'));
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('suggestions render only sanitized HTTP(S) links as external anchors', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -316,7 +332,7 @@ test('stale comment reads and writes cannot repaint a newly selected band throug
     await view.findByText('이전 댓글 곡'); await userEvent.click(view.getByText('이전 댓글 곡')); await view.findByText('이전 댓글');
     await userEvent.type(view.getByLabelText('댓글 내용'), '이전 초안'); await userEvent.click(view.getByRole('button', { name: '댓글 등록' })); await waitFor(() => assert.equal(oldPosts, 1));
     await userEvent.click(view.getByRole('button', { name: '댓글 더 불러오기' })); await waitFor(() => assert.equal(oldCommentReads, 2));
-    fireEvent.change(view.getByLabelText('밴드 전환'), { target: { value: '200' } }); await view.findByRole('button', { name: /새 댓글 밴드/ }); await userEvent.click(view.getByRole('link', { name: '곡' }));
+    fireEvent.change(view.getByLabelText('빠른 밴드 전환'), { target: { value: '200' } }); await view.findByRole('button', { name: /새 댓글 밴드/ }); await userEvent.click(view.getByRole('link', { name: '곡' }));
     await view.findByText('새 댓글 곡'); await userEvent.click(view.getByText('새 댓글 곡')); await view.findByText('새 댓글');
     assert.equal(view.getByLabelText('댓글 내용').value, ''); assert.equal(view.queryByRole('button', { name: '댓글 더 불러오기' }), null); assert.equal(view.queryByRole('alert'), null);
     await act(async () => { oldMore.resolve(response({ comments: [{ ...oldComment, id: 1004, content: '늦은 이전 댓글' }], pagination: { has_more: true, next_offset: 40 } })); oldPost.resolve(response({}, 403)); });

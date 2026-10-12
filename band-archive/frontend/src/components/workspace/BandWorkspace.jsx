@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { useBands } from '../../context/BandContext.jsx';
+import { bandRoleLabel } from '../../context/bandRole.js';
+import BandSwitcher from '../bands/BandSwitcher.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload, suggestionPayload, votePayload } from '../../services/bandWorkspaceApi.js';
 import { uploadBandGalleryImageFile } from '../../services/mediaUploadManager.js';
@@ -49,7 +50,6 @@ export const BandWorkspace = () => {
   const { bandSlug } = useParams();
   const navigate = useNavigate();
   const { user, getAccessToken, refreshSession, signOut } = useAuth();
-  const { activeBands, selectBand } = useBands();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ loading: true, error: '', band: null });
   const requestGate = useRef(createWorkspaceRequestGate());
@@ -72,22 +72,22 @@ export const BandWorkspace = () => {
     return () => controller.abort();
   }, [api, bandSlug, routeKey]);
 
-  const switchBand = (event) => {
-    const band = activeBands.find((item) => String(item.id) === event.target.value);
-    if (band?.slug) { selectBand?.(band.id); navigate(`/bands/${encodeURIComponent(band.slug)}`); }
-  };
-
   if (state.loading) return <WorkspacePaintGate requestedSlug={bandSlug} />;
   if (state.error || !state.band) return <main className="band-workspace-loading" role="alert"><p>{state.error}</p><button className="secondary-btn" onClick={() => navigate('/bands')}>내 밴드로 이동</button></main>;
   if (state.band.slug !== bandSlug) return <WorkspacePaintGate requestedSlug={bandSlug} resolvedSlug={state.band.slug} />;
   const value = { band: state.band, api, workspaceKey: `${state.band.id}:${user?.id || 'visitor'}` };
-  const switchable = activeBands.length > 1;
   return <WorkspaceContext.Provider value={value}>
     <div className="band-workspace">
       <header className="workspace-header">
         <button className="workspace-brand" onClick={() => navigate(`/bands/${encodeURIComponent(state.band.slug)}`)}>
           <img src={logo} alt="들뜬" /><span>{state.band.name}<small> Archive</small></span>
         </button>
+        <div className="workspace-actions">
+          <UploadCenter />
+          <BandSwitcher currentSlug={state.band.slug} />
+          <Link className="nav-btn workspace-account-link" to="/bands">내 계정</Link>
+          {user ? <button className="nav-btn" onClick={async () => { await signOut(); navigate('/', { replace: true }); }}>로그아웃</button> : <button className="nav-btn" onClick={() => navigate('/login')}>로그인</button>}
+        </div>
         <nav aria-label="밴드 공간">
           <NavLink end to={`/bands/${encodeURIComponent(state.band.slug)}`}>대시보드</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/songs`}>곡</NavLink>
@@ -96,12 +96,6 @@ export const BandWorkspace = () => {
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/gallery`}>갤러리</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/suggestions`}>추천곡</NavLink>
         </nav>
-        <div className="workspace-actions">
-          <UploadCenter />
-          {switchable && <label className="band-switcher">밴드 전환<select value={String(activeBands.some((item) => item.id === state.band.id) ? state.band.id : '')} onChange={switchBand}><option value="" disabled>밴드 선택</option>{activeBands.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
-          <button className="nav-btn" onClick={() => navigate('/bands')}>내 밴드</button>
-          {user ? <button className="nav-btn" onClick={async () => { await signOut(); navigate('/', { replace: true }); }}>로그아웃</button> : <button className="nav-btn" onClick={() => navigate('/login')}>로그인</button>}
-        </div>
       </header>
       <main className="workspace-main"><Outlet /></main>
     </div>
@@ -153,7 +147,7 @@ export const BandDashboard = () => {
     return () => { live = false; controller.abort(); };
   }, [api, band.id, workspaceKey]);
   return <section className="workspace-page" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p>
-    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <><div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{band.membership ? '멤버' : '방문자'}</strong><span>현재 접근 권한</span></div></div><AnnouncementSummary announcement={state.announcement} onSaved={(announcement) => setState((previous) => ({ ...previous, announcement }))} /></>}
+    {state.loading ? <p aria-live="polite">통계를 불러오는 중입니다…</p> : state.error ? <ErrorState message={state.error} /> : <><div className="workspace-stats"><div><strong>{state.songs}</strong><span>{band.membership ? '이 밴드의 곡' : '공개된 곡'}</span></div><div><strong>{state.rehearsals}</strong><span>{band.membership ? '이 밴드의 합주' : '공개된 합주'}</span></div><div><strong>{bandRoleLabel(band.membership?.role, { isMember: Boolean(band.membership) })}</strong><span>현재 접근 권한</span></div></div><AnnouncementSummary announcement={state.announcement} onSaved={(announcement) => setState((previous) => ({ ...previous, announcement }))} /></>}
     <WriteGuidance /></section>;
 };
 

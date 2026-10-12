@@ -1,0 +1,5 @@
+.band-switcher { min-width: 150px; display: flex; flex-direction: column; gap: 3px; color: var(--text-secondary); font-size: .72rem; line-height: 1.2; }
+.band-switcher select { width: 100%; min-width: 0; max-width: 230px; padding: 8px 30px 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); background: var(--background-color); font: inherit; font-size: .86rem; font-weight: 600; }
+.band-switcher select:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+.band-switcher select:disabled { opacity: .76; cursor: wait; }
+.band-switcher-retry { width: max-content; border: 0; padding: 3px 0; color: var(--primary-color); background: transparent; font: inherit; text-align: left; text-decoration: underline; cursor: pointer; }

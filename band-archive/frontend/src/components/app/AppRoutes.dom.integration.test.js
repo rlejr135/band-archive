@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { cleanup, render, waitFor } from '@testing-library/react';
-import { createElement } from 'react';
+import { createElement, StrictMode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
+import { fireEvent } from '@testing-library/react';
 import { createServer } from 'vite';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
@@ -23,13 +25,15 @@ const load = async () => {
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
 
 const Location = () => { const location = useLocation(); return createElement('output', { 'data-testid': 'route' }, `${location.pathname}${location.search}${location.hash}`); };
-const AccountBands = ({ children, authValue, bandValue, entry }) => createElement(auth.AuthContext.Provider, { value: authValue },
-  createElement(bands.BandContext.Provider, { value: bandValue },
-    createElement(uploads.UploadProvider, null,
-      createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Location), children))));
+const AccountBands = ({ children, authValue, entry, strict = false }) => {
+  const tree = createElement(auth.AuthContext.Provider, { value: authValue },
+    createElement(bands.BandProvider, null,
+      createElement(uploads.UploadProvider, null,
+        createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Location), children))));
+  return strict ? createElement(StrictMode, null, tree) : tree;
+};
 const account = (id = null) => ({ user: id ? { id, email: 'person@example.test' } : null, getAccessToken: async () => 'test-token', refreshSession: async () => 'test-token', signOut: async () => {}, loading: false, configError: null, hasRecoverySession: false });
-const noBands = { activeBands: [], selectedBand: null, setAvailableBands: () => {}, selectBand: () => {} };
-const renderRoutes = (entry, authValue = account(), bandValue = noBands) => render(createElement(AccountBands, { entry, authValue, bandValue }, createElement(routes)));
+const renderRoutes = (entry, authValue = account(), strict = false) => render(createElement(AccountBands, { entry, authValue, strict }, createElement(routes)));
 
 test('anonymous home is a static example plus the real login form and performs no domain reads', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
@@ -61,12 +65,12 @@ test('anonymous browser routes are gated before discover or workspace data can m
   } finally { globalThis.fetch = previousFetch; }
 });
 
-test('authenticated root opens the band chooser with one bands request and no profile or claim calls', async () => {
+test('authenticated root opens the account hub with one bands request and no profile or claim calls', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url) => { calls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
   try {
-    const view = renderRoutes('/', account('member-1'));
-    await view.findByText('활성 멤버십');
+    const view = renderRoutes('/', account('member-1'), true);
+    await view.findByText('내 밴드');
     assert.equal(calls.length, 1);
     assert.match(calls[0], /\/api\/v2\/bands$/);
     assert.equal(calls.some((url) => url.includes('/api/v2/me') || url.includes('legacy-ownership-claim')), false);
@@ -75,23 +79,68 @@ test('authenticated root opens the band chooser with one bands request and no pr
 });
 
 test('band choice selects the membership and navigates to its slug in the same action', async () => {
-  await load(); const previousFetch = globalThis.fetch; const selected = []; const calls = [];
-  globalThis.fetch = async (url) => { calls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
   const team = { id: 12, name: 'Moon Archive', slug: 'moon-archive', membership: { role: 'owner' } };
-  const bandValue = { ...noBands, activeBands: [team], selectBand: (id) => selected.push(id) };
+  globalThis.fetch = async (url) => { calls.push(String(url)); return response(String(url).includes('/api/v2/bands/by-slug/') ? { band: team } : { bands: [team], pending_memberships: [] }); };
   try {
-    const view = renderRoutes('/bands', account('member-1'), bandValue);
-    await view.findByText('활성 멤버십');
-    await view.getByRole('button', { name: /Moon Archive owner/ }).click();
+    const view = renderRoutes('/bands', account('member-1'));
+    await view.findByRole('button', { name: /Moon Archive.*소유자/ });
+    await view.getByRole('button', { name: /Moon Archive.*소유자/ }).click();
     await waitFor(() => assert.equal(view.getByTestId('route').textContent, '/bands/moon-archive'));
-    assert.deepEqual(selected, [12]);
+    assert.equal(window.localStorage.getItem('band-archive.selected-band:member-1'), '12');
     assert.ok(calls.some((url) => url.includes('/api/v2/bands/by-slug/moon-archive')));
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('one-band account switcher starts unselected and opens the sole membership', async () => {
+  await load(); const previousFetch = globalThis.fetch; const team = { id: 12, name: 'Moon Archive', slug: 'moon-archive', membership: { role: 'owner' } };
+  globalThis.fetch = async (url) => response(String(url).includes('/api/v2/bands/by-slug/') ? { band: team } : { bands: [team], pending_memberships: [] });
+  try {
+    const view = renderRoutes('/bands', account('one-band-user'));
+    const switcher = await view.findByRole('combobox', { name: '빠른 밴드 전환' });
+    assert.equal(switcher.value, '');
+    fireEvent.change(switcher, { target: { value: '12' } });
+    await waitFor(() => assert.equal(view.getByTestId('route').textContent, '/bands/moon-archive'));
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('workspace navigation stays on one horizontal scroll row at narrow widths', () => {
+  const css = readFileSync(new URL('../workspace/BandWorkspace.css', import.meta.url), 'utf8');
+  assert.match(css, /\.workspace-header nav\{[^}]*flex-wrap:nowrap[^}]*overflow-x:auto/);
+  assert.match(css, /@media \(max-width: 900px\)/);
+  assert.match(css, /\.workspace-actions \.band-switcher\{flex:0 0 142px\}/);
+  assert.doesNotMatch(css, /@media[^}]*workspace-header nav[^}]*display:\s*none/);
+});
+
+test('a direct workspace link keeps its URL band selected and switches without a second membership read', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  const direct = { id: 21, name: 'Direct Band', slug: 'direct-band', membership: { role: 'owner' }, permissions: { can_view_roster: true } };
+  const other = { id: 22, name: 'Other Band', slug: 'other-band', membership: { role: 'member' }, permissions: { can_view_roster: true } };
+  globalThis.fetch = async (url) => {
+    const path = String(url); calls.push(path);
+    if (path.endsWith('/api/v2/bands')) return response({ bands: [direct, other], pending_memberships: [] });
+    if (path.includes('/api/v2/bands/by-slug/direct-band')) return response({ band: direct });
+    if (path.includes('/api/v2/bands/by-slug/other-band')) return response({ band: other });
+    if (path.includes('/api/v2/bands/21/songs')) return response({ songs: [], pagination: { total: 0 } });
+    if (path.includes('/api/v2/bands/21/rehearsals')) return response({ rehearsals: [], pagination: { total: 0 } });
+    if (path.includes('/api/v2/bands/21/announcement')) return response({ announcement: null });
+    return response({});
+  };
+  window.localStorage.setItem('band-archive.selected-band:direct-link-user', '22');
+  try {
+    const view = renderRoutes('/bands/direct-band/songs', account('direct-link-user'));
+    const switcher = await view.findByRole('combobox', { name: '빠른 밴드 전환' });
+    await waitFor(() => assert.equal(switcher.value, '21'));
+    fireEvent.change(switcher, { target: { value: '22' } });
+    await waitFor(() => assert.equal(view.getByTestId('route').textContent, '/bands/other-band'));
+    assert.equal(calls.filter((path) => path.endsWith('/api/v2/bands')).length, 1);
+    assert.ok(calls.some((path) => path.includes('/api/v2/bands/by-slug/other-band')));
   } finally { globalThis.fetch = previousFetch; }
 });
 
 test('legacy routes go to the landing, while the singular band alias retains only its safe workspace path', async () => {
   await load(); const previousFetch = globalThis.fetch;
-  globalThis.fetch = async () => response({ bands: [], pending_memberships: [] });
+    globalThis.fetch = async (url) => response(String(url).includes('/api/v2/bands/by-slug/') ? {} : { bands: [], pending_memberships: [] });
   try {
     for (const path of ['/songs/43', '/members', '/gallery', '/suggestions', '/not-a-route']) {
       const old = renderRoutes(path, account());
@@ -113,7 +162,7 @@ test('legacy routes go to the landing, while the singular band alias retains onl
 
     globalThis.fetch = async (url) => { previousCalls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
     const unknownWorkspace = renderRoutes('/bands/quiet-lantern/not-a-tab', account('member-1'));
-    await unknownWorkspace.findByText('활성 멤버십');
+    await unknownWorkspace.findByText('내 밴드');
     assert.equal(unknownWorkspace.getByTestId('route').textContent, '/bands');
     unknownWorkspace.unmount();
   } finally { globalThis.fetch = previousFetch; }
