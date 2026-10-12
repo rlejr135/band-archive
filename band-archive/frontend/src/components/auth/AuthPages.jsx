@@ -11,16 +11,15 @@ const authFailure = '요청을 처리하지 못했습니다. 잠시 후 다시 �
 const appOrigin = () => window.location.origin;
 const returnFromSearch = (searchParams) => safeReturnPath(searchParams.get('returnTo')) || '/bands';
 
-const AuthFrame = ({ title, children }) => {
+const AuthFrame = ({ title, children, embedded = false }) => {
   const { configError } = useAuth();
+  const card = <section className={`auth-card${embedded ? ' auth-card--embedded' : ''}`} aria-labelledby="auth-title">
+    <h1 id="auth-title">{title}</h1>
+    {configError && <p className="auth-config-error" role="alert">{configError}</p>}
+    {children}
+  </section>;
   return (
-    <main className="auth-page">
-      <section className="auth-card" aria-labelledby="auth-title">
-        <h1 id="auth-title">{title}</h1>
-        {configError && <p className="auth-config-error" role="alert">{configError}</p>}
-        {children}
-      </section>
-    </main>
+    embedded ? card : <main className="auth-page">{card}</main>
   );
 };
 
@@ -30,7 +29,7 @@ const AuthForm = ({ children, onSubmit, submitting }) => (
   </form>
 );
 
-export const LoginPage = () => {
+export const LoginPage = ({ embedded = false }) => {
   const { user, loading, configError } = useAuth();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -62,7 +61,7 @@ export const LoginPage = () => {
     }
   };
   return (
-    <AuthFrame title="로그인">
+    <AuthFrame title="로그인" embedded={embedded}>
       <AuthForm onSubmit={submit} submitting={submitting}>
         <label>이메일<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
         <label>비밀번호<input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label>

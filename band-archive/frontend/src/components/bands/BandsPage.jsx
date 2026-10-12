@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
-import { InviteCodeEntry, LegacyOwnershipClaimPanel } from './BandOnboarding.jsx';
+import { InviteCodeEntry } from './BandOnboarding.jsx';
+import AuthStatus from '../layout/AuthStatus.jsx';
 import './BandsPage.css';
 
 export const BandsPage = () => {
@@ -11,8 +12,8 @@ export const BandsPage = () => {
   const { activeBands, selectedBand, setAvailableBands, selectBand } = useBands();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [loadedUserId, setLoadedUserId] = useState(null);
   const [error, setError] = useState('');
-  const [account, setAccount] = useState(null);
   const [pendingMemberships, setPendingMemberships] = useState([]);
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
 
@@ -22,24 +23,15 @@ export const BandsPage = () => {
       setLoading(true);
       setError('');
       try {
-        // Read the local account before bands so future server-side profile
-        // fields remain available without relying on the browser email claim.
-        const [me, bandsResponse] = await Promise.all([
-          api.requestJson('/api/v2/me'),
-          api.requestJson('/api/v2/bands'),
-        ]);
+        const bandsResponse = await api.requestJson('/api/v2/bands');
         if (!current) return;
         setAvailableBands(bandsResponse?.bands);
-        // Bind account-only controls to the authenticated identity that loaded
-        // them. On an A -> B session switch, state from A can remain until B's
-        // /me response arrives; it must never authorize B's UI in that gap.
-        setAccount({ userId: user?.id ?? null, isPlatformAdmin: me?.user?.is_platform_admin === true });
         // The current server contract returns active memberships in `bands`.
         // Accept a future explicit pending list without inferring it client-side.
         setPendingMemberships(Array.isArray(bandsResponse?.pending_memberships) ? bandsResponse.pending_memberships : []);
-        if (!me?.user) setError('계정 정보를 확인하지 못했습니다. 다시 시도해 주세요.');
+        setLoadedUserId(user?.id ?? null);
       } catch {
-        if (current) setError('밴드 정보를 불러오지 못했습니다. 다시 시도해 주세요.');
+        if (current) { setLoadedUserId(user?.id ?? null); setError('밴드 정보를 불러오지 못했습니다. 다시 시도해 주세요.'); }
       } finally {
         if (current) setLoading(false);
       }
@@ -48,20 +40,24 @@ export const BandsPage = () => {
     return () => { current = false; };
   }, [api, setAvailableBands, user?.id]);
 
+  const accountLoading = loading || loadedUserId !== (user?.id ?? null);
+
   return (
+    <div className="bands-shell">
+      <header className="bands-header"><Link to="/bands" className="bands-brand">내 밴드 <span>ARCHIVE</span></Link><AuthStatus /></header>
     <section className="bands-page" aria-labelledby="bands-title">
       <div>
         <h2 id="bands-title">내 밴드</h2>
         <p className="bands-help">활성 멤버십에서 작업할 밴드를 선택하세요.</p>
       </div>
-      {loading ? <p>밴드 정보를 불러오는 중입니다…</p> : error ? <p className="auth-error" role="alert">{error}</p> : <>
+      {accountLoading ? <p>밴드 정보를 불러오는 중입니다…</p> : error ? <p className="auth-error" role="alert">{error}</p> : <>
         <section aria-labelledby="active-bands-title">
           <h3 id="active-bands-title">활성 멤버십</h3>
           {activeBands.length === 0 ? <div className="bands-empty"><p>현재 활성화된 밴드가 없습니다.</p><button type="button" className="secondary-btn" onClick={() => navigate('/bands/discover')}>공개 밴드 찾기</button><button type="button" className="secondary-btn" onClick={() => navigate('/bands/request')}>밴드 생성 요청</button></div> : <><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate('/bands/discover')}>공개 밴드 찾기</button><button type="button" className="secondary-btn" onClick={() => navigate('/bands/request')}>밴드 생성 요청</button></div><ul className="band-list">
             {activeBands.map((band) => <li key={band.id}>
-              <button type="button" className={selectedBand?.id === band.id ? 'band-choice selected' : 'band-choice'} onClick={() => selectBand(band.id)} aria-pressed={selectedBand?.id === band.id}>
+              <button type="button" className={selectedBand?.id === band.id ? 'band-choice selected' : 'band-choice'} onClick={() => { selectBand(band.id); navigate(`/bands/${encodeURIComponent(band.slug)}`); }} aria-pressed={selectedBand?.id === band.id}>
                 <strong>{band.name}</strong><span>{band.membership?.role || 'member'}</span>
-              </button><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(`/bands/${encodeURIComponent(band.slug)}`)}>공간 열기</button>{band.permissions?.can_manage_members && band.permissions?.can_manage_invites && <button type="button" className="secondary-btn" onClick={() => navigate(`/bands/${encodeURIComponent(band.slug)}/manage`)}>관리</button>}</div>
+              </button><div className="band-actions">{band.permissions?.can_manage_members && band.permissions?.can_manage_invites && <button type="button" className="secondary-btn" onClick={() => { selectBand(band.id); navigate(`/bands/${encodeURIComponent(band.slug)}/manage`); }}>관리</button>}</div>
             </li>)}
           </ul></>}
         </section>
@@ -70,8 +66,8 @@ export const BandsPage = () => {
           {pendingMemberships.length === 0 ? <p className="bands-help">가입 대기 중인 밴드가 없습니다.</p> : <ul className="band-list">{pendingMemberships.map((membership) => <li key={membership.id}>{membership.band?.name || '밴드'} — 승인 대기</li>)}</ul>}
         </section>
         <InviteCodeEntry />
-        <LegacyOwnershipClaimPanel key={user?.id || 'unknown'} isPlatformAdmin={account?.userId === (user?.id ?? null) && account?.isPlatformAdmin === true} />
       </>}
     </section>
+    </div>
   );
 };

@@ -18,4 +18,9 @@
 .bands-pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }
 .invite-once { display: grid; gap: 8px; margin: 14px 0; padding: 12px; border: 1px solid var(--primary-color); border-radius: 8px; }
 .invite-once code { overflow-wrap: anywhere; user-select: all; }
-@media (max-width: 768px) { .bands-page { padding: 20px; } }
+.bands-shell { min-height: 100vh; padding: 0 24px 32px; background: var(--background-color); }
+.bands-header { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; max-width: 1120px; margin: 0 auto; border-bottom: 1px solid rgba(241, 242, 246, .1); }
+.bands-brand { color: var(--text-primary); font-weight: 700; text-decoration: none; }
+.bands-brand span { margin-left: 7px; color: var(--text-secondary); font-size: 9px; letter-spacing: .2em; }
+.bands-page { margin-top: 28px; }
+@media (max-width: 768px) { .bands-shell { padding: 0 12px 20px; } .bands-header { min-height: 62px; } .bands-page { padding: 20px; } }

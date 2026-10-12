@@ -10,7 +10,6 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http:
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Event: dom.window.Event, FormData: dom.window.FormData });
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
-
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 let vite; let auth; let bands; let page;
@@ -23,35 +22,58 @@ const load = async () => {
 };
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
 
-const account = (id) => ({ user: { id }, getAccessToken: async () => id, refreshSession: async () => id, loading: false });
-const bandValue = { activeBands: [], selectedBand: null, setAvailableBands: () => {}, selectBand: () => {} };
-const App = ({ authValue }) => createElement(
-  auth.AuthContext.Provider, { value: authValue },
-  createElement(bands.BandContext.Provider, { value: bandValue },
-    createElement(MemoryRouter, null, createElement(page.BandsPage)),
-  ),
-);
-
-test('account switch hides platform controls before the next account profile has loaded', async () => {
-  await load(); const previousFetch = globalThis.fetch; const accountBMe = deferred(); const calls = [];
-  globalThis.fetch = async (url, options = {}) => {
-    const value = String(url); const token = options.headers?.Authorization; calls.push({ value, token });
-    if (value.endsWith('/api/v2/me')) return token === 'Bearer account-b' ? accountBMe.promise : response({ user: { id: 'account-a', is_platform_admin: true } });
-    if (value.endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
-    if (value.includes('/api/v2/public/bands')) return response({ bands: [], pagination: { total: 0, has_more: false } });
-    if (value.includes('/api/v2/platform/legacy-ownership-claims/eligible-bands')) return response({ bands: [{ id: 9, name: 'Legacy', slug: 'legacy' }] });
-    throw new Error(`unexpected ${value}`);
-  };
+test('band chooser reads the membership list once and has no legacy claim or profile request', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url) => { calls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
+  const authValue = { user: { id: 'member-1' }, getAccessToken: async () => 'member-token', refreshSession: async () => 'member-token', loading: false, signOut: async () => {} };
+  const bandValue = { activeBands: [], selectedBand: null, setAvailableBands: () => {}, selectBand: () => {} };
   try {
-    const view = render(createElement(App, { authValue: account('account-a') }));
-    await view.findByRole('button', { name: '소유권 토큰 발급' });
-
-    view.rerender(createElement(App, { authValue: account('account-b') }));
-    await waitFor(() => assert.equal(view.queryByRole('button', { name: '소유권 토큰 발급' }), null));
-    await waitFor(() => assert.equal(calls.filter((call) => call.value.includes('eligible-bands') && call.token === 'Bearer account-b').length, 0));
-
-    await act(async () => { accountBMe.resolve(response({ user: { id: 'account-b', is_platform_admin: false } })); });
+    const view = render(createElement(auth.AuthContext.Provider, { value: authValue },
+      createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, null, createElement(page.BandsPage)))));
     await view.findByText('활성 멤버십');
-    assert.equal(view.queryByRole('button', { name: '소유권 토큰 발급' }), null);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /\/api\/v2\/bands$/);
+    assert.equal(calls.some((url) => url.includes('/api/v2/me') || url.includes('legacy-ownership-claim')), false);
+    assert.equal(view.queryByText(/소유권/), null);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('account switch hides prior pending memberships and ignores a late response from the old account', async () => {
+  await load(); const previousFetch = globalThis.fetch; const accountA = deferred(); const accountB = deferred(); const calls = [];
+  globalThis.fetch = async (url) => { calls.push(String(url)); return calls.length === 1 ? accountA.promise : accountB.promise; };
+  const bandValue = { activeBands: [], selectedBand: null, setAvailableBands: () => {}, selectBand: () => {} };
+  const renderAccount = (id) => createElement(auth.AuthContext.Provider, { value: { user: { id }, getAccessToken: async () => id, refreshSession: async () => id, loading: false, signOut: async () => {} } },
+    createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, null, createElement(page.BandsPage))));
+  try {
+    const view = render(renderAccount('account-a'));
+    await waitFor(() => assert.equal(calls.length, 1));
+    view.rerender(renderAccount('account-b'));
+    await waitFor(() => assert.equal(calls.length, 2));
+    await act(async () => accountA.resolve(response({ bands: [], pending_memberships: [{ id: 1, band: { name: 'A private pending band' } }] })));
+    assert.equal(view.queryByText('A private pending band'), null);
+    await act(async () => accountB.resolve(response({ bands: [], pending_memberships: [{ id: 2, band: { name: 'B pending band' } }] })));
+    await view.findByText('B pending band', { exact: false });
+    assert.equal(view.queryByText('A private pending band'), null);
+    assert.equal(calls.length, 2);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('already-loaded account memberships disappear synchronously while the next account is still loading', async () => {
+  await load(); const previousFetch = globalThis.fetch; const accountB = deferred(); const calls = [];
+  globalThis.fetch = async () => { calls.push(calls.length + 1); return calls.length === 1
+    ? response({ bands: [], pending_memberships: [{ id: 1, band: { name: 'A visible pending band' } }] })
+    : accountB.promise; };
+  const bandValue = { activeBands: [], selectedBand: null, setAvailableBands: () => {}, selectBand: () => {} };
+  const renderAccount = (id) => createElement(auth.AuthContext.Provider, { value: { user: { id }, getAccessToken: async () => id, refreshSession: async () => id, loading: false, signOut: async () => {} } },
+    createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, null, createElement(page.BandsPage))));
+  try {
+    const view = render(renderAccount('account-a'));
+    await view.findByText('A visible pending band', { exact: false });
+    view.rerender(renderAccount('account-b'));
+    assert.equal(view.queryByText('A visible pending band'), null);
+    await waitFor(() => assert.equal(calls.length, 2));
+    await act(async () => accountB.resolve(response({ bands: [], pending_memberships: [{ id: 2, band: { name: 'B visible pending band' } }] })));
+    await view.findByText('B visible pending band', { exact: false });
+    assert.equal(view.queryByText('A visible pending band'), null);
   } finally { globalThis.fetch = previousFetch; }
 });

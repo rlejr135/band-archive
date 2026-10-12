@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-test('song consumers reuse SongContext instead of issuing their own list requests', async () => {
+test('song data helpers remain isolated from the browser router after legacy UI retirement', async () => {
   const [context, calendar, dashboard, app] = await Promise.all([
     readFile(new URL('../context/SongContext.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../components/calendar/RehearsalCalendar.jsx', import.meta.url), 'utf8'),
@@ -15,5 +15,7 @@ test('song consumers reuse SongContext instead of issuing their own list request
   assert.doesNotMatch(calendar, /fetchSongs/);
   assert.match(dashboard, /const \{ songs \} = useSongs\(\)/);
   assert.doesNotMatch(dashboard, /fetchSongs/);
-  assert.match(app, /loadSongs\(\);/);
+  assert.doesNotMatch(app, /SongProvider|LegacyApp|SongContext|Dashboard\.jsx|SongList\.jsx/);
+  assert.match(app, /path="\/bands\/:bandSlug"/);
+  assert.match(app, /path="\*" element=\{<LegacyRoute \/>\}/);
 });

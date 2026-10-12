@@ -49,7 +49,7 @@ export const BandWorkspace = () => {
   const { bandSlug } = useParams();
   const navigate = useNavigate();
   const { user, getAccessToken, refreshSession, signOut } = useAuth();
-  const { activeBands } = useBands();
+  const { activeBands, selectBand } = useBands();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ loading: true, error: '', band: null });
   const requestGate = useRef(createWorkspaceRequestGate());
@@ -74,7 +74,7 @@ export const BandWorkspace = () => {
 
   const switchBand = (event) => {
     const band = activeBands.find((item) => String(item.id) === event.target.value);
-    if (band?.slug) navigate(`/bands/${encodeURIComponent(band.slug)}`);
+    if (band?.slug) { selectBand?.(band.id); navigate(`/bands/${encodeURIComponent(band.slug)}`); }
   };
 
   if (state.loading) return <WorkspacePaintGate requestedSlug={bandSlug} />;

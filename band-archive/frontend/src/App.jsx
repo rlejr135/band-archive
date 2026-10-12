@@ -1,271 +1,99 @@
-import React, { useState, useEffect } from 'react';
-import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
-import { SongProvider, useSongs } from './context/SongContext';
-import { UploadProvider } from './context/UploadContext';
-import UploadCenter from './components/common/UploadCenter';
-import SongList from './components/songs/SongList';
-import SongDetail from './components/songs/SongDetail';
-import SongForm from './components/songs/SongForm';
-import SearchBar from './components/common/SearchBar';
-import Dashboard from './components/dashboard/Dashboard';
-import SongSuggestion from './components/songs/SongSuggestion';
-import MemberDashboard from './components/members/MemberDashboard';
-import MemberDetail from './components/members/MemberDetail';
-import AnnouncementToast from './components/common/AnnouncementToast';
-import Gallery from './components/gallery/Gallery';
-import { AuthProvider } from './context/AuthContext';
-import { BandProvider } from './context/BandContext';
-import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages';
-import { BandsPage } from './components/bands/BandsPage';
-import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding';
-import AuthStatus from './components/layout/AuthStatus';
-import RequireAuth from './components/layout/RequireAuth';
-import { BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace';
+import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext.jsx';
+import { BandProvider } from './context/BandContext.jsx';
+import { UploadProvider } from './context/UploadContext.jsx';
+import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages.jsx';
+import { BandsPage } from './components/bands/BandsPage.jsx';
+import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
+import RequireAuth from './components/layout/RequireAuth.jsx';
+import { BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
 import './App.css';
-import './components/layout/Header.css'; // Header.css also moved? Wait, Header component is imported? No, Header is in App.jsx manually? Ah Header.css used.
-// Header component seems to be missing from imports, maybe it's defined inside App or MainContent?
-// Ah, previous App.jsx overwrote MainContent but didn't import Header component, it implemented Header inside MainContent.
-// But Header.css was imported. We moved Header.css to layout/Header.css.
+import './components/bands/BandsPage.css';
+import './components/home/WelcomeLanding.css';
 
-import logo from './assets/logo.png';
+const WelcomeLanding = ({ authRoute = false }) => {
+  const { user, loading } = useAuth();
+  if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
+  if (user && !authRoute) return <Navigate to="/bands" replace />;
 
-// Component to handle Song List + Detail view logic
-const SongPage = () => {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const {
-    songs, loading, error, currentSong, isEditing,
-    selectSong, removeSong, startCreate, startEdit,
-    loadSongs, cancelEdit, addSong, editSong
-  } = useSongs();
-
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // SongPage 진입 시 최신 데이터 로드
-  useEffect(() => {
-    loadSongs();
-  }, []);
-
-  // Sync URL params with Context state
-  useEffect(() => {
-    if (id && songs.length > 0) {
-      const songId = parseInt(id);
-      if (!currentSong || currentSong.id !== songId) {
-        const song = songs.find(s => s.id === songId);
-        if (song) {
-          selectSong(song);
-        }
-      }
-    } else if (!id && !isEditing) {
-      // If no ID in URL and not editing (e.g. creating new), clear selection
-      if (currentSong) selectSong(null);
-    }
-  }, [id, songs, currentSong, selectSong, isEditing]);
-
-  const filteredSongs = songs.filter(song =>
-    song.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    song.artist.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const handleSelectSong = (song) => {
-    navigate(`/songs/${song.id}`);
-  };
-
-  const handleBackToGenerals = () => {
-    selectSong(null);
-    cancelEdit();
-    navigate('/songs');
-  };
-
-  const handleSave = async (data) => {
-    if (currentSong && currentSong.id) {
-      await editSong(currentSong.id, data);
-      navigate(`/songs/${currentSong.id}`); // Stay on detail
-    } else {
-      const newSong = await addSong(data);
-      navigate(`/songs/${newSong.id}`);
-    }
-    cancelEdit();
-  };
-
-  const handleDelete = async (id) => {
-    await removeSong(id);
-    navigate('/songs');
-  };
-
-  return (
-    <>
-      <aside className="sidebar">
-        <SearchBar onSearch={setSearchQuery} />
-        {loading ? (
-          <div className="loading">로딩 중...</div>
-        ) : error ? (
-          <div className="loading">
-            <p>{error}</p>
-            <button className="secondary-btn" onClick={loadSongs}>다시 시도</button>
-          </div>
-        ) : (
-          <SongList
-            songs={filteredSongs}
-            onSelectSong={handleSelectSong}
-            onDeleteSong={handleDelete}
-            onAddSong={() => {
-              startCreate();
-              navigate('/songs/new'); // Optional: URL for new song
-            }}
-          />
-        )}
-      </aside>
-
-      <section className="content-area">
-        {isEditing ? (
-          <SongForm
-            song={currentSong} // If creating, this is null/undefined
-            onSave={handleSave}
-            onCancel={handleBackToGenerals}
-          />
-        ) : currentSong ? (
-          <SongDetail
-            song={currentSong}
-            onEdit={startEdit}
-            onBack={handleBackToGenerals}
-          />
-        ) : (
-          <div className="empty-state">
-            <p>곡을 선택하거나 새로운 곡을 추가하세요.</p>
-            <button className="secondary-btn" onClick={() => {
-              startCreate();
-              // We don't necessarily need a route for 'new', can just set state
-            }}>곡 추가하기</button>
-          </div>
-        )}
-      </section>
-    </>
-  );
-};
-
-
-const MainContent = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { currentSong, isEditing } = useSongs();
-
-  // Determine active view for styling
-  const getCurrentView = () => {
-    if (location.pathname === '/') return 'dashboard';
-    if (location.pathname.startsWith('/songs')) return 'songs';
-    if (location.pathname === '/suggestions') return 'suggestions';
-    if (location.pathname.startsWith('/members')) return 'members';
-    if (location.pathname === '/gallery') return 'gallery';
-    return '';
-  };
-
-  const currentView = getCurrentView();
-
-  // Mobile responsive helper class
-  // Check if we are in a detail view (URL has ID or isEditing) to toggle sidebar on mobile
-  const hasSelectedSong = (location.pathname.startsWith('/songs/') && location.pathname !== '/songs/new' && location.pathname !== '/songs') || isEditing || currentSong;
-
-  return (
-    <div className="app-container fade-in">
-      <header className="app-header">
-        <div className="logo-container" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
-          <img src={logo} alt="들뜬 Logo" className="band-logo" />
-          <h1>들뜬 <span className="archive-text">Archive</span></h1>
+  return <main className="welcome-page">
+    <header className="welcome-header">
+      <Link className="welcome-brand" to="/" aria-label="모두의 Band Archive 홈"><span className="welcome-brand-mark">B</span><span>모두의 Band Archive <small>YOUR MUSIC, TOGETHER</small></span></Link>
+      <a className="welcome-header-link" href="#login">로그인</a>
+    </header>
+    <section className="welcome-hero">
+      <div className="welcome-copy">
+        <p className="welcome-eyebrow">YOUR BAND, IN ONE PLACE</p>
+        <h1>함께 만든 순간을<br /><em>오래 남기다</em></h1>
+        <p className="welcome-description">곡과 합주, 멤버와 공연 기록까지. 밴드의 시간을 한곳에 모으고 함께 이어가세요.</p>
+        <a className="welcome-cta" href="#login">밴드 아카이브 시작하기 <span aria-hidden="true">↗</span></a>
+        <p className="welcome-note">초대받은 밴드 멤버라면 계정으로 로그인해 주세요.</p>
+      </div>
+      <div className="welcome-preview-wrap" aria-label="대시보드 예시 미리보기">
+        <div className="welcome-preview-label"><span className="preview-dot" /> 미리보기 · 예시 화면</div>
+        <div className="welcome-preview">
+          <div className="preview-top"><div><span className="preview-kicker">BAND ARCHIVE</span><h2>우리의 무대 뒤편</h2></div><span className="preview-avatar">A</span></div>
+          <div className="preview-tabs" aria-label="예시 화면의 장식 요소"><span className="is-current">한눈에 보기</span><span>곡</span><span>합주</span><span>기록</span></div>
+          <div className="preview-stats"><div><span>함께한 곡</span><strong>24</strong><small>우리의 레퍼토리</small></div><div><span>기록한 합주</span><strong>18</strong><small>쌓여가는 시간</small></div></div>
+          <div className="preview-recent"><div className="preview-record-icon">♫</div><div><span>최근의 기록</span><strong>여름밤 라이브 세션</strong><small>새로운 순간이 아카이브에 담겼어요</small></div><span className="preview-arrow">↗</span></div>
+          <div className="preview-disclaimer">실제 밴드 정보가 아닌 화면 예시입니다</div>
         </div>
-        <div className="header-actions">
-          <UploadCenter />
-          <AuthStatus />
-          <button
-            className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`}
-            onClick={() => navigate('/')}
-          >
-            📊 대시보드
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'songs' ? 'active' : ''}`}
-            onClick={() => navigate('/songs')}
-          >
-            🎵 곡 목록
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'members' ? 'active' : ''}`}
-            onClick={() => navigate('/members')}
-          >
-            👥 멤버
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'suggestions' ? 'active' : ''}`}
-            onClick={() => navigate('/suggestions')}
-          >
-            🗳️ 다음 곡 추천
-          </button>
-          <button
-            className={`nav-btn ${currentView === 'gallery' ? 'active' : ''}`}
-            onClick={() => navigate('/gallery')}
-          >
-            📷 갤러리
-          </button>
-        </div>
-      </header>
-
-      <AnnouncementToast />
-
-      {/* Main className handles mobile view switching */}
-      <main className={`app-main ${hasSelectedSong ? 'has-selected-song' : ''}`}>
-        <Routes>
-          <Route path="/" element={<Dashboard onSelectSong={(song) => navigate(`/songs/${song.id}`)} onViewSongs={() => navigate('/songs')} />} />
-          <Route path="/songs" element={<SongPage />} />
-          <Route path="/songs/:id" element={<SongPage />} />
-          <Route path="/suggestions" element={<SongSuggestion />} />
-          <Route path="/members" element={<MemberDashboard />} />
-          <Route path="/members/:id" element={<MemberDetail />} />
-          <Route path="/gallery" element={<Gallery />} />
-          <Route path="/bands" element={<RequireAuth><BandsPage /></RequireAuth>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-    </div>
-  );
+        <div className="welcome-orbit welcome-orbit-one" /><div className="welcome-orbit welcome-orbit-two" />
+      </div>
+    </section>
+    <section className="welcome-login" id="login" aria-labelledby="welcome-login-title">
+      <div><p className="welcome-eyebrow">WELCOME BACK</p><h2 id="welcome-login-title">아카이브로 돌아오기</h2><p>로그인하면 내 밴드 목록에서 작업할 공간을 선택할 수 있어요.</p></div>
+      <LoginPage embedded />
+    </section>
+    <footer className="welcome-footer"><span>모두의 Band Archive</span><span>밴드의 시간을 함께 기록합니다.</span></footer>
+  </main>;
 };
 
-const LegacyApp = () => {
-  return (
-    <SongProvider>
-      <MainContent />
-    </SongProvider>
-  );
+const RootRoute = () => {
+  const { user, loading } = useAuth();
+  if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
+  return user ? <Navigate to="/bands" replace /> : <WelcomeLanding />;
 };
+
+const LegacyRoute = () => {
+  const { user, loading } = useAuth();
+  if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
+  return user ? <Navigate to="/bands" replace /> : <Navigate to="/" replace />;
+};
+
+const BandAliasRedirect = () => {
+  const { bandSlug, '*': rest } = useParams();
+  const suffix = rest ? `/${rest}` : '';
+  return <Navigate to={`/bands/${encodeURIComponent(bandSlug)}${suffix}`} replace />;
+};
+
+export const AppRoutes = () => <Routes>
+  <Route path="/" element={<RootRoute />} />
+  <Route path="/login" element={<WelcomeLanding authRoute />} />
+  <Route path="/signup" element={<SignupPage />} />
+  <Route path="/verify-email" element={<VerifyEmailPage />} />
+  <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+  <Route path="/reset-password" element={<ResetPasswordPage />} />
+  <Route path="/band/:bandSlug/*" element={<BandAliasRedirect />} />
+  <Route path="/bands" element={<RequireAuth><BandsPage /></RequireAuth>} />
+  <Route path="/bands/discover" element={<RequireAuth><DiscoverBandsPage /></RequireAuth>} />
+  <Route path="/bands/request" element={<RequireAuth><BandCreationRequestPage /></RequireAuth>} />
+  <Route path="/bands/:bandSlug/manage" element={<RequireAuth><BandManageRoute /></RequireAuth>} />
+  <Route path="/bands/:bandSlug" element={<RequireAuth><BandWorkspaceRoute /></RequireAuth>}>
+    <Route index element={<BandDashboard />} />
+    <Route path="songs" element={<SongWorkspace />} />
+    <Route path="rehearsals" element={<RehearsalWorkspace />} />
+    <Route path="members" element={<MembersWorkspace />} />
+    <Route path="members/:memberId" element={<MemberDetailWorkspace />} />
+    <Route path="gallery" element={<GalleryWorkspace />} />
+    <Route path="suggestions" element={<SuggestionsWorkspace />} />
+  </Route>
+  <Route path="/bands/*" element={<RequireAuth><Navigate to="/bands" replace /></RequireAuth>} />
+  <Route path="*" element={<LegacyRoute />} />
+</Routes>;
 
 function App() {
-  return (
-    <AuthProvider>
-      <BandProvider>
-        <UploadProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/signup" element={<SignupPage />} />
-          <Route path="/verify-email" element={<VerifyEmailPage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/bands/discover" element={<DiscoverBandsPage />} />
-          <Route path="/bands/request" element={<RequireAuth><BandCreationRequestPage /></RequireAuth>} />
-          <Route path="/bands/:bandSlug/manage" element={<RequireAuth><BandManageRoute /></RequireAuth>} />
-          <Route path="/bands/:bandSlug" element={<BandWorkspaceRoute />}>
-            <Route index element={<BandDashboard />} />
-            <Route path="songs" element={<SongWorkspace />} />
-            <Route path="rehearsals" element={<RehearsalWorkspace />} />
-            <Route path="members" element={<MembersWorkspace />} />
-            <Route path="members/:memberId" element={<MemberDetailWorkspace />} />
-            <Route path="gallery" element={<GalleryWorkspace />} />
-            <Route path="suggestions" element={<SuggestionsWorkspace />} />
-          </Route>
-          <Route path="*" element={<LegacyApp />} />
-        </Routes>
-        </UploadProvider>
-      </BandProvider>
-    </AuthProvider>
-  );
+  return <AuthProvider><BandProvider><UploadProvider><AppRoutes /></UploadProvider></BandProvider></AuthProvider>;
 }
 
 export default App;
