@@ -193,10 +193,46 @@ test('account change remounts the workspace and clears the prior form, media, an
   };
   const view = render(createElement(App, { entry: '/bands/shared/songs', authValue: account('account-a'), bandValue: { activeBands: [] }, songs: true }));
   await view.findByText('A 선택 곡'); await userEvent.click(view.getByRole('button', { name: '더 불러오기' })); await view.findByText('A 다음 페이지'); await userEvent.click(view.getByText('A 선택 곡'));
-  await view.findByText('720p 영상'); await userEvent.click(view.getByRole('button', { name: '수정' })); assert.equal(view.getByLabelText('제목').value, 'A 선택 곡');
+  await view.findByText('영상 #501'); await userEvent.click(view.getByRole('button', { name: '수정' })); assert.equal(view.getByLabelText('제목').value, 'A 선택 곡');
   view.rerender(createElement(App, { entry: '/bands/shared/songs', authValue: account('account-b'), bandValue: { activeBands: [] }, songs: true }));
-  assert.equal(view.queryByDisplayValue('A 선택 곡'), null); assert.equal(view.queryByText('A 다음 페이지'), null); assert.equal(view.queryByText('720p 영상'), null);
+  assert.equal(view.queryByDisplayValue('A 선택 곡'), null); assert.equal(view.queryByText('A 다음 페이지'), null); assert.equal(view.queryByText('영상 #501'), null);
   await view.findByText('B 새 곡'); assert.equal(view.queryByText('A 선택 곡'), null); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('song media uses type-safe playback fallbacks and stable display names', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/playback')) return response({ band: { id: 70, slug: 'playback', name: '재생 밴드', membership: null } });
+    if (url.includes('/songs/71/media?')) return response({ media: [
+      { id: 1, file_type: 'audio', display_name: 'practice take.m4a', playback: { url: 'https://media.invalid/original.m4a' } },
+      { id: 2, file_type: 'video', display_name: 'band rehearsal.mp4', playback: { video_url: 'https://media.invalid/video.mp4', audio_url: 'https://media.invalid/audio.m4a' } },
+      { id: 3, file_type: 'video', playback: { url: 'https://media.invalid/video-only.mp4' } },
+      { id: 4, file_type: 'video', playback: { audio_url: 'https://media.invalid/extracted.m4a' } },
+      { id: 5, file_type: 'audio', playback: {} },
+    ], pagination: { has_more: false } });
+    if (url.includes('/songs?')) return response({ songs: [{ id: 71, title: '재생 확인 곡', artist: '밴드' }], pagination: { has_more: false } });
+    return response({});
+  };
+  try {
+    const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} };
+    const view = render(createElement(App, { entry: '/bands/playback/songs', authValue: visitor, bandValue: { activeBands: [] }, songs: true }));
+    await userEvent.click(await view.findByText('재생 확인 곡'));
+    const named = (name) => [...view.container.querySelectorAll('.workspace-media')].find((section) => section.querySelector('strong')?.textContent === name);
+    const originalAudio = await waitFor(() => { const item = named('practice take.m4a')?.querySelector('audio'); assert.ok(item); return item; });
+    assert.equal(originalAudio.getAttribute('src'), 'https://media.invalid/original.m4a');
+    const videoAndAudio = named('band rehearsal.mp4');
+    assert.equal(videoAndAudio.querySelector('video')?.getAttribute('src'), 'https://media.invalid/video.mp4');
+    await userEvent.click(view.getByRole('button', { name: '음원만 듣기' }));
+    assert.equal(videoAndAudio.querySelector('audio')?.getAttribute('src'), 'https://media.invalid/audio.m4a');
+    const videoOnly = named('영상 #3');
+    assert.equal(videoOnly.querySelector('video')?.getAttribute('src'), 'https://media.invalid/video-only.mp4');
+    assert.equal(videoOnly.querySelector('audio'), null);
+    const extractedAudio = named('영상 #4');
+    assert.equal(extractedAudio.querySelector('audio')?.getAttribute('src'), 'https://media.invalid/extracted.m4a');
+    assert.equal(named('음원 #5').textContent.includes('재생 가능한 파일이 없습니다.'), true);
+    assert.equal(view.queryByText(/720p/), null);
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test('song edit and confirmed delete issue exact scoped requests and refetch the rendered list', async () => {
