@@ -5,6 +5,7 @@ rehearsals use date/id, media uses score-desc/id, and comments use created/id.
 """
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,7 @@ from tests.test_auth import _install_jwks, _jwk, _token
 # Share the authenticated current-schema fixture with the central-access
 # contracts; importing the fixture functions makes them local pytest fixtures.
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
+from v2_content_serializers import _media_display_name
 
 
 def _headers(token):
@@ -139,6 +141,7 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
     assert [item['id'] for item in media.get_json()['media']] == [content_graph['public_media']]
     item = media.get_json()['media'][0]
     assert 'object_key' not in item and 'filename' not in item
+    assert item['display_name'] == 'visible.mp4'
     # Direct R2 presigned URLs are expected to encode a storage path.  It is
     # the only response field allowed to do so, and expires at the policy TTL.
     assert 'bands/b/public/visible-720.mp4' in item['playback']['video_url']
@@ -161,6 +164,58 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
     assert all('replies' not in item for item in flat_comments)
     assert any(item['parent_id'] is not None and item['content'] == 'reply' for item in flat_comments)
     assert client.get(f"{base}/media/{content_graph['hidden_media']}/comments").status_code == 404
+
+
+def test_media_display_name_uses_sanitized_original_name_and_safe_fallbacks(
+        access_app, content_graph, monkeypatch):
+    from storage import storage
+    monkeypatch.setattr(storage, 'generate_url', lambda key, expires_in=None: 'signed-playback-url')
+    client = access_app.test_client()
+    base = f"/api/v2/bands/{content_graph['public_band']}"
+    media_url = f"{base}/songs/{content_graph['playback_song']}/media"
+
+    with access_app.app_context():
+        media = db.session.get(Media, content_graph['public_media'])
+        # A control character is removed while Unicode and the Windows basename remain.
+        media.original_filename = 'C:\\Users\\비밀\\演\n奏🎵.mp4'
+        db.session.commit()
+    payload = client.get(media_url).get_json()['media'][0]
+    assert payload['display_name'] == '演奏🎵.mp4'
+    assert 'object_key' not in payload and 'filename' not in payload
+    assert 'bands/b/public/' not in str(payload)
+
+    for file_type, expected in (('video', f"영상 #{content_graph['public_media']}"),
+                                ('audio', f"음원 #{content_graph['public_media']}")):
+        with access_app.app_context():
+            media = db.session.get(Media, content_graph['public_media'])
+            media.original_filename = None
+            media.file_type = file_type
+            media.filename = 'private-internal-filename.mp4'
+            media.object_key = 'private/object-key.mp4'
+            media.video_720_object_key = 'private/derivative.mp4'
+            media.audio_object_key = 'private/audio-key.m4a'
+            db.session.commit()
+        payload = client.get(media_url).get_json()['media'][0]
+        assert payload['display_name'] == expected
+        assert 'private-internal-filename' not in str(payload)
+        assert 'private/object-key' not in str(payload)
+        assert 'private/derivative' not in str(payload)
+        assert 'private/audio-key' not in str(payload)
+
+
+@pytest.mark.parametrize(('original_filename', 'file_type', 'expected'), [
+    ('/tmp/演奏🎵.mp4', 'video', '演奏🎵.mp4'),
+    ('   ', 'audio', '음원 #42'),
+    ('folder/name\x85.mp3', 'audio', 'name.mp3'),
+    ('x' * 205, 'video', 'x' * 200),
+    (None, 'image', '파일 #42'),
+])
+def test_media_display_name_pure_sanitization_contract(original_filename, file_type, expected):
+    media = SimpleNamespace(
+        id=42, file_type=file_type, original_filename=original_filename,
+        filename='internal-filename-secret', object_key='internal/object-key-secret',
+    )
+    assert _media_display_name(media) == expected
 
 
 def test_member_owner_capabilities_cross_tenant_concealment_and_optional_auth_cache_contract(

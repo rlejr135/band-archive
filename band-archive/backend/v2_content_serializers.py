@@ -5,7 +5,10 @@ legacy serializers may create presigned URLs and retain storage-era filename
 fields; neither is safe to reuse before a resource has passed v2 visibility
 and tenant checks.  A direct, expiring R2 presigned URL may necessarily encode
 its object path as part of the signed protocol; no separate storage-key or
-filename field is returned.
+filename field is returned.  ``display_name`` is the sole user-facing media
+label and is derived only from the user-supplied ``original_filename`` after
+basename/control-character sanitization.  Internal filenames and object keys
+must never be used as display metadata.
 """
 
 from band_access import MEMBERS, PUBLIC, content_capabilities, effective_visibility
@@ -19,6 +22,22 @@ MEMBERS_URL_TTL = 300
 
 def _iso(value):
     return value.isoformat() if value is not None else None
+
+
+def _media_display_name(media):
+    """Return a safe, user-facing label without consulting storage identifiers."""
+    original_name = getattr(media, 'original_filename', None)
+    if isinstance(original_name, str):
+        # Treat either separator as a path boundary on every host OS.
+        basename = original_name.replace('\\', '/').rsplit('/', 1)[-1]
+        # Drop C0/C1 controls, including embedded newlines and terminal escapes.
+        basename = ''.join(char for char in basename
+                           if not (ord(char) < 32 or 0x7f <= ord(char) <= 0x9f)).strip()
+        if basename:
+            return basename[:200]
+    file_type = getattr(media, 'file_type', None)
+    kind = {'video': '영상', 'audio': '음원'}.get(file_type, '파일')
+    return f'{kind} #{media.id}'
 
 
 def _flags(scope, item, visibility):
@@ -159,6 +178,7 @@ def serialize_media(scope, media, viewer_vote=0):
         'song_id': media.song_id,
         'rehearsal_id': media.rehearsal_id,
         'file_type': media.file_type,
+        'display_name': _media_display_name(media),
         'file_size': media.file_size,
         'is_featured': bool(media.is_featured),
         'upvote_count': media.upvote_count,
