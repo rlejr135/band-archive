@@ -72,18 +72,19 @@ test('suggestion voting refetches authoritative viewer state, blocks double clic
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
 });
 
-test('announcement save prevents double submits, exposes retryable failure, and refreshes the exact response', async () => {
-  await load(); const originalFetch = globalThis.fetch; const firstSave = deferred(); const writes = []; let noticeReads = 0;
+test('dashboard announcement is read-only and never exposes announcement mutations', async () => {
+  await load(); const originalFetch = globalThis.fetch; const writes = [];
   globalThis.fetch = async (url, options = {}) => {
     const method = options.method || 'GET';
     if (url.includes('/by-slug/notices')) return response({ band: { id: 43, slug: 'notices', name: '공지', default_visibility: 'MEMBERS', can_manage: true, membership: { id: 4, role: 'owner', status: 'active' } } });
-    if (url.includes('/songs?') || url.includes('/rehearsals?')) return response({ pagination: { total: 0, has_more: false } });
-    if (url.endsWith('/announcement') && method === 'GET') { noticeReads += 1; return response({ announcement: noticeReads > 1 ? { id: 1, content: '서버 확정 공지', visibility: 'PUBLIC', can_manage: true } : { id: 1, content: '기존 공지', visibility: 'PUBLIC', can_manage: true } }); }
-    if (url.endsWith('/announcement') && method === 'PUT') { writes.push(JSON.parse(options.body)); return writes.length === 1 ? firstSave.promise : response({ announcement: { id: 1, content: '서버 확정 공지', visibility: 'PUBLIC', can_manage: true } }); }
+    if (url.includes('/bands/43/dashboard?')) return response({ dashboard: { band_id: 43, month: new URL(url, 'http://localhost').searchParams.get('month'), stats: {}, month_rehearsals: { items: [], pagination: { total: 0, has_more: false } }, announcement: { id: 1, content: '기존 공지', visibility: 'PUBLIC' } } });
+    if (method !== 'GET') writes.push(method);
     throw new Error(`unexpected ${method} ${url}`);
   };
   try {
-    const view = render(createElement(RouteApp, { entry: '/bands/notices', authValue: member(), dashboard: true })); await view.findByText('기존 공지'); await user.click(view.getByRole('button', { name: '공지 수정' })); const content = view.getByLabelText('공지 내용'); await user.clear(content); await user.type(content, '바뀐 공지'); const save = view.getByRole('button', { name: '저장' }); fireEvent.click(save); fireEvent.click(save); await waitFor(() => assert.equal(writes.length, 1)); await act(async () => { firstSave.resolve(response({}, 500)); }); await view.findByRole('alert'); fireEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 2)); await view.findByText('서버 확정 공지'); assert.deepEqual(writes, [{ content: '바뀐 공지', visibility: 'PUBLIC' }, { content: '바뀐 공지', visibility: 'PUBLIC' }]);
+    const view = render(createElement(RouteApp, { entry: '/bands/notices', authValue: member(), dashboard: true })); await view.findByText('기존 공지');
+    assert.equal(view.queryByRole('button', { name: /공지 작성|공지 수정|저장/ }), null);
+    assert.deepEqual(writes, []);
   } finally { globalThis.fetch = originalFetch; }
 });
 

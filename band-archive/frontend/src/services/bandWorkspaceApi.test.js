@@ -4,6 +4,8 @@ import { bandWorkspacePaths, commentPayload, rehearsalPayload, songPayload, vote
 
 test('workspace paths remain v2, tenant-scoped, and URL-safe', () => {
   assert.equal(bandWorkspacePaths.bandBySlug('my band/2026'), '/api/v2/bands/by-slug/my%20band%2F2026');
+  assert.equal(bandWorkspacePaths.dashboard(7, { month: '2026-10' }), '/api/v2/bands/7/dashboard?month=2026-10&limit=25&offset=0');
+  assert.equal(bandWorkspacePaths.dashboard(7, { month: '2026-10', limit: 25, offset: 25 }), '/api/v2/bands/7/dashboard?month=2026-10&limit=25&offset=25');
   assert.equal(bandWorkspacePaths.songs(7, { limit: 20, offset: 40 }), '/api/v2/bands/7/songs?limit=20&offset=40');
   assert.equal(bandWorkspacePaths.songMedia(7, 3), '/api/v2/bands/7/songs/3/media?limit=20&offset=0');
   assert.equal(bandWorkspacePaths.rehearsalMedia(7, 4), '/api/v2/bands/7/rehearsals/4/media?limit=20&offset=0');

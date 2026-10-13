@@ -34,6 +34,8 @@ const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => c
           createElement(Route, { path: 'members/:memberId', element: createElement(workspace.MemberDetailWorkspace) }),
           createElement(Route, { path: 'gallery', element: createElement(workspace.GalleryWorkspace) }),
           createElement(Route, { path: 'suggestions', element: createElement(workspace.SuggestionsWorkspace) }),
+          createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }),
+          createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }),
         ),
       ),
     ),
@@ -58,14 +60,13 @@ test('gallery and suggestions retain paged safe reads, featured image refresh, a
   try { const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} }; const gallery = render(createElement(ReadOnlyApp, { entry: '/bands/read-band/gallery', authValue: visitor })); await gallery.findByRole('heading', { name: '대표 사진' }); const featured = gallery.getByAltText('대표 갤러리 이미지'); fireEvent.error(featured); fireEvent.error(featured); await waitFor(() => assert.equal(featuredReads, 2)); fireEvent.error(gallery.getByAltText('갤러리 이미지')); await waitFor(() => assert.ok(galleryReads >= 2)); await userEvent.click(gallery.getByRole('button', { name: '사진 더 불러오기' })); await waitFor(() => assert.equal(gallery.getAllByAltText('갤러리 이미지').length, 2)); gallery.unmount(); const suggestions = render(createElement(ReadOnlyApp, { entry: '/bands/read-band/suggestions', authValue: visitor })); await suggestions.findByText('읽기 추천곡'); assert.equal(suggestions.queryByRole('button', { name: /추천|투표|추가|생성/ }), null); assert.equal(suggestions.getByText(/점수 4/).textContent.includes('검토 대기'), true); suggestions.unmount(); } finally { globalThis.fetch = previousFetch; }
 });
 
-test('dashboard safely distinguishes an absent announcement from a visible public summary', async () => {
+test('dashboard renders only the bounded public announcement summary and exposes no management controls', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     if (url.includes('/by-slug/notice-empty')) return response({ band: { id: 304, slug: 'notice-empty', name: '빈 공지 밴드', permissions: {}, membership: null } });
     if (url.includes('/by-slug/notice-visible')) return response({ band: { id: 305, slug: 'notice-visible', name: '공지 밴드', permissions: {}, membership: null } });
-    if (url.includes('/songs?') || url.includes('/rehearsals?')) return response({ pagination: { total: 0, has_more: false } });
-    if (url.includes('/bands/304/announcement')) return response({}, 404);
-    if (url.includes('/bands/305/announcement')) return response({ announcement: { id: 1, content: '이번 주 합주는 토요일입니다.', email: 'private@example.invalid', object_key: 'private/key' } });
+    if (url.includes('/bands/304/dashboard?')) return response({ dashboard: { band_id: 304, month: new URL(url, 'http://localhost').searchParams.get('month'), stats: {}, month_rehearsals: { items: [], pagination: { total: 0, has_more: false } }, announcement: null } });
+    if (url.includes('/bands/305/dashboard?')) return response({ dashboard: { band_id: 305, month: new URL(url, 'http://localhost').searchParams.get('month'), stats: {}, month_rehearsals: { items: [], pagination: { total: 0, has_more: false } }, announcement: { id: 1, content: '이번 주 합주는 토요일입니다.', email: 'private@example.invalid', object_key: 'private/key' } } });
     return response({});
   };
   try {
@@ -77,22 +78,24 @@ test('dashboard safely distinguishes an absent announcement from a visible publi
     await visible.findByText('이번 주 합주는 토요일입니다.');
     assert.equal(visible.queryByText('private@example.invalid'), null);
     assert.equal(visible.queryByText('private/key'), null);
+    assert.equal(visible.queryByRole('button', { name: /공지 작성|공지 수정/ }), null);
     visible.unmount();
   } finally { globalThis.fetch = previousFetch; }
 });
 
-test('dashboard displays the actual band membership role as informational access level', async () => {
+test('dashboard does not expose role-management UI or issue legacy list reads', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     if (url.includes('/by-slug/owner-band')) return response({ band: { id: 321, slug: 'owner-band', name: '소유자 밴드', membership: { id: 91, role: 'owner' }, permissions: {} } });
-    if (url.includes('/songs?') || url.includes('/rehearsals?')) return response({ songs: [], rehearsals: [], pagination: { total: 0 } });
-    return response({ announcement: null });
+    if (url.includes('/bands/321/dashboard?')) return response({ dashboard: { band_id: 321, month: new URL(url, 'http://localhost').searchParams.get('month'), stats: {}, month_rehearsals: { items: [], pagination: { total: 0, has_more: false } }, announcement: null } });
+    throw new Error(`unexpected dashboard request ${url}`);
   };
   try {
     const member = { user: { id: 'owner' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
     const view = render(createElement(ReadOnlyApp, { entry: '/bands/owner-band', authValue: member }));
-    await view.findByText('현재 접근 권한');
-    assert.ok(view.getByText('소유자'));
+    await view.findByText('대표 사진이 없습니다');
+    assert.equal(view.queryByText('현재 접근 권한'), null);
+    assert.equal(view.queryByText('소유자'), null);
     view.unmount();
   } finally { globalThis.fetch = previousFetch; }
 });

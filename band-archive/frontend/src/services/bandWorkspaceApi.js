@@ -4,6 +4,7 @@ const bandBase = (bandId) => `/api/v2/bands/${Number(bandId)}`;
 
 export const bandWorkspacePaths = {
   bandBySlug: (slug) => `/api/v2/bands/by-slug/${encodeURIComponent(slug)}`,
+  dashboard: (bandId, { month, limit = 25, offset = 0 } = {}) => `${bandBase(bandId)}/dashboard?month=${encodeURIComponent(month)}&limit=${limit}&offset=${offset}`,
   songs: (bandId, page) => `${bandBase(bandId)}/songs${pageQuery(page)}`,
   rehearsals: (bandId, page) => `${bandBase(bandId)}/rehearsals${pageQuery(page)}`,
   song: (bandId, songId) => `${bandBase(bandId)}/songs/${Number(songId)}`,
