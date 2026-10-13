@@ -6,6 +6,7 @@ import { InviteCodeEntry } from './BandOnboarding.jsx';
 import BandSwitcher from './BandSwitcher.jsx';
 import AuthStatus from '../layout/AuthStatus.jsx';
 import './BandsPage.css';
+import { usePlatformAdmin } from './usePlatformAdmin.js';
 
 const profileName = (user) => {
   const metadata = user?.user_metadata || {};
@@ -19,6 +20,7 @@ export const BandsPage = () => {
   const navigate = useNavigate();
   const name = profileName(user);
   const email = profileEmail(user);
+  const { admin: isPlatformAdmin } = usePlatformAdmin();
 
   const openBand = (band) => {
     if (!band?.slug) return;
@@ -47,7 +49,7 @@ export const BandsPage = () => {
       </section>
 
       <section className="account-memberships" aria-labelledby="memberships-heading">
-        <div className="account-section-heading"><div><p className="account-eyebrow">WORKSPACES</p><h2 id="memberships-heading">내 밴드</h2></div><div className="account-section-actions"><button type="button" className="secondary-btn" onClick={() => navigate('/bands/discover')}>공개 밴드 찾기</button><button type="button" className="primary-btn" onClick={() => navigate('/bands/request')}>밴드 생성 요청</button></div></div>
+        <div className="account-section-heading"><div><p className="account-eyebrow">WORKSPACES</p><h2 id="memberships-heading">내 밴드</h2>{isPlatformAdmin && <span className="account-role">Superadmin</span>}</div><div className="account-section-actions">{isPlatformAdmin && <Link className="secondary-btn" to="/platform/band-requests">밴드 생성 요청 관리</Link>}<button type="button" className="secondary-btn" onClick={() => navigate('/bands/discover')}>공개 밴드 찾기</button><button type="button" className="primary-btn" onClick={() => navigate('/bands/request')}>밴드 생성 요청</button></div></div>
         {loading ? <p aria-live="polite">밴드 정보를 불러오는 중입니다…</p> : error ? <div className="account-error" role="alert"><span>{error}</span><button type="button" className="secondary-btn" onClick={reload}>다시 시도</button></div> : activeBands.length === 0 ? <div className="account-empty"><h3>아직 가입한 밴드가 없습니다</h3><p>공개 밴드를 둘러보거나 초대 코드를 입력해 참여할 수 있어요.</p><button type="button" className="secondary-btn" onClick={() => document.getElementById('invite-entry-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>초대 코드 입력하기</button></div> : <ul className="account-band-list">
           {activeBands.map((band) => <li className="account-band-card" key={band.id}>
             <button type="button" className={`account-band-open${selectedBand?.id === band.id ? ' is-selected' : ''}`} onClick={() => openBand(band)} aria-pressed={selectedBand?.id === band.id}>

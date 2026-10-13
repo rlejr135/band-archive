@@ -65,15 +65,31 @@ test('anonymous browser routes are gated before discover or workspace data can m
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('platform request route requires login and denies an authenticated non-admin before reading the queue', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url) => { calls.push(String(url)); return response({ user: { is_platform_admin: false } }); };
+  try {
+    const anonymous = renderRoutes('/platform/band-requests', account());
+    await anonymous.findByRole('heading', { name: '로그인' });
+    assert.equal(calls.length, 0);
+    anonymous.unmount();
+
+    const member = renderRoutes('/platform/band-requests', account('member'));
+    await member.findByText('플랫폼 관리자만 이 페이지를 사용할 수 있습니다.');
+    assert.ok(calls.some((url) => url.endsWith('/api/v2/me')));
+    assert.equal(calls.some((url) => url.includes('/api/v2/platform/band-creation-requests?')), false);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('authenticated root opens the account hub with one bands request and no profile or claim calls', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url) => { calls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
   try {
     const view = renderRoutes('/', account('member-1'), true);
     await view.findByText('내 밴드');
-    assert.equal(calls.length, 1);
-    assert.match(calls[0], /\/api\/v2\/bands$/);
-    assert.equal(calls.some((url) => url.includes('/api/v2/me') || url.includes('legacy-ownership-claim')), false);
+    assert.equal(calls.filter((url) => url.endsWith('/api/v2/bands')).length, 1);
+    assert.ok(calls.some((url) => url.endsWith('/api/v2/me')));
+    assert.equal(calls.some((url) => url.includes('legacy-ownership-claim')), false);
     assert.equal(view.queryByText(/소유권/), null);
   } finally { globalThis.fetch = previousFetch; }
 });
