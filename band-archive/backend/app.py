@@ -382,15 +382,24 @@ def create_app(config_class=None, start_worker=None):
     legacy_usage_logger.disabled = False
     app.extensions['legacy_v1_usage_logger'] = legacy_usage_logger
     validate_supabase_auth_config(app.config)
+    cors_options = {
+        'supports_credentials': True,
+        'methods': ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        'allow_headers': [
+            'Authorization', 'Content-Type', 'X-Upload-Capability', 'X-Voter-ID',
+        ],
+        # Never authorize a browser to reach a private network by default.
+        'allow_private_network': False,
+    }
     if app.debug:
-        CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+        CORS(app, resources={r"/*": {"origins": "*"}}, **cors_options)
     else:
         allowed_origins = [
             origin.strip()
             for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
             if origin.strip()
         ]
-        CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
+        CORS(app, resources={r"/*": {"origins": allowed_origins}}, **cors_options)
 
     @app.before_request
     def _require_phase4_orm_schema():
