@@ -43,6 +43,10 @@ def band_app(monkeypatch):
             AppUser(supabase_user_id='owner-id', email='owner@example.com', email_verified=True),
             AppUser(supabase_user_id='member-id', email='member@example.com', email_verified=True),
             AppUser(supabase_user_id='other-id', email='other@example.com', email_verified=True),
+            AppUser(supabase_user_id='inactive-admin-id', email='inactive-admin@example.com',
+                    status='disabled', email_verified=True, is_platform_admin=True),
+            AppUser(supabase_user_id='unverified-admin-id', email='unverified-admin@example.com',
+                    email_verified=False, is_platform_admin=True),
         ]
         db.session.add_all(users)
         db.session.commit()
@@ -92,6 +96,51 @@ def test_creation_approval_owner_and_public_contract(band_app):
     with band_app.app_context():
         assert BandMembership.query.filter_by(band_id=band_id, role='owner', status='active').count() == 1
         assert AuditEvent.query.filter_by(event_type='band_created').count() == 1
+
+
+@pytest.mark.parametrize('subject', ('owner-id', 'member-id'))
+def test_band_creation_request_review_requires_platform_admin(band_app, subject):
+    client = band_app.test_client()
+    headers = _headers(subject)
+    assert client.get('/api/v2/platform/band-creation-requests', headers=headers).status_code == 403
+    assert client.patch('/api/v2/platform/band-creation-requests/1', headers=headers,
+                        json={'action': 'approve'}).status_code == 403
+    assert client.post('/api/v2/platform/band-creation-requests/1/approve', headers=headers).status_code == 403
+    assert client.post('/api/v2/platform/band-creation-requests/1/reject', headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize(('method', 'path', 'json_body'), (
+    ('get', '/api/v2/platform/band-creation-requests', None),
+    ('patch', '/api/v2/platform/band-creation-requests/1', {'action': 'approve'}),
+    ('post', '/api/v2/platform/band-creation-requests/1/approve', None),
+    ('post', '/api/v2/platform/band-creation-requests/1/reject', None),
+))
+def test_band_creation_request_review_requires_authentication(band_app, method, path, json_body):
+    response = getattr(band_app.test_client(), method)(path, json=json_body)
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize('subject', ('inactive-admin-id', 'unverified-admin-id'))
+def test_band_creation_request_review_rejects_inactive_or_unverified_platform_admin(band_app, subject):
+    client = band_app.test_client()
+    headers = _headers(subject)
+    assert client.get('/api/v2/platform/band-creation-requests', headers=headers).status_code == 403
+    assert client.patch('/api/v2/platform/band-creation-requests/1', headers=headers,
+                        json={'action': 'approve'}).status_code == 403
+    assert client.post('/api/v2/platform/band-creation-requests/1/approve', headers=headers).status_code == 403
+    assert client.post('/api/v2/platform/band-creation-requests/1/reject', headers=headers).status_code == 403
+
+
+def test_band_creation_request_review_allows_active_verified_platform_admin(band_app):
+    client = band_app.test_client()
+    assert client.get('/api/v2/platform/band-creation-requests').status_code == 401
+    assert client.get('/api/v2/platform/band-creation-requests', headers=_headers('admin-id')).status_code == 200
+    pending = client.post('/api/v2/band-creation-requests', headers=_headers('owner-id'), json={
+        'name': 'Reviewable Band', 'slug': 'reviewable-band', 'description': 'Ready for review',
+    })
+    assert pending.status_code == 201
+    assert client.patch('/api/v2/platform/band-creation-requests/1', headers=_headers('admin-id'),
+                        json={'action': 'approve'}).status_code == 200
 
 
 def test_my_bands_exposes_only_callers_pending_requests_without_private_account_data(band_app):

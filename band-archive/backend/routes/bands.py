@@ -42,7 +42,12 @@ def payload():
 
 def require_platform_admin():
     user = current_app_user()
-    if not user.is_platform_admin:
+    # Keep the platform boundary explicit even when this helper is called
+    # outside the normal auth synchronization path (for example in tests or
+    # future internal callers).  Authenticated tokens alone are not enough:
+    # the local profile must still be active, verified, and explicitly
+    # granted platform-admin status.
+    if (user.status != 'active' or not user.email_verified or not user.is_platform_admin):
         raise ValidationError('Platform administrator permission is required.', 403)
     return user
 
