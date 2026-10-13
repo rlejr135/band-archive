@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createElement, useEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -13,6 +13,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+const user = userEvent.setup({ document: dom.window.document });
 let vite; let onboarding; let auth; let bands;
 const load = async () => { if (onboarding) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
@@ -49,9 +50,9 @@ test('creation form has one in-flight submit and reports its status', async () =
 
 test('management hides non-manager and ignores a late A membership decision after route switch', async () => {
   await load(); const previous = globalThis.fetch; const decision = deferred(); const aDetail = { band: { id: 1, slug: 'a', name: 'A', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } }; const bDetail = { band: { id: 2, slug: 'b', name: 'B', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } };
-  globalThis.fetch = async (url, options = {}) => { const value = String(url); if (value.includes('/by-slug/a')) return response(aDetail); if (value.includes('/by-slug/b')) return response(bDetail); if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: 'A 요청' } }] }); if (value.includes('/bands/2/memberships')) return response({ memberships: [] }); if (value.includes('/invite-codes') && options.method !== 'POST') return response({ invite_codes: [] }); if (value.includes('/memberships/12')) return decision.promise; throw new Error(`unexpected ${value}`); };
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); if (value.includes('/by-slug/a')) return response(aDetail); if (value.includes('/by-slug/b')) return response(bDetail); if (value.endsWith('/announcement')) return response({ announcement: null }); if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: 'A 요청' } }] }); if (value.includes('/bands/2/memberships')) return response({ memberships: [] }); if (value.includes('/invite-codes') && options.method !== 'POST') return response({ invite_codes: [] }); if (value.includes('/memberships/12')) return decision.promise; throw new Error(`unexpected ${value}`); };
   try { const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('A 요청'); await userEvent.click(view.getByRole('button', { name: '승인' })); view.rerender(createElement(App, { entry: '/bands/b/manage', manage: true })); await view.findByText('B 관리'); await act(async () => decision.resolve(response({ membership: { id: 12 } }))); await new Promise((done) => setTimeout(done, 0)); assert.equal(view.queryByText('A 요청'), null); assert.equal(view.getByText('B 관리').textContent, 'B 관리'); view.unmount();
-    globalThis.fetch = async (url) => String(url).includes('/by-slug/member') ? response({ band: { id: 4, slug: 'member', permissions: { can_manage_members: false, can_manage_invites: false } } }) : response({}); const denied = render(createElement(App, { entry: '/bands/member/manage', manage: true })); await denied.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(denied.queryByText('초대 코드'), null);
+    globalThis.fetch = async (url) => String(url).includes('/by-slug/member') ? response({ band: { id: 4, slug: 'member', permissions: { can_manage_members: false, can_manage_invites: false } } }) : response({}); const platform = { ...account('platform'), user: { id: 'platform', app_metadata: { role: 'superadmin' } } }; const denied = render(createElement(App, { entry: '/bands/member/manage', manage: true, authValue: platform })); await denied.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(denied.queryByText('초대 코드'), null); assert.equal(denied.queryByText('대표 사진'), null);
   } finally { globalThis.fetch = previous; }
 });
 
@@ -62,6 +63,7 @@ test('management clears A privileged UI synchronously when the AuthContext ident
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url); const token = options.headers?.Authorization;
     if (value.includes('/by-slug/club')) return token === 'Bearer b' ? bDetail.promise : response(a);
+    if (value.endsWith('/announcement')) return response({ announcement: null });
     if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 11, status: 'pending', user: { display_name: 'A 요청' } }] });
     if (value.includes('/bands/2/memberships')) return response({ memberships: [] });
     if (value.includes('/bands/1/invite-codes') && options.method === 'POST') return response({ code: 'a-raw-invite' }, 201);
@@ -99,6 +101,7 @@ test('management ignores late A reads after an in-place AuthContext switch to B 
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url); const token = options.headers?.Authorization;
     if (value.includes('/by-slug/club')) { if (token === 'Bearer a') aDetailReads += 1; return response(token === 'Bearer b' ? b : a); }
+    if (value.endsWith('/announcement')) return response({ announcement: null });
     if (value.includes('/bands/1/memberships')) return aMembers.promise;
     if (value.includes('/bands/1/invite-codes')) return aInvites.promise;
     if (value.includes('/bands/2/memberships')) return response({ memberships: [{ id: 22, status: 'pending', user: { display_name: 'B 요청' } }] });
@@ -127,6 +130,7 @@ test('management keeps the newest mutation refetch when superseded reads resolve
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url);
     if (value.includes('/by-slug/club')) return response(detail);
+    if (value.endsWith('/announcement')) return response({ announcement: null });
     if (value.includes('/bands/1/memberships')) {
       membershipReads += 1;
       if (membershipReads === 1) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: '기존 요청' } }] });
@@ -159,5 +163,109 @@ test('management keeps the newest mutation refetch when superseded reads resolve
     await new Promise((done) => setTimeout(done, 0));
     assert.equal(view.queryByText('Old'), null);
     assert.equal(view.queryByText('New')?.textContent, 'New');
+  } finally { globalThis.fetch = previous; }
+});
+
+test('manager edits announcement visibility repeatedly and pages the featured photo picker', async () => {
+  await load(); const previous = globalThis.fetch; const announcementWrites = []; const featuredWrites = []; const galleryOffsets = []; let galleryReads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); const method = options.method || 'GET';
+    if (value.includes('/by-slug/editor-gallery')) return response({ band: { id: 43, slug: 'editor-gallery', name: '에디터 밴드', can_manage: true, default_visibility: 'MEMBERS', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.endsWith('/bands/43/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/43/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/bands/43/announcement') && method === 'GET') return response({ announcement: null });
+    if (value.endsWith('/bands/43/announcement') && method === 'PUT') { const body = JSON.parse(options.body); announcementWrites.push(body); return response({ announcement: { id: 1, content: body.content, visibility: body.visibility, can_manage: true } }); }
+    if (value.endsWith('/bands/43/gallery/featured')) return response({ gallery: null });
+    if (value.includes('/bands/43/gallery?') && method === 'GET') {
+      const parsed = new URL(value, 'http://localhost'); const offset = Number(parsed.searchParams.get('offset')); galleryOffsets.push(offset); galleryReads += 1;
+      const startId = offset === 0 ? 1 : 21;
+      return response({ gallery: Array.from({ length: offset === 0 ? 20 : 1 }, (_, index) => ({ id: startId + index, filename: `photo-${startId + index}.jpg`, url: `https://media.invalid/photo-${startId + index}.jpg${offset === 0 && startId + index === 1 && galleryReads > 1 ? '?fresh=1' : ''}`, is_featured: false })), pagination: { total: 21, has_more: offset === 0, next_offset: offset === 0 ? 20 : null } });
+    }
+    if (value.endsWith('/bands/43/gallery/1/featured') && method === 'PATCH') { const body = JSON.parse(options.body); featuredWrites.push(body); return response({ gallery: { id: 1, filename: 'photo-1.jpg', url: 'https://media.invalid/photo-1.jpg', is_featured: body.is_featured } }); }
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/editor-gallery/manage', manage: true }));
+    await view.findByText('에디터 밴드 관리');
+    await user.click(view.getByRole('button', { name: '공지 작성' }));
+    const content = view.getByLabelText('공지 내용'); assert.equal(content.maxLength, 10000);
+    await user.type(content, '공개 공지'); await user.selectOptions(view.getByLabelText('공지 공개 범위'), 'PUBLIC');
+    await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('공개 공지');
+    await user.click(view.getByRole('button', { name: '공지 수정' }));
+    await user.clear(view.getByLabelText('공지 내용')); await user.type(view.getByLabelText('공지 내용'), '멤버 공지');
+    await user.selectOptions(view.getByLabelText('공지 공개 범위'), 'MEMBERS');
+    await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('멤버 공지');
+    assert.deepEqual(announcementWrites, [{ content: '공개 공지', visibility: 'PUBLIC' }, { content: '멤버 공지', visibility: 'MEMBERS' }]);
+
+    await user.click(view.getByRole('button', { name: '갤러리에서 선택' }));
+    await view.findByText('photo-1.jpg'); assert.equal(view.container.querySelectorAll('.manage-gallery-item').length, 20);
+    fireEvent.error(view.getByAltText('photo-1.jpg'));
+    await waitFor(() => assert.equal(view.getByAltText('photo-1.jpg').getAttribute('src'), 'https://media.invalid/photo-1.jpg?fresh=1'));
+    fireEvent.error(view.getByAltText('photo-1.jpg'));
+    await waitFor(() => assert.ok(view.container.querySelector('.manage-gallery-placeholder')));
+    assert.equal(galleryReads, 2, 'an image refresh runs only once per workspace/image identity');
+    const choose = view.getAllByRole('button', { name: '대표 사진으로 선택' })[0]; await user.click(choose);
+    await view.findAllByRole('button', { name: '대표 사진 해제' });
+    await user.click(view.getAllByRole('button', { name: '대표 사진 해제' })[0]);
+    await waitFor(() => assert.equal(featuredWrites.length, 2));
+    assert.deepEqual(featuredWrites, [{ is_featured: true }, { is_featured: false }]);
+    await user.click(view.getByRole('button', { name: '사진 더 불러오기' }));
+    await view.findByText('photo-21.jpg'); assert.equal(view.container.querySelectorAll('.manage-gallery-item').length, 21);
+    assert.deepEqual(galleryOffsets, [0, 0, 20]); assert.equal(galleryReads, 3);
+    view.unmount();
+  } finally { globalThis.fetch = previous; }
+});
+
+test('a late featured-image refresh cannot restore a feature after it is cleared', async () => {
+  await load(); const previous = globalThis.fetch; const lateRefresh = deferred(); let featureReads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); const method = options.method || 'GET';
+    if (value.includes('/by-slug/featured-race')) return response({ band: { id: 44, slug: 'featured-race', name: '사진 밴드', can_manage: true, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.endsWith('/bands/44/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/44/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/bands/44/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/44/gallery/featured') && method === 'GET') { featureReads += 1; return featureReads === 1 ? response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old.jpg', is_featured: true } }) : lateRefresh.promise; }
+    if (value.endsWith('/bands/44/gallery?limit=20&offset=0')) return response({ gallery: [{ id: 1, filename: 'new.jpg', url: 'https://media.invalid/new.jpg', is_featured: false }], pagination: { total: 1, has_more: false } });
+    if (value.endsWith('/bands/44/gallery/99/featured') && method === 'PATCH') return response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old.jpg', is_featured: false } });
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/featured-race/manage', manage: true }));
+    await view.findByText('사진 밴드 관리'); await user.click(view.getByRole('button', { name: '갤러리에서 선택' }));
+    await view.findByAltText('현재 대표 사진'); fireEvent.error(view.getByAltText('현재 대표 사진'));
+    await waitFor(() => assert.equal(featureReads, 2));
+    await user.click(view.getByRole('button', { name: '대표 사진 해제' }));
+    await waitFor(() => assert.equal(view.queryByText('현재 대표 사진'), null));
+    lateRefresh.resolve(response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old-fresh.jpg', is_featured: true } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(view.queryByText('현재 대표 사진'), null);
+    view.unmount();
+  } finally { globalThis.fetch = previous; }
+});
+
+test('announcement 403 clears privileged management controls and late save cannot repaint after account switch', async () => {
+  await load(); const previous = globalThis.fetch; const oldSave = deferred(); let phase = 'stale';
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); const method = options.method || 'GET'; const token = options.headers?.Authorization;
+    if (value.includes('/by-slug/guarded')) return response({ band: { id: token === 'Bearer u2' ? 2 : 1, slug: 'guarded', name: token === 'Bearer u2' ? 'B 밴드' : 'A 밴드', can_manage: true, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.endsWith('/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/announcement') && method === 'GET') return response({ announcement: { id: 1, content: token === 'Bearer u2' ? 'B 공지' : 'A 공지', visibility: 'PUBLIC', can_manage: true } });
+    if (value.endsWith('/announcement') && method === 'PUT') return phase === 'stale' ? oldSave.promise : response({}, 403);
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/guarded/manage', manage: true, authValue: account('u1') }));
+    await view.findByText('A 공지'); await user.click(view.getByRole('button', { name: '공지 수정' }));
+    await user.clear(view.getByLabelText('공지 내용')); await user.type(view.getByLabelText('공지 내용'), 'A 저장 대기'); await user.click(view.getByRole('button', { name: '저장' }));
+    view.rerender(createElement(App, { entry: '/bands/guarded/manage', manage: true, authValue: account('u2') }));
+    await view.findByText('B 공지');
+    await act(async () => { oldSave.resolve(response({ announcement: { id: 1, content: '늦은 A 저장', visibility: 'PUBLIC', can_manage: true } })); });
+    assert.equal(view.queryByText('늦은 A 저장'), null); assert.ok(view.getByText('B 공지'));
+    phase = 'forbidden'; await user.click(view.getByRole('button', { name: '공지 수정' }));
+    await user.clear(view.getByLabelText('공지 내용')); await user.type(view.getByLabelText('공지 내용'), '403 테스트'); await user.click(view.getByRole('button', { name: '저장' }));
+    await view.findByText('찾을 수 없는 관리 공간입니다.');
+    assert.equal(view.queryByRole('button', { name: '공지 수정' }), null); assert.equal(view.queryByRole('button', { name: '새 초대 코드 만들기' }), null);
+    view.unmount();
   } finally { globalThis.fetch = previous; }
 });

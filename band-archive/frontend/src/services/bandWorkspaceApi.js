@@ -21,6 +21,7 @@ export const bandWorkspacePaths = {
   personalLogProcessing: (bandId, logId) => `${bandBase(bandId)}/personal-logs/${Number(logId)}/processing`,
   gallery: (bandId, page) => `${bandBase(bandId)}/gallery${pageQuery(page)}`,
   featuredGallery: (bandId) => `${bandBase(bandId)}/gallery/featured`,
+  galleryFeatured: (bandId, galleryId) => `${bandBase(bandId)}/gallery/${Number(galleryId)}/featured`,
   announcement: (bandId) => `${bandBase(bandId)}/announcement`,
   suggestions: (bandId, page) => `${bandBase(bandId)}/suggestions${pageQuery(page)}`,
   suggestion: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}`,

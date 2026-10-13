@@ -13,6 +13,7 @@ test('workspace paths remain v2, tenant-scoped, and URL-safe', () => {
   assert.equal(bandWorkspacePaths.mediaComments(7, 4, { limit: 3, offset: 9 }), '/api/v2/bands/7/media/4/comments?limit=3&offset=9');
   assert.equal(bandWorkspacePaths.mediaCommentsWrite(7, 4), '/api/v2/bands/7/media/4/comments');
   assert.equal(bandWorkspacePaths.comment(7, 4), '/api/v2/bands/7/comments/4');
+  assert.equal(bandWorkspacePaths.galleryFeatured(7, 42), '/api/v2/bands/7/gallery/42/featured');
 });
 
 test('write payloads never carry client-provided tenant or creator identity', () => {

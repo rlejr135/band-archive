@@ -94,6 +94,26 @@ test('activity dashboard loads one scoped v2 bundle and bounds each summary sect
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('workspace management navigation follows both server permissions, not membership or platform role labels', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes('/by-slug/nav-manager')) return response({ band: { id: 401, slug: 'nav-manager', name: '관리 밴드', membership: { role: 'member' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.includes('/by-slug/nav-denied')) return response({ band: { id: 402, slug: 'nav-denied', name: '비관리 밴드', membership: { role: 'owner' }, permissions: { can_manage_members: false, can_manage_invites: false }, platform_role: 'superadmin' } });
+    if (value.includes('/bands/401/dashboard?')) return response({ dashboard: dashboardData(monthForTest()) });
+    if (value.includes('/bands/402/dashboard?')) return response({ dashboard: dashboardData(monthForTest(), { band_id: 402 }) });
+    return response({});
+  };
+  try {
+    const manager = render(createElement(ReadOnlyApp, { entry: '/bands/nav-manager' }));
+    await manager.findByText('이번 달 공지입니다.');
+    assert.equal(manager.getByRole('link', { name: '관리' }).getAttribute('href'), '/bands/nav-manager/manage'); manager.unmount();
+    const denied = render(createElement(ReadOnlyApp, { entry: '/bands/nav-denied' }));
+    await denied.findByText('이번 달 공지입니다.');
+    assert.equal(denied.queryByRole('link', { name: '관리' }), null); denied.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('month pages append updated rows, dedupe ids, and expose missing-row paging', async () => {
   await load(); const previousFetch = globalThis.fetch; const reads = [];
   globalThis.fetch = async (url) => {

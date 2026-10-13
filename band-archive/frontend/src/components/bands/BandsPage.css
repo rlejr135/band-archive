@@ -70,6 +70,18 @@
 .bands-pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }
 .invite-once { display: grid; gap: 8px; margin: 14px 0; padding: 12px; border: 1px solid var(--primary-color); border-radius: 8px; }
 .invite-once code { overflow-wrap: anywhere; user-select: all; }
+.manage-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); gap: 12px; }
+.manage-gallery-item { min-width: 0; overflow: hidden; border: 1px solid var(--border-color, #d5d9d1); border-radius: 9px; background: var(--background-color); }
+.manage-gallery-item > img,.manage-gallery-placeholder { display: grid; width: 100%; height: 155px; place-items: center; object-fit: contain; background: #111512; color: #a8aca3; }
+.manage-gallery-item > div:last-child { display: grid; gap: 8px; padding: 10px; }
+.manage-gallery-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manage-gallery-item button { width: 100%; }
+.manage-featured-current { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0 16px; padding: 10px; border: 1px solid var(--primary-color); border-radius: 9px; }
+.manage-featured-current > div { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.manage-featured-current img,.manage-featured-current .manage-gallery-placeholder { width: 94px; height: 70px; object-fit: contain; border-radius: 6px; }
+.manage-gallery > .secondary-btn { margin-top: 12px; }
+.manage-gallery > .account-error { margin: 12px 0; }
+.manage-gallery > .auth-error { padding: 10px; border: 1px solid rgba(226,91,91,.3); border-radius: 8px; }
 .account-hub .bands-panel { margin-top: 23px; padding-top: 17px; border-top: 1px solid rgba(225,235,205,.09); }
 .account-hub .bands-panel h3 { margin: 0 0 11px; color: #dfe4d6; font-size: 13px; }
 .account-hub .bands-help { color: #a8aca3; }

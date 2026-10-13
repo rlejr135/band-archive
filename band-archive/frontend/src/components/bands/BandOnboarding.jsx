@@ -4,6 +4,8 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { createSubmissionGuard } from '../../services/authSubmission.js';
+import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
+import { AnnouncementEditor } from '../workspace/BandWorkspace.jsx';
 import './BandsPage.css';
 
 const requestOptions = (method, body, signal) => ({
@@ -140,12 +142,137 @@ export const BandManageRoute = () => {
   return <BandManagePage key={identity} identity={identity} />;
 };
 
+const MANAGEMENT_PAGE_SIZE = 20;
+const uniqueGalleryItems = (existing, incoming) => {
+  const next = [...existing]; const positions = new Map(next.map((item, index) => [String(item.id), index]));
+  for (const item of incoming) {
+    const id = String(item.id);
+    if (positions.has(id)) next[positions.get(id)] = item;
+    else { positions.set(id, next.length); next.push(item); }
+  }
+  return next;
+};
+
+const FeaturedGalleryManager = ({ band, api, workspaceKey, onForbidden }) => {
+  const [state, setState] = useState({ loading: true, error: '', items: [], pagination: null, featured: null, busyId: null });
+  const sequence = useRef(0); const mutationGeneration = useRef(0); const controllers = useRef(new Set()); const readControllers = useRef(new Set()); const mutationController = useRef(null); const busyId = useRef(null); const imageRefreshes = useRef(new Set()); const [failedUrls, setFailedUrls] = useState({});
+  const loadPage = useCallback(async ({ offset = 0, append = false, refreshFeatured = offset === 0 } = {}) => {
+    if (busyId.current != null) return;
+    const token = ++sequence.current; const controller = new AbortController(); controllers.current.add(controller); readControllers.current.add(controller);
+    if (append) setState((previous) => ({ ...previous, loading: true, error: '' }));
+    else setState((previous) => ({ ...previous, loading: true, error: '' }));
+    try {
+      const requests = [api.requestJson(bandWorkspacePaths.gallery(band.id, { limit: MANAGEMENT_PAGE_SIZE, offset }), { signal: controller.signal })];
+      if (refreshFeatured) requests.push(api.requestJson(bandWorkspacePaths.featuredGallery(band.id), { signal: controller.signal }));
+      const [galleryResponse, featuredResponse] = await Promise.all(requests);
+      if (controller.signal.aborted || token !== sequence.current) return;
+      const pageItems = Array.isArray(galleryResponse?.gallery) ? galleryResponse.gallery : [];
+      const featured = refreshFeatured ? featuredResponse?.gallery ?? null : undefined;
+      const items = refreshFeatured ? pageItems.map((item) => ({ ...item, is_featured: String(featured?.id) === String(item.id) })) : pageItems;
+      if (refreshFeatured) setFailedUrls({});
+      setState((previous) => ({
+        ...previous, loading: false, error: '',
+        items: append ? uniqueGalleryItems(previous.items, items) : items,
+        pagination: galleryResponse?.pagination ?? null,
+        ...(refreshFeatured ? { featured } : {}),
+      }));
+      setFailedUrls((previous) => {
+        const next = { ...previous };
+        Object.keys(next).forEach((key) => { const current = items.find((item) => String(item.id) === key); if (current?.url && current.url !== next[key]) next[key] = ''; });
+        return next;
+      });
+    } catch (error) {
+      if (controller.signal.aborted || token !== sequence.current) return;
+      if (error?.status === 403) onForbidden();
+      else setState((previous) => ({ ...previous, loading: false, error: '갤러리를 불러오지 못했습니다.' }));
+    } finally { controllers.current.delete(controller); readControllers.current.delete(controller); }
+  }, [api, band.id, onForbidden]);
+  useEffect(() => {
+    let active = true;
+    imageRefreshes.current.clear();
+    Promise.resolve().then(() => { if (active) loadPage({ offset: 0, refreshFeatured: true }); });
+    const activeControllers = controllers.current;
+    return () => { active = false; sequence.current += 1; activeControllers.forEach((controller) => controller.abort()); activeControllers.clear(); };
+  }, [loadPage, workspaceKey]);
+  const toggleFeatured = async (item) => {
+    if (busyId.current != null) return;
+    const id = Number(item.id); if (!Number.isSafeInteger(id) || id <= 0) return;
+    busyId.current = id; sequence.current += 1; mutationGeneration.current += 1; readControllers.current.forEach((controller) => controller.abort()); readControllers.current.clear();
+    const controller = new AbortController(); mutationController.current = controller; controllers.current.add(controller); setState((previous) => ({ ...previous, loading: false, busyId: id, error: '' }));
+    try {
+      const response = await api.requestJson(bandWorkspacePaths.galleryFeatured(band.id, id), requestOptions('PATCH', { is_featured: String(state.featured?.id) !== String(id) }, controller.signal));
+      const updated = response?.gallery; if (!updated || Number(updated.id) !== id) throw new Error('Invalid featured gallery response');
+      if (controller.signal.aborted) return;
+      const selected = updated.is_featured === true;
+      setState((previous) => ({
+        ...previous, busyId: null,
+        featured: selected ? updated : null,
+        items: previous.items.map((entry) => String(entry.id) === String(id)
+          ? { ...entry, ...updated, is_featured: selected }
+          : { ...entry, is_featured: false }),
+      }));
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        if (error?.status === 403) onForbidden();
+        else setState((previous) => ({ ...previous, busyId: null, error: '대표 사진을 변경하지 못했습니다. 다시 시도해 주세요.' }));
+      }
+    } finally { controllers.current.delete(controller); busyId.current = null; if (mutationController.current === controller) mutationController.current = null; }
+  };
+  const refreshImage = async (item, index) => {
+    const key = String(item.id); const identity = `${workspaceKey}:${key}`;
+    setFailedUrls((previous) => ({ ...previous, [key]: item.url || '' }));
+    if (imageRefreshes.current.has(identity)) return;
+    imageRefreshes.current.add(identity);
+    if (index < 0) {
+      const featureGeneration = mutationGeneration.current; const controller = new AbortController(); controllers.current.add(controller); readControllers.current.add(controller);
+      try {
+        const response = await api.requestJson(bandWorkspacePaths.featuredGallery(band.id), { signal: controller.signal });
+        if (!controller.signal.aborted && featureGeneration === mutationGeneration.current && response?.gallery && String(response.gallery.id) === key) {
+          setState((previous) => previous.featured && String(previous.featured.id) === key ? { ...previous, featured: { ...previous.featured, ...response.gallery } } : previous);
+          setFailedUrls((previous) => ({ ...previous, [key]: '' }));
+        }
+      } catch (error) { if (!controller.signal.aborted && error?.status === 403) onForbidden(); }
+      finally { controllers.current.delete(controller); readControllers.current.delete(controller); }
+      return;
+    }
+    const featureGeneration = mutationGeneration.current; const offset = Math.floor(index / MANAGEMENT_PAGE_SIZE) * MANAGEMENT_PAGE_SIZE; const controller = new AbortController(); controllers.current.add(controller); readControllers.current.add(controller);
+    try {
+      const response = await api.requestJson(bandWorkspacePaths.gallery(band.id, { limit: MANAGEMENT_PAGE_SIZE, offset }), { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const refreshed = (Array.isArray(response?.gallery) ? response.gallery : []).find((entry) => String(entry.id) === key);
+      if (refreshed) {
+        const { is_featured: _ignoredFeaturedFlag, ...freshItem } = refreshed;
+        setState((previous) => ({ ...previous, items: previous.items.map((entry) => String(entry.id) === key ? { ...entry, ...freshItem } : entry), featured: featureGeneration === mutationGeneration.current && previous.featured && String(previous.featured.id) === key ? { ...previous.featured, ...freshItem } : previous.featured }));
+        setFailedUrls((previous) => ({ ...previous, [key]: '' }));
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && error?.status === 403) onForbidden();
+    } finally { controllers.current.delete(controller); readControllers.current.delete(controller); }
+  };
+  return <section className="bands-panel manage-gallery" aria-labelledby="manage-gallery-title">
+    <h3 id="manage-gallery-title">대표 사진</h3><p className="bands-help">밴드 갤러리에서 대표 사진을 선택하거나 해제할 수 있습니다.</p>
+    {state.featured && <div className="manage-featured-current"><div>{state.featured.url && failedUrls[String(state.featured.id)] !== state.featured.url ? <img src={state.featured.url} alt="현재 대표 사진" onError={() => refreshImage(state.featured, state.items.findIndex((item) => String(item.id) === String(state.featured.id)))} /> : <div className="manage-gallery-placeholder" role="img" aria-label="현재 대표 사진을 표시할 수 없습니다">사진 없음</div>}<span>현재 대표 사진</span></div><button type="button" className="secondary-btn" disabled={state.busyId != null} onClick={() => toggleFeatured(state.featured)}>대표 사진 해제</button></div>}
+    {state.loading && state.items.length === 0 ? <p aria-live="polite">갤러리를 불러오는 중입니다…</p> : state.error && state.items.length === 0 ? <div className="account-error" role="alert"><span>{state.error}</span><button className="secondary-btn" type="button" onClick={() => loadPage({ offset: 0, refreshFeatured: true })}>다시 시도</button></div> : state.items.length === 0 ? <p className="bands-help">표시할 사진이 없습니다.</p> : <div className="manage-gallery-grid">{state.items.map((item, index) => {
+      const isFeatured = String(state.featured?.id) === String(item.id);
+      const url = item.url;
+      const failed = url && failedUrls[String(item.id)] === url;
+      return <article className="manage-gallery-item" key={item.id}>
+        {url && !failed ? <img src={url} alt={item.alt_text || item.filename || '밴드 갤러리 사진'} onError={() => refreshImage(item, index)} /> : <div className="manage-gallery-placeholder" role="img" aria-label="사진을 표시할 수 없습니다">사진 없음</div>}
+        <div><strong>{item.filename || `사진 #${item.id}`}</strong><button type="button" className={isFeatured ? 'secondary-btn' : 'primary-btn'} disabled={state.busyId != null} onClick={() => toggleFeatured(item)}>{state.busyId === Number(item.id) ? '변경 중…' : isFeatured ? '대표 사진 해제' : '대표 사진으로 선택'}</button></div>
+      </article>;
+    })}</div>}
+    {state.error && state.items.length > 0 && <p className="auth-error" role="alert">{state.error}</p>}
+    {state.pagination?.has_more && <button type="button" className="secondary-btn" disabled={state.loading || state.busyId != null} onClick={() => loadPage({ offset: state.pagination.next_offset ?? state.items.length, append: true, refreshFeatured: false })}>{state.loading ? '사진을 불러오는 중…' : '사진 더 불러오기'}</button>}
+  </section>;
+};
+
 export const BandManagePage = ({ identity: suppliedIdentity }) => {
   const { user } = useAuth();
   const { bandSlug } = useParams(); const api = useApi();
   const identity = suppliedIdentity || `${user?.id || 'visitor'}:${bandSlug || ''}`;
-  const [state, setState] = useState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [] });
+  const [state, setState] = useState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], announcement: null });
   const [error, setError] = useState(''); const [rawInvite, setRawInvite] = useState(null);
+  const [galleryPickerOpen, setGalleryPickerOpen] = useState(false);
   // Mutations belong to the authenticated management session.  Reads have a
   // separate sequence/controller: a second refetch must supersede a slower
   // first refetch without cancelling the mutation that requested it.
@@ -153,6 +280,12 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
   const loadRef = useRef({ identity: null, sessionGeneration: 0, sequence: 0, controller: null });
   const isCurrent = useCallback((operation) => sessionRef.current.identity === operation.identity && sessionRef.current.generation === operation.generation && !operation.controller.signal.aborted, []);
   const isCurrentLoad = useCallback((request) => isCurrent(request.session) && loadRef.current.identity === request.identity && loadRef.current.sessionGeneration === request.session.generation && loadRef.current.sequence === request.sequence && !request.controller.signal.aborted, [isCurrent]);
+  const onForbidden = useCallback(() => {
+    if (sessionRef.current.identity !== identity) return;
+    sessionRef.current.controller?.abort(); loadRef.current.controller?.abort();
+    setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [], announcement: null });
+    setError(''); setRawInvite(null);
+  }, [identity]);
   const load = useCallback(async (operation, { preserveRawInvite = false } = {}) => {
     if (!isCurrent(operation)) return;
     loadRef.current.controller?.abort();
@@ -163,20 +296,21 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
       controller: new AbortController(),
     };
     loadRef.current = { identity: request.identity, sessionGeneration: operation.generation, sequence: request.sequence, controller: request.controller };
-    setState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [] }); setError('');
+    setState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], announcement: null }); setError('');
     if (!preserveRawInvite) setRawInvite(null);
     try {
       const detail = await api.requestJson(`/api/v2/bands/by-slug/${encodeURIComponent(bandSlug)}`, { signal: request.controller.signal });
       const band = detail?.band;
       if (!band?.permissions?.can_manage_members || !band?.permissions?.can_manage_invites) throw new Error('inaccessible');
-      const [members, invites] = await Promise.all([
+      const [members, invites, announcement] = await Promise.all([
         api.requestJson(`/api/v2/bands/${Number(band.id)}/memberships`, { signal: request.controller.signal }),
         api.requestJson(`/api/v2/bands/${Number(band.id)}/invite-codes`, { signal: request.controller.signal }),
+        api.requestJson(bandWorkspacePaths.announcement(band.id), { signal: request.controller.signal }),
       ]);
       if (!isCurrentLoad(request)) return;
-      setState({ loading: false, inaccessible: false, band, memberships: Array.isArray(members?.memberships) ? members.memberships : [], invites: Array.isArray(invites?.invite_codes) ? invites.invite_codes : [] });
+      setState({ loading: false, inaccessible: false, band, memberships: Array.isArray(members?.memberships) ? members.memberships : [], invites: Array.isArray(invites?.invite_codes) ? invites.invite_codes : [], announcement: announcement?.announcement ?? null });
     } catch {
-      if (isCurrentLoad(request)) setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [] });
+      if (isCurrentLoad(request)) setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [], announcement: null });
     }
   }, [api, bandSlug, isCurrent, isCurrentLoad]);
   useEffect(() => {
@@ -206,10 +340,16 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     try { const data = await api.requestJson(`/api/v2/bands/${Number(state.band.id)}/invite-codes`, requestOptions('POST', {}, operation.controller.signal)); if (isCurrent(operation)) { setRawInvite(typeof data?.code === 'string' ? { identity: operation.identity, code: data.code } : null); await refresh(operation, true); } } catch { if (isCurrent(operation)) setError(genericFailure); }
   };
   const revoke = async (invite) => { if (!window.confirm('이 초대 코드를 취소할까요?')) return; await mutate(`/api/v2/bands/${Number(state.band.id)}/invite-codes/${Number(invite.id)}/revoke`, {}); };
+  const announcementSaved = (announcement) => {
+    if (sessionRef.current.identity !== identity || sessionRef.current.controller?.signal.aborted) return;
+    setState((previous) => previous.band?.id === state.band?.id ? { ...previous, announcement } : previous);
+  };
   if (state.loading) return <main className="bands-page"><p aria-live="polite">관리 정보를 불러오는 중입니다…</p></main>;
   if (state.inaccessible) return <main className="bands-page" role="alert"><h2>찾을 수 없는 관리 공간입니다.</h2><p>이 밴드를 관리할 권한이 없습니다.</p><Link to="/bands">내 밴드로 이동</Link></main>;
   const isOwner = state.band?.membership?.role === 'owner'; const pending = state.memberships.filter((item) => item.status === 'pending'); const active = state.memberships.filter((item) => item.status === 'active');
   return <main className="bands-page" aria-labelledby="manage-band-title"><Link to={safeBandPath(state.band.slug)}>← 밴드 공간</Link><h2 id="manage-band-title">{state.band.name} 관리</h2>{error && <p className="auth-error" role="alert">{error}</p>}
+    <section className="bands-panel" aria-labelledby="manage-announcement-title"><h3 id="manage-announcement-title">밴드 공지</h3><AnnouncementEditor announcement={state.announcement} band={state.band} api={api} workspaceKey={identity} onSaved={announcementSaved} onForbidden={onForbidden} /></section>
+    <section className="bands-panel" aria-labelledby="manage-gallery-picker-title"><h3 id="manage-gallery-picker-title">대표 사진</h3>{galleryPickerOpen ? <FeaturedGalleryManager band={state.band} api={api} workspaceKey={identity} onForbidden={onForbidden} /> : <button type="button" className="secondary-btn" onClick={() => setGalleryPickerOpen(true)}>갤러리에서 선택</button>}</section>
     <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><span>{item.user?.display_name || '새 멤버'}</span><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
     <section className="bands-panel" aria-labelledby="invite-title"><h3 id="invite-title">초대 코드</h3><button type="button" className="secondary-btn" onClick={createInvite}>새 초대 코드 만들기</button>{rawInvite?.identity === identity && <div className="invite-once" role="status"><strong>지금 한 번만 표시되는 코드</strong><code>{rawInvite.code}</code><p>안전한 방법으로 전달한 뒤 이 화면을 벗어나면 다시 확인할 수 없습니다.</p></div>}<ul className="band-list">{state.invites.map((invite) => <li key={invite.id}><span>{invite.revoked_at ? '취소됨' : '사용 가능'} · {invite.created_at}</span>{!invite.revoked_at && <button type="button" className="secondary-btn" onClick={() => revoke(invite)}>취소</button>}</li>)}</ul></section>
     {isOwner && <section className="bands-panel" aria-labelledby="roles-title"><h3 id="roles-title">멤버 역할</h3><ul className="band-list">{active.map((item) => <li key={item.id}><span>{item.user?.display_name || '멤버'} · {item.role}</span>{item.role !== 'owner' && <select aria-label={`${item.user?.display_name || '멤버'} 역할`} value={item.role} onChange={(event) => { const operation = sessionRef.current; api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value }, operation.controller.signal)).then(() => isCurrent(operation) && refresh(operation)).catch(() => isCurrent(operation) && setError(genericFailure)); }}><option value="member">member</option><option value="admin">admin</option></select>}</li>)}</ul></section>}
