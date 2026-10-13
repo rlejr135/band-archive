@@ -372,6 +372,8 @@ def create_app(config_class=None, start_worker=None):
         config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
+    from place_search import PlaceSearchGuard
+    app.extensions['place_search_guard'] = PlaceSearchGuard.from_config(app.config)
     # Dedicated rollout telemetry logger: configuring its level/propagation is
     # idempotent and it owns no handler, so Flask/root logging emits once.
     legacy_usage_logger = logging.getLogger('band_archive.legacy_v1')

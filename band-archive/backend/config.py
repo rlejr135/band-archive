@@ -103,6 +103,15 @@ def _origin(parsed):
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     MAX_CONTENT_LENGTH = 200 * 1024 * 1024  # 200MB
+    # Place-search controls are intentionally process-local. See the operations
+    # note: per-worker caps multiply across workers and reset on restart.
+    PLACE_SEARCH_REQUEST_LIMIT = 10
+    PLACE_SEARCH_UPSTREAM_LIMIT = 60
+    PLACE_SEARCH_WINDOW_SECONDS = 60
+    PLACE_SEARCH_CACHE_TTL_SECONDS = 30
+    PLACE_SEARCH_CACHE_MAX_ENTRIES = 512
+    PLACE_SEARCH_MAX_SUBJECTS = 4096
+    PLACE_SEARCH_MAX_CONCURRENT_UPSTREAM = 2
     # Emergency retirement switch for the unauthenticated compatibility API.
     # Reads remain available so legacy clients can be migrated gracefully.
     LEGACY_V1_WRITES_ENABLED = _env_flag('LEGACY_V1_WRITES_ENABLED', 'true')
