@@ -19,7 +19,7 @@ from band_access import BandReadScope, MembershipAudience, RequestAudience
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import (Announcement, Band, BandMembership, Comment, Media, MediaVote, PersonalLog,
+from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote, PersonalLog,
                     Rehearsal, Song, SongSuggestion, SongSuggestionVote)
 from validators import validate_external_http_url
 from v2_content_serializers import (
@@ -27,7 +27,7 @@ from v2_content_serializers import (
     serialize_rehearsal, serialize_song,
 )
 from v2_remaining_read_serializers import personal_log_visibility, serialize_personal_comment
-from v2_remaining_read_serializers import serialize_announcement, serialize_suggestion
+from v2_remaining_read_serializers import serialize_announcement, serialize_gallery_image, serialize_suggestion
 
 
 content_writes_bp = Blueprint('content_writes', __name__, url_prefix='/api/v2/bands/<int:band_id>')
@@ -802,4 +802,65 @@ def put_announcement_v2(band_id):
             audit('content.announcement.updated', user, band, announcement,
                   {'fields': sorted(set(data) & _ANNOUNCEMENT_FIELDS)})
         return jsonify({'announcement': serialize_announcement(scope, announcement)})
+    return _run_write(operation)
+
+
+@content_writes_bp.patch('/gallery/<int:image_id>/featured')
+@authenticated_write
+def set_gallery_featured_v2(band_id, image_id):
+    """Set or clear a band's featured gallery image for active managers only."""
+    data = _payload()
+    if set(data) != {'is_featured'} or type(data['is_featured']) is not bool:
+        raise ValidationError('is_featured must be a boolean.')
+    desired = data['is_featured']
+
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        if membership.role not in MANAGER_ROLES:
+            raise ValidationError('Insufficient band role.', 403)
+
+        image = _owned_or_404(
+            GalleryImage, image_id, band.id, 'Gallery image not found', lock=True,
+        )
+        # A NULL creator is a valid legacy row. Any non-NULL creator pointer
+        # must remain in this tenant before the image can be changed or signed.
+        if image.created_by_membership_id is not None:
+            creator = BandMembership.query.filter_by(
+                id=image.created_by_membership_id, band_id=band.id,
+            ).one_or_none()
+            if creator is None:
+                raise NotFoundError('Gallery image not found')
+        if image.visibility not in _VISIBILITIES:
+            raise NotFoundError('Gallery image not found')
+
+        featured_query = GalleryImage.query.filter(
+            GalleryImage.band_id == band.id,
+            GalleryImage.is_featured.is_(True),
+        )
+        if db.engine.dialect.name != 'sqlite':
+            featured_query = featured_query.with_for_update()
+        featured_rows = featured_query.all()
+        before = bool(image.is_featured)
+        changed = False
+        cleared = 0
+        if desired:
+            other_featured = featured_query.filter(GalleryImage.id != image.id)
+            cleared = sum(existing.id != image.id for existing in featured_rows)
+            if cleared:
+                # Apply the clears before setting the selected row so the
+                # partial unique index remains satisfied in either ID order.
+                other_featured.update({GalleryImage.is_featured: False}, synchronize_session='fetch')
+                changed = True
+            if not before:
+                image.is_featured = True
+                changed = True
+        elif before:
+            image.is_featured = False
+            changed = True
+
+        if changed:
+            audit('content.gallery.featured.changed', user, band, image,
+                  {'is_featured': desired, 'cleared_count': cleared})
+        return jsonify({'gallery': serialize_gallery_image(scope, image)})
+
     return _run_write(operation)
