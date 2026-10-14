@@ -1,41 +1,57 @@
 :root {
-  --primary-color: #ffd32a; /* Vibrant Yellow */
-  --primary-hover: #ffc048;
-  --secondary-color: #0fbcf9; /* Cyan/Blue */
-  --accent-color: #ff5e57; /* Red/Pink */
-  --background-color: #1e272e; /* Dark Blue-Grey */
-  --surface-color: #2f3640; /* Lighter Dark */
-  --text-primary: #f1f2f6;
-  --text-secondary: #d2dae2;
-  --border-color: #4b6584;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-  --shadow-md: 0 4px 6px rgba(0,0,0,0.4);
-  --shadow-lg: 0 10px 20px rgba(0,0,0,0.5);
-  --radius-md: 12px;
-  --font-family: 'Outfit', 'Inter', sans-serif; /* More modern font */
+  /* Product defaults. Per-band themes, when added, belong on .band-workspace. */
+  --color-background: #111512;
+  --color-surface: #191f1a;
+  --color-surface-raised: #222a22;
+  --color-text: #f4f6ef;
+  --color-text-muted: #bec8b7;
+  --color-border: #4b5a4b;
+  --color-accent: #d1ed7b;
+  --color-accent-hover: #c2df69;
+  --color-on-accent: #182014;
+  --color-danger: #ff8c83;
+  --color-danger-hover: #ed776e;
+  --color-success: #9dda89;
+  --color-info: #79c7e8;
+  --focus-ring-color: #d1ed7b;
+  --focus-ring: 0 0 0 3px rgba(209, 237, 123, 0.38);
 
-  /* Text on bright backgrounds */
-  --text-on-primary: #1e272e;
+  /* Compatibility aliases; semantic tokens above remain the source of truth. */
+  --primary-color: var(--color-accent);
+  --primary-hover: var(--color-accent-hover);
+  --secondary-color: var(--color-info);
+  --accent-color: var(--color-danger);
+  --accent-hover: var(--color-danger-hover);
+  --background-color: var(--color-background);
+  --surface-color: var(--color-surface);
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-muted);
+  --border-color: var(--color-border);
+  --text-on-primary: var(--color-on-accent);
+  --success-color: var(--color-success);
 
-  /* Semantic colors */
-  --success-color: #2ecc71;
-  --accent-hover: #e04540;
-
-  /* Radius scale */
+  /* Shared spacing, radius, type, shadow and interaction scales. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
   --radius-sm: 4px;
   --radius-default: 8px;
+  --radius-md: 12px;
   --radius-lg: 16px;
   --radius-full: 9999px;
-
-  /* Focus rings */
-  --focus-ring-primary: 0 0 0 3px rgba(255, 211, 42, 0.2);
-  --focus-ring-secondary: 0 0 0 3px rgba(15, 188, 249, 0.15);
-
-  /* Primary shadows (yellow-based) */
-  --shadow-primary: 0 2px 4px rgba(255, 211, 42, 0.3);
-  --shadow-primary-hover: 0 4px 8px rgba(255, 211, 42, 0.4);
-  --shadow-primary-glow: 0 4px 12px rgba(255, 211, 42, 0.3);
-  --shadow-accent: 0 4px 12px rgba(255, 94, 87, 0.3);
+  --font-family: 'Outfit', 'Inter', sans-serif;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 20px rgba(0, 0, 0, 0.5);
+  --shadow-primary: 0 2px 4px rgba(209, 237, 123, 0.22);
+  --shadow-primary-hover: 0 4px 8px rgba(209, 237, 123, 0.28);
+  --shadow-primary-glow: 0 4px 12px rgba(209, 237, 123, 0.22);
+  --shadow-accent: 0 4px 12px rgba(255, 140, 131, 0.22);
+  --focus-ring-primary: var(--focus-ring);
+  --focus-ring-secondary: 0 0 0 3px rgba(121, 199, 232, 0.32);
 }
 
 *, *::before, *::after {
@@ -55,6 +71,11 @@ body {
 
 button {
   font-family: inherit;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 3px;
 }
 
 /* Animations */
