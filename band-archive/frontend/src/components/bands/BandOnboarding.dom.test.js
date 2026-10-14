@@ -12,7 +12,7 @@ Object.assign(globalThis, { window: dom.window, document: dom.window.document, H
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
-const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+const deferred = () => { let resolve; let reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const user = userEvent.setup({ document: dom.window.document });
 let vite; let onboarding; let auth; let bands;
 const load = async () => { if (onboarding) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
@@ -20,12 +20,17 @@ after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() =>
 const account = (id = 'u1') => ({ user: id ? { id } : null, getAccessToken: async () => id, refreshSession: async () => id, loading: false });
 const Login = () => createElement('p', null, `login:${useLocation().search}`);
 const Go = ({ target }) => { const navigate = useNavigate(); useEffect(() => { navigate(target); }, [navigate, target]); return null; };
-const App = ({ entry, authValue = account(), manage = false, discover = false, create = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, discover ? createElement(bands.BandProvider, null, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null,
-  createElement(Route, { path: '/bands/discover', element: createElement(onboarding.DiscoverBandsPage) }),
-  createElement(Route, { path: '/login', element: createElement(Login) })))) : createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), createElement(Routes, null,
-  create ? createElement(Route, { path: '/bands/request', element: createElement(onboarding.BandCreationRequestPage) }) : null,
-  manage ? createElement(Route, { path: '/bands/:bandSlug/manage', element: createElement(onboarding.BandManageRoute) }) : null,
-  createElement(Route, { path: '/login', element: createElement(Login) }))));
+const App = ({ entry, authValue = account(), manage = false, discover = false, create = false, bandContextValue = { reload: () => {} } }) => {
+  const routes = createElement(Routes, null,
+    create ? createElement(Route, { path: '/bands/request', element: createElement(onboarding.BandCreationRequestPage) }) : null,
+    manage ? createElement(Route, { path: '/bands/:bandSlug/manage', element: createElement(onboarding.BandManageRoute) }) : null,
+    createElement(Route, { path: '/login', element: createElement(Login) }));
+  return createElement(auth.AuthContext.Provider, { value: authValue }, discover
+    ? createElement(bands.BandProvider, null, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null,
+      createElement(Route, { path: '/bands/discover', element: createElement(onboarding.DiscoverBandsPage) }),
+      createElement(Route, { path: '/login', element: createElement(Login) }))))
+    : createElement(bands.BandContext.Provider, { value: bandContextValue }, createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), routes)));
+};
 
 test('visitor discover preserves a safe login return and join becomes pending once', async () => {
   await load(); const previous = globalThis.fetch; const calls = [];
@@ -163,6 +168,109 @@ test('management keeps the newest mutation refetch when superseded reads resolve
     await new Promise((done) => setTimeout(done, 0));
     assert.equal(view.queryByText('Old'), null);
     assert.equal(view.queryByText('New')?.textContent, 'New');
+  } finally { globalThis.fetch = previous; }
+});
+
+test('owner profile editor requires explicit permission and saves only the trimmed-contract field twice', async () => {
+  await load(); const previous = globalThis.fetch; const writes = []; let reloads = 0;
+  let profileDescription = '처음 소개';
+  const owner = { id: 51, slug: 'profile', name: '프로필 밴드', description: profileDescription, membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } };
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); const method = options.method || 'GET';
+    if (value.endsWith('/by-slug/profile')) return response({ band: owner });
+    if (value.endsWith('/bands/51/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/51/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/bands/51/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/51/profile') && method === 'PATCH') { const body = JSON.parse(options.body); writes.push(body); profileDescription = body.description.trim() || null; owner.description = profileDescription; return response({ band: { ...owner, description: profileDescription } }); }
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/profile/manage', manage: true, bandContextValue: { reload: () => { reloads += 1; } } }));
+    await view.findByText('처음 소개'); await user.click(view.getByRole('button', { name: '소개 수정' }));
+    const field = view.getByLabelText('소개'); assert.equal(field.maxLength, 2000);
+    await user.clear(field); await user.type(field, '  첫 저장  '); await user.click(view.getByRole('button', { name: '소개 저장' }));
+    await view.findByText('첫 저장'); await user.click(view.getByRole('button', { name: '소개 수정' }));
+    await user.clear(view.getByLabelText('소개')); await user.type(view.getByLabelText('소개'), '두 번째'); await user.click(view.getByRole('button', { name: '소개 저장' }));
+    await view.findByText('두 번째'); assert.deepEqual(writes, [{ description: '  첫 저장  ' }, { description: '두 번째' }]); assert.equal(reloads, 2);
+    owner.permissions.can_edit_band_profile = false;
+    view.unmount();
+    const admin = { ...owner, membership: { role: 'admin' } };
+    globalThis.fetch = async (url) => String(url).endsWith('/by-slug/profile') ? response({ band: admin }) : String(url).endsWith('/memberships') ? response({ memberships: [] }) : String(url).endsWith('/invite-codes') ? response({ invite_codes: [] }) : response({ announcement: null });
+    const denied = render(createElement(App, { entry: '/bands/profile/manage', manage: true })); await denied.findByText('프로필 밴드 관리');
+    assert.equal(denied.queryByRole('button', { name: '소개 수정' }), null); assert.equal(denied.queryByRole('textbox', { name: '소개' }), null);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('profile 403 closes edit and preserves admin management after detail-only permission recheck', async () => {
+  await load(); const previous = globalThis.fetch; let profileWrite = 0; let detailReads = 0;
+  const initial = { band: { id: 61, slug: 'roleloss', name: '역할 변경', description: '기존', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } };
+  const afterLoss = { band: { ...initial.band, membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: false } } };
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); const method = options.method || 'GET';
+    if (value.endsWith('/by-slug/roleloss')) { detailReads += 1; return response(detailReads > 1 ? afterLoss : initial); }
+    if (value.endsWith('/bands/61/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/61/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/61/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/61/profile') && method === 'PATCH') { profileWrite += 1; return response({}, 403); }
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try { const view = render(createElement(App, { entry: '/bands/roleloss/manage', manage: true })); await view.findByText('역할 변경 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'draft'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByText('소개를 수정할 권한이 변경되었습니다.'); assert.equal(profileWrite, 1); assert.equal(detailReads, 2); assert.ok(view.getByText('역할 변경 관리')); assert.equal(view.queryByRole('button', { name: '소개 수정' }), null); assert.ok(view.getByRole('heading', { name: '가입 요청' })); }
+  finally { globalThis.fetch = previous; }
+});
+
+test('profile 404 rechecks membership and clears the management page when the band is no longer accessible', async () => {
+  await load(); const previous = globalThis.fetch; let detailReads = 0;
+  const band = { band: { id: 62, slug: 'deleted', name: '삭제된 밴드', description: '기존', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } };
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); const method = options.method || 'GET';
+    if (value.endsWith('/by-slug/deleted')) { detailReads += 1; return detailReads === 1 ? response(band) : response({}, 404); }
+    if (value.endsWith('/bands/62/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/62/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/62/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/62/profile') && method === 'PATCH') return response({}, 404);
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try { const view = render(createElement(App, { entry: '/bands/deleted/manage', manage: true })); await view.findByText('삭제된 밴드 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'new'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(view.queryByText('삭제된 밴드 관리'), null); assert.equal(view.queryByRole('button', { name: '새 초대 코드 만들기' }), null); assert.equal(detailReads, 2); }
+  finally { globalThis.fetch = previous; }
+});
+
+test('profile save failure keeps the draft available for retry', async () => {
+  await load(); const previous = globalThis.fetch; let writes = 0;
+  const band = { band: { id: 63, slug: 'retry', name: '재시도 밴드', description: '', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } };
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); const method = options.method || 'GET';
+    if (value.endsWith('/by-slug/retry')) return response(band); if (value.endsWith('/bands/63/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/63/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/63/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/63/profile') && method === 'PATCH') { writes += 1; return response({}, 500); }
+    throw new Error(`unexpected ${method} ${value}`);
+  };
+  try { const view = render(createElement(App, { entry: '/bands/retry/manage', manage: true })); await view.findByText('재시도 밴드 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); const field = view.getByLabelText('소개'); await user.type(field, '보존할 초안'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByRole('alert'); assert.equal(view.getByLabelText('소개').value, '보존할 초안'); assert.equal(writes, 1); }
+  finally { globalThis.fetch = previous; }
+});
+
+test('late profile save from account A cannot repaint account B after identity switch', async () => {
+  await load(); const previous = globalThis.fetch; const save = deferred(); let writes = 0;
+  const makeBand = (id, name) => ({ band: { id, slug: 'same', name, description: `${name} 소개`, membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } });
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); const token = options.headers?.Authorization;
+    if (value.endsWith('/by-slug/same')) return response(token === 'Bearer b' ? makeBand(72, 'B') : makeBand(71, 'A'));
+    if (value.endsWith('/bands/71/memberships') || value.endsWith('/bands/72/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/71/invite-codes') || value.endsWith('/bands/72/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/bands/71/announcement') || value.endsWith('/bands/72/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/71/profile') && options.method === 'PATCH') { writes += 1; return save.promise; }
+    throw new Error(`unexpected ${value}`);
+  };
+  try { const view = render(createElement(App, { entry: '/bands/same/manage', manage: true, authValue: account('a') })); await view.findByText('A 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.clear(view.getByLabelText('소개')); await user.type(view.getByLabelText('소개'), 'A late draft'); await user.click(view.getByRole('button', { name: '소개 저장' })); await waitFor(() => assert.equal(writes, 1));
+    view.rerender(createElement(App, { entry: '/bands/same/manage', manage: true, authValue: account('b') })); await view.findByText('B 관리'); await act(async () => save.resolve(response({ band: { ...makeBand(71, 'A').band, description: 'stale A' } }))); await new Promise((done) => setTimeout(done, 0));
+    assert.equal(view.queryByText('stale A'), null); assert.ok(view.getByText('B 소개')); assert.equal(view.queryByRole('button', { name: '소개 저장' }), null);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('late profile save failure from account A cannot paint an error into account B', async () => {
+  await load(); const previous = globalThis.fetch; const save = deferred();
+  const makeBand = (id, name) => ({ band: { id, slug: 'same-failure', name, description: `${name} 소개`, membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } });
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); const token = options.headers?.Authorization;
+    if (value.endsWith('/by-slug/same-failure')) return response(token === 'Bearer b' ? makeBand(82, 'B') : makeBand(81, 'A'));
+    if (value.endsWith('/bands/81/memberships') || value.endsWith('/bands/82/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/81/invite-codes') || value.endsWith('/bands/82/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/bands/81/announcement') || value.endsWith('/bands/82/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/81/profile') && options.method === 'PATCH') return save.promise;
+    throw new Error(`unexpected ${value}`);
+  };
+  try { const view = render(createElement(App, { entry: '/bands/same-failure/manage', manage: true, authValue: account('a') })); await view.findByText('A 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'late failure'); await user.click(view.getByRole('button', { name: '소개 저장' }));
+    view.rerender(createElement(App, { entry: '/bands/same-failure/manage', manage: true, authValue: account('b') })); await view.findByText('B 관리'); await act(async () => save.reject(new Error('stale failure'))); await new Promise((done) => setTimeout(done, 0));
+    assert.equal(view.queryByText('소개를 저장하지 못했습니다. 입력 내용을 확인하고 다시 시도해 주세요.'), null); assert.ok(view.getByText('B 소개'));
   } finally { globalThis.fetch = previous; }
 });
 

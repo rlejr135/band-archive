@@ -24,6 +24,7 @@ export const bandWorkspacePaths = {
   featuredGallery: (bandId) => `${bandBase(bandId)}/gallery/featured`,
   galleryFeatured: (bandId, galleryId) => `${bandBase(bandId)}/gallery/${Number(galleryId)}/featured`,
   announcement: (bandId) => `${bandBase(bandId)}/announcement`,
+  bandProfile: (bandId) => `${bandBase(bandId)}/profile`,
   suggestions: (bandId, page) => `${bandBase(bandId)}/suggestions${pageQuery(page)}`,
   suggestion: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}`,
   suggestionVote: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}/vote`,

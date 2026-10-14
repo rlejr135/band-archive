@@ -268,11 +268,18 @@ const FeaturedGalleryManager = ({ band, api, workspaceKey, onForbidden }) => {
 
 export const BandManagePage = ({ identity: suppliedIdentity }) => {
   const { user } = useAuth();
+  const { reload: reloadBands } = useBands();
   const { bandSlug } = useParams(); const api = useApi();
   const identity = suppliedIdentity || `${user?.id || 'visitor'}:${bandSlug || ''}`;
   const [state, setState] = useState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], announcement: null });
   const [error, setError] = useState(''); const [rawInvite, setRawInvite] = useState(null);
   const [galleryPickerOpen, setGalleryPickerOpen] = useState(false);
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileDraft, setProfileDraft] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const profileRequestRef = useRef(null);
+  const profileBusyRef = useRef(false);
   // Mutations belong to the authenticated management session.  Reads have a
   // separate sequence/controller: a second refetch must supersede a slower
   // first refetch without cancelling the mutation that requested it.
@@ -321,6 +328,7 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     load(operation);
     return () => { operation.controller.abort(); if (loadRef.current.sessionGeneration === operation.generation) loadRef.current.controller?.abort(); };
   }, [identity, load]);
+  useEffect(() => () => profileRequestRef.current?.abort(), [identity]);
   const refresh = async (operation, preserveRawInvite = false) => {
     if (!isCurrent(operation)) return;
     await load(operation, { preserveRawInvite });
@@ -344,10 +352,59 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     if (sessionRef.current.identity !== identity || sessionRef.current.controller?.signal.aborted) return;
     setState((previous) => previous.band?.id === state.band?.id ? { ...previous, announcement } : previous);
   };
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    const operation = sessionRef.current; const currentBand = state.band;
+    if (!currentBand || currentBand.permissions?.can_edit_band_profile !== true || profileBusyRef.current || !isCurrent(operation)) return;
+    const description = profileDraft;
+    const controller = new AbortController(); profileRequestRef.current = controller;
+    profileBusyRef.current = true; setProfileBusy(true); setProfileError('');
+    try {
+      const response = await api.requestJson(bandWorkspacePaths.bandProfile(currentBand.id), requestOptions('PATCH', { description }, controller.signal));
+      const updatedBand = response?.band;
+      if (!isCurrent(operation) || controller.signal.aborted || String(updatedBand?.id) !== String(currentBand.id)) return;
+      setState((previous) => previous.band && String(previous.band.id) === String(currentBand.id)
+        ? { ...previous, band: { ...previous.band, ...updatedBand } }
+        : previous);
+      setProfileDraft(updatedBand.description || ''); setProfileEditing(false); reloadBands();
+    } catch (error) {
+      if (!isCurrent(operation) || controller.signal.aborted) return;
+      if (error?.status === 403 || error?.status === 404) {
+        setProfileEditing(false); setProfileError('소개를 수정할 권한이 변경되었습니다.');
+        setState((previous) => previous.band && String(previous.band.id) === String(currentBand.id)
+          ? { ...previous, band: { ...previous.band, permissions: { ...previous.band.permissions, can_edit_band_profile: false } } }
+          : previous);
+        try {
+          const detail = await api.requestJson(bandWorkspacePaths.bandBySlug(bandSlug), { signal: operation.controller.signal });
+          const refreshedBand = detail?.band;
+          if (!isCurrent(operation) || !refreshedBand || String(refreshedBand.id) !== String(currentBand.id)) return;
+          if (!refreshedBand.permissions?.can_manage_members || !refreshedBand.permissions?.can_manage_invites) { onForbidden(); return; }
+          setState((previous) => previous.band && String(previous.band.id) === String(currentBand.id) ? { ...previous, band: refreshedBand } : previous);
+          reloadBands();
+        } catch (recheckError) {
+          if (isCurrent(operation)) {
+            if ([401, 403, 404].includes(recheckError?.status)) onForbidden();
+            else {
+              setState((previous) => previous.band && String(previous.band.id) === String(currentBand.id)
+                ? { ...previous, band: { ...previous.band, permissions: { ...previous.band.permissions, can_edit_band_profile: false } } }
+                : previous);
+              setProfileError('권한을 다시 확인하지 못했습니다. 밴드 관리 화면을 새로고침해 주세요.');
+            }
+          }
+        }
+      } else setProfileError('소개를 저장하지 못했습니다. 입력 내용을 확인하고 다시 시도해 주세요.');
+    } finally {
+      if (profileRequestRef.current === controller) {
+        profileRequestRef.current = null;
+        if (isCurrent(operation)) { profileBusyRef.current = false; setProfileBusy(false); }
+      }
+    }
+  };
   if (state.loading) return <main className="bands-page"><p aria-live="polite">관리 정보를 불러오는 중입니다…</p></main>;
   if (state.inaccessible) return <main className="bands-page" role="alert"><h2>찾을 수 없는 관리 공간입니다.</h2><p>이 밴드를 관리할 권한이 없습니다.</p><Link to="/bands">내 밴드로 이동</Link></main>;
   const isOwner = state.band?.membership?.role === 'owner'; const pending = state.memberships.filter((item) => item.status === 'pending'); const active = state.memberships.filter((item) => item.status === 'active');
   return <main className="bands-page" aria-labelledby="manage-band-title"><Link to={safeBandPath(state.band.slug)}>← 밴드 공간</Link><h2 id="manage-band-title">{state.band.name} 관리</h2>{error && <p className="auth-error" role="alert">{error}</p>}
+    <section className="bands-panel" aria-labelledby="manage-profile-title"><h3 id="manage-profile-title">밴드 소개</h3>{profileEditing ? <form className="bands-form" onSubmit={saveProfile}><label htmlFor="band-profile-description">소개<textarea id="band-profile-description" maxLength={2000} value={profileDraft} onChange={(event) => setProfileDraft(event.target.value)} disabled={profileBusy} /></label><p className="bands-help">{profileDraft.length} / 2,000자</p>{profileError && <p className="auth-error" role="alert">{profileError}</p>}<div className="band-actions"><button type="submit" className="primary-btn" disabled={profileBusy}>{profileBusy ? '저장 중…' : '소개 저장'}</button><button type="button" className="secondary-btn" disabled={profileBusy} onClick={() => { setProfileDraft(state.band.description || ''); setProfileEditing(false); setProfileError(''); }}>취소</button></div></form> : <><p>{state.band.description || '소개가 없습니다.'}</p>{profileError && <p className="auth-error" role="alert">{profileError}</p>}{state.band.permissions?.can_edit_band_profile === true && <button type="button" className="secondary-btn" onClick={() => { setProfileDraft(state.band.description || ''); setProfileError(''); setProfileEditing(true); }}>소개 수정</button>}</>}</section>
     <section className="bands-panel" aria-labelledby="manage-announcement-title"><h3 id="manage-announcement-title">밴드 공지</h3><AnnouncementEditor announcement={state.announcement} band={state.band} api={api} workspaceKey={identity} onSaved={announcementSaved} onForbidden={onForbidden} /></section>
     <section className="bands-panel" aria-labelledby="manage-gallery-picker-title"><h3 id="manage-gallery-picker-title">대표 사진</h3>{galleryPickerOpen ? <FeaturedGalleryManager band={state.band} api={api} workspaceKey={identity} onForbidden={onForbidden} /> : <button type="button" className="secondary-btn" onClick={() => setGalleryPickerOpen(true)}>갤러리에서 선택</button>}</section>
     <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><span>{item.user?.display_name || '새 멤버'}</span><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
