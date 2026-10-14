@@ -57,7 +57,7 @@ test('management hides non-manager and ignores a late A membership decision afte
   await load(); const previous = globalThis.fetch; const decision = deferred(); const aDetail = { band: { id: 1, slug: 'a', name: 'A', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } }; const bDetail = { band: { id: 2, slug: 'b', name: 'B', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } };
   globalThis.fetch = async (url, options = {}) => { const value = String(url); if (value.includes('/by-slug/a')) return response(aDetail); if (value.includes('/by-slug/b')) return response(bDetail); if (value.endsWith('/announcement')) return response({ announcement: null }); if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: 'A 요청' } }] }); if (value.includes('/bands/2/memberships')) return response({ memberships: [] }); if (value.includes('/invite-codes') && options.method !== 'POST') return response({ invite_codes: [] }); if (value.includes('/memberships/12')) return decision.promise; throw new Error(`unexpected ${value}`); };
   try { const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('A 요청'); await userEvent.click(view.getByRole('button', { name: '승인' })); view.rerender(createElement(App, { entry: '/bands/b/manage', manage: true })); await view.findByText('B 관리'); await act(async () => decision.resolve(response({ membership: { id: 12 } }))); await new Promise((done) => setTimeout(done, 0)); assert.equal(view.queryByText('A 요청'), null); assert.equal(view.getByText('B 관리').textContent, 'B 관리'); view.unmount();
-    globalThis.fetch = async (url) => String(url).includes('/by-slug/member') ? response({ band: { id: 4, slug: 'member', permissions: { can_manage_members: false, can_manage_invites: false } } }) : response({}); const platform = { ...account('platform'), user: { id: 'platform', app_metadata: { role: 'superadmin' } } }; const denied = render(createElement(App, { entry: '/bands/member/manage', manage: true, authValue: platform })); await denied.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(denied.queryByText('초대 코드'), null); assert.equal(denied.queryByText('대표 사진'), null);
+    globalThis.fetch = async (url) => String(url).includes('/by-slug/member') ? response({ band: { id: 4, slug: 'member', permissions: { can_manage_members: false, can_manage_invites: false } } }) : response({}); const platform = { ...account('platform'), user: { id: 'platform', app_metadata: { role: 'superadmin' } } }; const denied = render(createElement(App, { entry: '/bands/member/manage', manage: true, authValue: platform })); await denied.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(denied.queryByText('초대 코드'), null); assert.equal(denied.queryByText('대표 사진'), null); const myBandsLink = denied.getByRole('link', { name: '내 밴드로 이동' }); assert.equal(myBandsLink.getAttribute('href'), '/bands'); assert.ok(myBandsLink.classList.contains('bands-return-link'));
   } finally { globalThis.fetch = previous; }
 });
 
@@ -169,6 +169,17 @@ test('management keeps the newest mutation refetch when superseded reads resolve
     assert.equal(view.queryByText('Old'), null);
     assert.equal(view.queryByText('New')?.textContent, 'New');
   } finally { globalThis.fetch = previous; }
+});
+
+test('management return control is a keyboard-focusable canonical RouterLink', async () => {
+  await load(); const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => { const value = String(url);
+    if (value.includes('/by-slug/requested')) return response({ band: { id: 88, slug: 'canonical-band', name: '이름이 긴 밴드', permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.endsWith('/bands/88/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/88/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/88/announcement')) return response({ announcement: null });
+    throw new Error(`unexpected ${value}`);
+  };
+  try { const view = render(createElement(App, { entry: '/bands/requested/manage', manage: true })); await view.findByText('이름이 긴 밴드 관리'); const link = view.getByRole('link', { name: '밴드 공간으로 돌아가기' }); assert.equal(link.getAttribute('href'), '/bands/canonical-band'); assert.equal(link.tabIndex, 0); assert.ok(link.classList.contains('bands-return-link')); await user.tab(); assert.equal(document.activeElement, link); }
+  finally { globalThis.fetch = previous; }
 });
 
 test('owner profile editor requires explicit permission and saves only the trimmed-contract field twice', async () => {

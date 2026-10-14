@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const css = await readFile(new URL('../index.css', import.meta.url), 'utf8');
 const workspaceCss = await readFile(new URL('../components/workspace/BandWorkspace.css', import.meta.url), 'utf8');
+const managementCss = await readFile(new URL('../components/bands/BandsPage.css', import.meta.url), 'utf8');
 const rootBlock = css.match(/:root\s*\{([^}]*)\}/s)?.[1] || '';
 const token = (name) => rootBlock.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1];
 const linear = (channel) => { const value = channel / 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
@@ -41,4 +42,12 @@ test('focus token exists and band token aliases are scoped to the workspace, not
   assert.doesNotMatch(rootBlock, /--band-theme|--theme-key/);
   assert.match(workspaceCss, /\.band-workspace\s*\{[^}]*--primary-color:\s*var\(--color-accent\)/s);
   assert.doesNotMatch(workspaceCss, /document\.documentElement|\.style\.setProperty/);
+});
+
+test('management return link retains a mobile-sized target and long description wrapping', () => {
+  assert.match(managementCss, /\.bands-return-link\s*\{[^}]*min-height:\s*44px/s);
+  assert.match(managementCss, /@media\s*\(max-width:\s*700px\)/);
+  assert.match(managementCss, /\.bands-return-link\s*\{\s*max-width:\s*100%/);
+  assert.match(managementCss, /manage-profile-title\s*\+\s*p\s*\{[^}]*white-space:\s*pre-wrap/s);
+  assert.match(managementCss, /manage-profile-title\s*\+\s*p\s*\{[^}]*overflow-wrap:\s*anywhere/s);
 });

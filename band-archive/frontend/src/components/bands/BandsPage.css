@@ -82,10 +82,21 @@
 .manage-gallery > .secondary-btn { margin-top: 12px; }
 .manage-gallery > .account-error { margin: 12px 0; }
 .manage-gallery > .auth-error { padding: 10px; border: 1px solid rgba(226,91,91,.3); border-radius: 8px; }
+.bands-page.manage-page { width: min(100%, 880px); }
+.bands-manage-header { display: grid; justify-items: start; gap: 18px; padding-bottom: 20px; border-bottom: 1px solid var(--color-border); }
+.bands-manage-header h2 { max-width: 100%; margin: 0; overflow-wrap: anywhere; }
+.bands-return-link { display: inline-flex; min-height: 44px; align-items: center; gap: 9px; padding: 8px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-default); background: var(--color-surface-raised); color: var(--color-text); font-weight: 650; line-height: 1.3; text-decoration: none; }
+.bands-return-link:hover { border-color: var(--color-accent-hover); background: var(--color-surface-raised); color: var(--color-accent); }
+.bands-return-link > span { color: var(--color-accent); font-size: 1.1em; }
+.bands-page.manage-page > .bands-panel { margin-top: 20px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.bands-page.manage-page > .bands-panel h3 { margin: 0 0 12px; color: var(--color-accent); font-size: 1.05rem; }
+.bands-page.manage-page #manage-profile-title + p { margin: 0 0 16px; color: var(--color-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bands-page.manage-page .bands-help { overflow-wrap: anywhere; }
+.bands-page.manage-page .band-list > li > span { min-width: 0; overflow-wrap: anywhere; }
 .account-hub .bands-panel { margin-top: 23px; padding-top: 17px; border-top: 1px solid rgba(225,235,205,.09); }
 .account-hub .bands-panel h3 { margin: 0 0 11px; color: #dfe4d6; font-size: 13px; }
 .account-hub .bands-help { color: #a8aca3; }
 .account-hub .bands-form { gap: 10px; max-width: 480px; }
 .account-hub .bands-form label { color: #a8aca3; font-size: 11px; }
 .account-hub .bands-form input,.account-hub .bands-form textarea,.account-hub .bands-panel select { padding: 9px 10px; border-color: #424b3e; border-radius: 7px; color: #f1eee5; background: #111512; font: inherit; }
-@media (max-width: 700px) { .bands-shell { padding: 0 14px 30px; } .bands-header { align-items: flex-start; flex-direction: column; gap: 10px; padding: 13px 0; } .bands-header-actions { width: 100%; min-width: 0; justify-content: space-between; gap: 8px; } .bands-header .band-switcher { min-width: 145px; flex: 1 1 0; } .bands-header .band-switcher select { max-width: 100%; } .bands-header .auth-account { min-width: 0; overflow-wrap: anywhere; } .account-heading { padding: 31px 0 20px; } .account-section-heading { align-items: flex-start; flex-direction: column; } .account-section-actions { width: 100%; justify-content: flex-start; } .profile-details { grid-template-columns: 1fr; gap: 7px; margin-top: 15px; } .account-memberships > .account-section-heading { margin-bottom: 14px; } .account-pending li { flex-direction: column; gap: 4px; } .bands-page { padding: 20px; } }
+@media (max-width: 700px) { .bands-shell { padding: 0 14px 30px; } .bands-header { align-items: flex-start; flex-direction: column; gap: 10px; padding: 13px 0; } .bands-header-actions { width: 100%; min-width: 0; justify-content: space-between; gap: 8px; } .bands-header .band-switcher { min-width: 145px; flex: 1 1 0; } .bands-header .band-switcher select { max-width: 100%; } .bands-header .auth-account { min-width: 0; overflow-wrap: anywhere; } .account-heading { padding: 31px 0 20px; } .account-section-heading { align-items: flex-start; flex-direction: column; } .account-section-actions { width: 100%; justify-content: flex-start; } .profile-details { grid-template-columns: 1fr; gap: 7px; margin-top: 15px; } .account-memberships > .account-section-heading { margin-bottom: 14px; } .account-pending li { flex-direction: column; gap: 4px; } .bands-page { padding: 20px; } .bands-page.manage-page { padding: 18px; } .bands-page.manage-page > .bands-panel { padding: 16px; } .bands-return-link { max-width: 100%; } }
