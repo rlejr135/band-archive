@@ -169,6 +169,7 @@ def band_dict(band, viewer=None, include_roster=False, membership=_UNRESOLVED_ME
             'can_manage_members': bool(active_member and membership.role in MANAGER_ROLES),
             'can_manage_invites': bool(active_member and membership.role in MANAGER_ROLES),
             'can_close_band': bool(active_member and membership.role == 'owner'),
+            'can_edit_band_profile': bool(active_member and membership.role == 'owner'),
         },
         'can_edit': bool(active_member and membership.role in MANAGER_ROLES),
         'can_delete': bool(active_member and membership.role == 'owner'),
@@ -683,3 +684,29 @@ def close_band(actor, band_id):
         audit('band_closed', actor, band=band, target=band, details={'purge_after': band.purge_after.isoformat()})
         db.session.commit()
     return band
+
+
+def update_band_profile(actor, band_id, payload):
+    """Update only the owner-editable plain-text band description."""
+    # Serialize authorization with ownership changes. PostgreSQL locks the
+    # band/membership rows; SQLite claims its writer lock before rereading them.
+    _begin_privileged_mutation()
+    try:
+        band, membership = require_band_role(actor, band_id, OWNER_ROLES, lock=True)
+        if not isinstance(payload, dict) or set(payload) != {'description'}:
+            raise ValidationError('Only the description field is allowed.')
+        description = payload['description']
+        if not isinstance(description, str):
+            raise ValidationError('description must be text.')
+        description = description.strip()
+        if len(description) > 2000:
+            raise ValidationError('description must be at most 2000 characters.')
+
+        band.description = description or None
+        audit('band_profile_updated', actor, band=band, target=band,
+              details={'fields': ['description']})
+        db.session.commit()
+        return band, membership
+    except Exception:
+        db.session.rollback()
+        raise

@@ -8,7 +8,7 @@ from band_service import (
     ACTIVE, MANAGER_ROLES, approve_membership, band_dict, close_band, create_invite,
     create_request, creation_request_dict, invite_dict, join_invite, join_request,
     leave_band, membership_dict, require_band_role, review_request, revoke_invite,
-    rotate_invite, set_role, transfer_ownership,
+    rotate_invite, set_role, transfer_ownership, update_band_profile,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -197,6 +197,15 @@ def list_memberships(band_id):
     audience = 'management' if membership.role in MANAGER_ROLES else 'member'
     return jsonify({'memberships': [membership_dict(item, audience=audience)
                                     for item in query.order_by(BandMembership.id).all()]})
+
+
+@bands_bp.patch('/bands/<int:band_id>/profile')
+@require_auth
+def patch_band_profile(band_id):
+    band, membership = update_band_profile(
+        current_app_user(), band_id, request.get_json(silent=True),
+    )
+    return jsonify({'band': band_dict(band, current_app_user(), membership=membership)})
 
 
 @bands_bp.get('/bands/<int:band_id>/search-places')
