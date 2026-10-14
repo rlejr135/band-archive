@@ -13,7 +13,7 @@ def test_cli_keeps_prepared_report_when_post_publication_step_fails(tmp_path, mo
     sqlite3.connect(source).close()
 
     import tools.legacy_rehearsal.preserve_identity_refresh as refresh
-    monkeypatch.setattr(refresh, "load_reviewed_profile", lambda path, digest: {"version": "phase9-preserve-identity-refresh-v1"})
+    monkeypatch.setattr(refresh, "load_reviewed_profile", lambda path, digest: {"version": refresh.PROFILE_VERSION})
     monkeypatch.setattr(refresh, "load_write_freeze_attestation", lambda path, fingerprint: {})
     monkeypatch.setattr(refresh, "load_readonly_object_proof", lambda path, fingerprint, **kwargs: {"objects": []})
     monkeypatch.setattr(refresh, "load_approved_object_dispositions", lambda path, **kwargs: {"dispositions": []})

@@ -23,7 +23,7 @@ current target as its own baseline. Its exact JSON contract is:
 
 ```json
 {
-  "version": "phase9-preserve-identity-refresh-v1",
+  "version": "phase9-preserve-identity-refresh-v2",
   "target_writes_frozen": true,
   "provenance": {
     "baseline_proof": { "file": "offline-v11-baseline.json", "sha256": "<sha256>" },
@@ -52,7 +52,7 @@ Any new user, other band, membership, claim, audit event, pending request or
 invite, direct upload, suggestion vote, multipart row, or domain-content
 change stops the tool.
 
-The target must already be migrated to Alembic head `20261010_13`. That
+The target must already be migrated to the current Alembic head `20261014_14`. That
 one-way PostgreSQL migration disables browser Data API access to the reviewed
 application tables; it is not a production cutover authorization. It refuses
 to begin if the migration owner has unsafe global default ACLs for `PUBLIC`,

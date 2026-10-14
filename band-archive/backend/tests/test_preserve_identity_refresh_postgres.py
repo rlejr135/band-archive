@@ -68,7 +68,25 @@ def private_pg17(tmp_path):
                     time.sleep(0.1)
             else:
                 raise RuntimeError("owned PostgreSQL did not start")
-            yield f"postgresql+psycopg://postgres@127.0.0.1:{port}/postgres"
+            url = f"postgresql+psycopg://postgres@127.0.0.1:{port}/postgres"
+            readiness_engine = create_engine(url, connect_args={"connect_timeout": 2})
+            try:
+                sql_deadline = time.monotonic() + 20
+                while True:
+                    try:
+                        with readiness_engine.connect() as connection:
+                            connection.execute(text("SELECT 1")).scalar_one()
+                        break
+                    except Exception as error:
+                        original = getattr(error, "orig", None)
+                        sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+                        known_startup = sqlstate == "57P03" or "the database system is starting up" in str(original).lower()
+                        if not known_startup or time.monotonic() >= sql_deadline:
+                            raise
+                        time.sleep(0.1)
+            finally:
+                readiness_engine.dispose()
+            yield url
         finally:
             process.terminate()
             try:
@@ -179,6 +197,19 @@ def _refresh(source, url, profile, object_proof, prepared, marker):
 def test_private_postgres_refresh_happy_path_preserves_claimed_identity(tmp_path, private_pg17, monkeypatch):
     _internal_target_seam(monkeypatch)
     source, target, band_id, profile, object_proof = _fixture(tmp_path, private_pg17)
+    with target.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO band_request_email_outbox "
+            "(request_id,recipient_user_id,decision,status,next_attempt_at,created_at,updated_at) "
+            "VALUES (NULL,NULL,'approved','pending',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP), "
+            "(NULL,NULL,'rejected','sent',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        connection.execute(text(
+            "UPDATE band_request_email_outbox SET sent_at=CURRENT_TIMESTAMP WHERE status='sent'"
+        ))
+    with target.connect() as connection:
+        profile["protected"]["table_digests"] = _table_digests(connection, PROTECTED_TABLES)
+        outbox_before = profile["protected"]["table_digests"]["band_request_email_outbox"]
     with create_engine(f"sqlite:///{source.as_posix()}").begin() as source_connection:
         source_connection.execute(text("UPDATE song SET title='changed in frozen source' WHERE id=7"))
     prepared, marker = [], []
@@ -189,6 +220,7 @@ def test_private_postgres_refresh_happy_path_preserves_claimed_identity(tmp_path
     with target.connect() as connection:
         assert connection.execute(text("SELECT title FROM song WHERE id=7")).scalar_one() == "changed in frozen source"
         assert _table_digests(connection, PROTECTED_TABLES) == profile["protected"]["table_digests"]
+        assert _table_digests(connection, PROTECTED_TABLES)["band_request_email_outbox"] == outbox_before
         assert _table_digests(connection, REFRESHED_TABLES, band_id=band_id)["song"]["count"] == 1
     target.dispose()
 

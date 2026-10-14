@@ -31,12 +31,13 @@ from tools.legacy_rehearsal.rehearsal import (
 )
 
 
-PROFILE_VERSION = "phase9-preserve-identity-refresh-v1"
+PROFILE_VERSION = "phase9-preserve-identity-refresh-v2"
 OBJECT_PROOF_VERSION = "phase9-r2-readonly-manifest-v2"
 OBJECT_DISPOSITION_APPROVAL_VERSION = "phase9-r2-readonly-disposition-approval-v1"
 PROTECTED_TABLES = frozenset({
     "app_user", "auth_bootstrap_state", "band", "band_membership",
     "legacy_band_claim_token", "audit_event", "tenant_backfill_state",
+    "band_request_email_outbox",
 })
 REFRESHED_TABLES = frozenset({
     "announcement", "gallery_image", "member", "rehearsal", "song",
