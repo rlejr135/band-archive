@@ -13,14 +13,17 @@ from alembic.migration import MigrationContext
 from flask_migrate import downgrade, upgrade
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import Engine
 
 from auth_service import VerifiedIdentity, synchronize_user
 from extensions import db
 from migration_bootstrap import (
-    DATA_API_MANAGED_TABLES,
+    DATA_API_MANAGED_TABLES_PHASE13 as DATA_API_MANAGED_TABLES,
+    DATA_API_MANAGED_TABLES as CURRENT_DATA_API_MANAGED_TABLES,
     MIGRATIONS_DIRECTORY,
     PHASE12_REVISION,
+    PHASE13_REVISION,
     create_migration_app,
     metadata_for_recorded_revision,
     phase11_metadata,
@@ -153,7 +156,9 @@ def test_sqlite_revision_is_version_only_and_downgrade_is_safe_noop(tmp_path):
             with db.engine.begin() as connection:
                 apply_tenant_backfill(connection)
             upgrade(revision=SECURITY_REVISION, directory=str(MIGRATIONS_DIRECTORY))
-            assert schema_contract_differences(db.session.connection()) == []
+            assert schema_contract_differences(
+                db.session.connection(), metadata=metadata_for_recorded_revision(SECURITY_REVISION),
+            ) == []
             downgrade(revision=PHASE12_REVISION, directory=str(MIGRATIONS_DIRECTORY))
     finally:
         with app.app_context():
@@ -173,7 +178,9 @@ def test_postgres_migration_blocks_client_roles_preserves_owner_and_future_defau
         try:
             with app.app_context():
                 upgrade(revision=SECURITY_REVISION, directory=str(MIGRATIONS_DIRECTORY))
-                assert schema_contract_differences(db.session.connection()) == []
+                assert schema_contract_differences(
+                    db.session.connection(), metadata=metadata_for_recorded_revision(SECURITY_REVISION),
+                ) == []
         finally:
             with app.app_context():
                 db.session.remove()
@@ -244,4 +251,115 @@ def test_postgres_global_default_acl_blocks_before_any_security_ddl(private_pg17
                 db.session.remove()
                 db.engine.dispose()
     finally:
+        engine.dispose()
+
+
+def test_postgres_email_outbox_revision_is_private_and_exact_head_is_required(private_pg17):
+    _upgrade_to_revision_12(private_pg17)
+    app = create_migration_app(private_pg17)
+    engine = create_engine(private_pg17)
+    try:
+        with app.app_context():
+            upgrade(revision=SECURITY_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.begin() as connection:
+                connection.execute(text("""
+                    DO $$ BEGIN
+                        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+                        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+                    END $$
+                """))
+            from startup_guard import assert_postgres_startup_ready
+            with pytest.raises(RuntimeError, match='PostgreSQL startup validation failed'):
+                assert_postgres_startup_ready(engine)
+            upgrade(directory=str(MIGRATIONS_DIRECTORY))
+            assert schema_contract_differences(db.session.connection()) == []
+            assert_postgres_startup_ready(engine)
+
+        with engine.begin() as connection:
+            table_names = tuple(connection.execute(text(
+                "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+            )).scalars())
+            assert table_names == CURRENT_DATA_API_MANAGED_TABLES
+            state = connection.execute(text("""
+                SELECT relrowsecurity, relforcerowsecurity
+                FROM pg_class WHERE oid='public.band_request_email_outbox'::regclass
+            """)).one()
+            assert state == (True, False)
+            connection.execute(text(
+                "INSERT INTO public.band_request_email_outbox "
+                "(decision, next_attempt_at, created_at, updated_at) "
+                "VALUES ('approved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            connection.execute(text(
+                "DELETE FROM public.band_request_email_outbox WHERE decision='approved'"
+            ))
+
+        for role in ('anon', 'authenticated'):
+            _assert_role_denied(engine, role, 'SELECT id FROM public.band_request_email_outbox LIMIT 1')
+            _assert_role_denied(
+                engine, role,
+                "INSERT INTO public.band_request_email_outbox "
+                "(decision, next_attempt_at, created_at, updated_at) "
+                "VALUES ('approved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            _assert_role_denied(
+                engine, role,
+                "SELECT nextval(pg_get_serial_sequence('public.band_request_email_outbox', 'id'))",
+            )
+
+        # Prove the downgrade's table lock is acquired before its empty-table
+        # check: a second connection cannot insert during the vulnerable gap.
+        concurrent_insert_blocked = []
+        def pause_at_history_count(connection, cursor, statement, parameters, context, executemany):
+            if statement.strip().casefold() == 'select count(*) from band_request_email_outbox':
+                with engine.connect() as concurrent:
+                    transaction = concurrent.begin()
+                    try:
+                        concurrent.exec_driver_sql("SET LOCAL lock_timeout = '250ms'")
+                        try:
+                            concurrent.execute(text(
+                                "INSERT INTO public.band_request_email_outbox "
+                                "(decision, next_attempt_at, created_at, updated_at) "
+                                "VALUES ('approved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                            ))
+                        except sa.exc.DBAPIError:
+                            concurrent_insert_blocked.append(True)
+                        else:
+                            concurrent_insert_blocked.append(False)
+                    finally:
+                        transaction.rollback()
+
+        event.listen(Engine, 'before_cursor_execute', pause_at_history_count)
+        try:
+            with app.app_context():
+                migrate = app.extensions['migrate'].migrate
+                command.downgrade(migrate.get_config(str(MIGRATIONS_DIRECTORY)), PHASE13_REVISION)
+        finally:
+            event.remove(Engine, 'before_cursor_execute', pause_at_history_count)
+        assert concurrent_insert_blocked == [True]
+
+        # A populated history blocks downgrade and survives the failed Alembic
+        # transaction; a rollback never silently loses an event.
+        with app.app_context():
+            upgrade(directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.begin() as connection:
+                connection.execute(text(
+                    "INSERT INTO public.band_request_email_outbox "
+                    "(decision, next_attempt_at, created_at, updated_at) "
+                    "VALUES ('rejected', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ))
+            migrate = app.extensions['migrate'].migrate
+            with pytest.raises(RuntimeError, match='Refusing to drop a populated email outbox'):
+                command.downgrade(migrate.get_config(str(MIGRATIONS_DIRECTORY)), PHASE13_REVISION)
+            with db.engine.connect() as connection:
+                assert connection.execute(text(
+                    'SELECT count(*) FROM public.band_request_email_outbox'
+                )).scalar_one() == 1
+                assert connection.execute(text(
+                    'SELECT version_num FROM public.alembic_version'
+                )).scalar_one() == '20261014_14'
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
         engine.dispose()

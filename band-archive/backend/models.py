@@ -143,6 +143,64 @@ class BandCreationRequest(db.Model):
     )
 
 
+class BandRequestEmailOutbox(db.Model):
+    """Durable, non-content-bearing record of a request decision notification.
+
+    This table is intentionally only the persistence foundation. Delivery is
+    performed by an explicitly enabled worker in a later implementation.
+    """
+    __tablename__ = 'band_request_email_outbox'
+
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(
+        db.Integer, db.ForeignKey('band_creation_request.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    recipient_user_id = db.Column(
+        db.Integer, db.ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True,
+    )
+    decision = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending', server_default='pending')
+    attempt_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    manual_retry_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    next_attempt_at = db.Column(
+        db.DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    lease_until = db.Column(db.DateTime(timezone=True), nullable=True)
+    lease_token = db.Column(db.String(64), nullable=True)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_error_code = db.Column(
+        db.String(50), nullable=False, default='none', server_default='none',
+    )
+    created_at = db.Column(
+        db.DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        db.CheckConstraint("decision IN ('approved', 'rejected')", name='ck_band_request_email_decision'),
+        db.CheckConstraint(
+            "status IN ('pending', 'leased', 'sent', 'failed', 'suppressed')",
+            name='ck_band_request_email_status',
+        ),
+        db.CheckConstraint('attempt_count > -1', name='ck_band_request_email_attempt_count'),
+        db.CheckConstraint('manual_retry_count > -1', name='ck_band_request_email_manual_retry_count'),
+        db.CheckConstraint(
+            "last_error_code IN ('none', 'smtp_unavailable', 'smtp_timeout', 'smtp_rejected', "
+            "'recipient_unavailable', 'invalid_configuration', 'unknown')",
+            name='ck_band_request_email_error_code',
+        ),
+        db.UniqueConstraint('request_id', name='uq_band_request_email_request'),
+        db.Index('ix_band_request_email_due', 'status', 'next_attempt_at', 'id'),
+        db.Index('ix_band_request_email_lease', 'status', 'lease_until', 'id'),
+    )
+
+
 class BandInviteCode(db.Model):
     __tablename__ = 'band_invite_code'
 

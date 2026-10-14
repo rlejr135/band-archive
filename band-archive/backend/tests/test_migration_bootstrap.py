@@ -19,6 +19,8 @@ from migration_bootstrap import (
     baseline_metadata,
     create_migration_app,
     migration_head_revision,
+    metadata_for_recorded_revision,
+    PHASE13_REVISION,
     phase4_metadata,
     _canonical_postgres_partial_predicate,
     _canonical_postgres_check_constraint,
@@ -130,6 +132,54 @@ def test_fresh_database_upgrade_creates_current_baseline(tmp_path):
                 assert schema_contract_differences(connection) == []
         with app.app_context():
             assert _version(app) == migration_head_revision()
+    finally:
+        _dispose(app)
+
+
+def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tmp_path):
+    database_path = tmp_path / 'email-outbox-foundation.db'
+    staged = _runner_command(database_path, 'upgrade')
+    assert staged.exit_code != 0 and 'read-scope contract' in staged.output
+    assert _runner_command(database_path, 'tenant-backfill --apply').exit_code == 0
+    upgraded = _runner_command(database_path, 'upgrade')
+    assert upgraded.exit_code == 0, upgraded.output
+
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            assert migration_head_revision() == '20261014_14'
+            assert _version(app) == migration_head_revision()
+            with db.engine.connect() as connection:
+                assert 'band_request_email_outbox' in inspect(connection).get_table_names()
+                assert schema_differences(connection) == []
+                assert schema_contract_differences(connection) == []
+
+            # Revision 13 did not change table structure. Its historical
+            # snapshot must remain usable after the new ORM table is defined.
+            downgrade(revision=PHASE13_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.connect() as connection:
+                assert schema_differences(
+                    connection, metadata=metadata_for_recorded_revision(PHASE13_REVISION),
+                ) == []
+                assert 'band_request_email_outbox' not in inspect(connection).get_table_names()
+
+            upgrade(directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.begin() as connection:
+                connection.execute(text(
+                    "INSERT INTO band_request_email_outbox "
+                    "(decision, next_attempt_at, created_at, updated_at) "
+                    "VALUES ('approved', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ))
+            migrate = app.extensions['migrate'].migrate
+            config = migrate.get_config(str(MIGRATIONS_DIRECTORY))
+            with pytest.raises(RuntimeError, match='Refusing to drop a populated email outbox'):
+                from alembic import command
+                command.downgrade(config, PHASE13_REVISION)
+            assert _version(app) == migration_head_revision()
+            with db.engine.connect() as connection:
+                assert connection.execute(text(
+                    'SELECT count(*) FROM band_request_email_outbox'
+                )).scalar_one() == 1
     finally:
         _dispose(app)
 

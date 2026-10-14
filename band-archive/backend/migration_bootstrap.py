@@ -35,8 +35,10 @@ PHASE9_REVISION = '20261002_09'
 PHASE10_REVISION = '20261003_10'
 PHASE11_REVISION = '20261004_11'
 PHASE12_REVISION = '20261006_12'
+PHASE13_REVISION = '20261010_13'
+PHASE14_REVISION = '20261014_14'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
-DATA_API_MANAGED_TABLES = (
+DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
     'band_creation_request', 'band_invite_code', 'band_membership', 'comment', 'direct_upload_session',
     'gallery_image', 'legacy_band_claim_token', 'media', 'media_vote', 'member', 'multipart_upload_part',
@@ -44,6 +46,7 @@ DATA_API_MANAGED_TABLES = (
     'personal_log_multipart_upload_session', 'rehearsal', 'rehearsal_songs', 'song', 'song_suggestion',
     'song_suggestion_vote', 'song_vote', 'tenant_backfill_state',
 )
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13, 'band_request_email_outbox')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -159,11 +162,19 @@ def phase3_hardened_metadata():
     return metadata
 
 
+def _remove_future_email_outbox(metadata):
+    """Keep pre-revision-14 snapshots independent of later ORM additions."""
+    if 'band_request_email_outbox' in metadata.tables:
+        metadata.remove(metadata.tables['band_request_email_outbox'])
+    return metadata
+
+
 def phase4_metadata():
     """Exact revision-05 snapshot before Phase 6 contracts tenant reads."""
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -201,6 +212,7 @@ def phase6_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -213,6 +225,7 @@ def phase7_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -224,6 +237,7 @@ def phase8_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -234,6 +248,7 @@ def phase9_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase10_direct_expiry_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -245,6 +260,7 @@ def phase10_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -255,6 +271,7 @@ def phase11_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    _remove_future_email_outbox(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
@@ -649,13 +666,16 @@ def _expected_check_constraints(table, dialect=None):
             continue
         canonical = _canonical_check_constraint(
             constraint.sqltext, dialect,
-            allow_or=(table.name, constraint.name) == ('direct_upload_session', 'ck_direct_upload_session_target'),
+            allow_or=(table.name, constraint.name) in {
+                ('direct_upload_session', 'ck_direct_upload_session_target'),
+            },
         )
         if getattr(dialect, 'name', None) == 'postgresql':
             canonical = _normalize_postgres_check_for_table(canonical, table)
         if getattr(dialect, 'name', None) == 'postgresql' and canonical is None:
             raise MigrationBootstrapError(
-                f'PostgreSQL CHECK metadata is outside the audited grammar for {table.name}; refusing to stamp.'
+                f'PostgreSQL CHECK metadata is outside the audited grammar for '
+                f'{table.name}.{constraint.name}; refusing to stamp.'
             )
         expected.append((constraint.name, canonical))
     return Counter(expected)
@@ -675,7 +695,9 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             )
         canonical = _canonical_check_constraint(
             constraint['sqltext'], dialect,
-            allow_or=(table_name, constraint.get('name')) == ('direct_upload_session', 'ck_direct_upload_session_target'),
+            allow_or=(table_name, constraint.get('name')) in {
+                ('direct_upload_session', 'ck_direct_upload_session_target'),
+            },
         )
         if getattr(dialect, 'name', None) == 'postgresql' and table is not None:
             canonical = _normalize_postgres_check_for_table(canonical, table)
@@ -1491,6 +1513,11 @@ def metadata_for_recorded_revision(revision):
     if revision == PHASE11_REVISION:
         return phase11_metadata()
     if revision == PHASE12_REVISION:
+        return phase12_metadata()
+    if revision == PHASE13_REVISION:
+        # Revision 13 hardens PostgreSQL access only; its structural snapshot
+        # is identical to revision 12. Keep this historical snapshot explicit
+        # so upgrades from the recorded 13 head can be safely preflighted.
         return phase12_metadata()
     if revision == migration_head_revision():
         return db.metadata
