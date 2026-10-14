@@ -21,7 +21,7 @@
 .activity-announcement-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .activity-text-button { padding: 0; border: 0; background: none; color: var(--primary-color); text-decoration: underline; cursor: pointer; font: inherit; }
 .activity-announcement > .activity-text-button { margin-top: 9px; }
-.activity-inline-error,.activity-error { color: #e25b5b; }
+.activity-inline-error,.activity-error { color: var(--accent-color); }
 .activity-inline-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .activity-error { padding: 12px; }
 .activity-main-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -43,7 +43,7 @@
 .activity-calendar-layout .react-calendar__month-view__weekdays { color: var(--text-secondary); }
 .activity-calendar-layout .react-calendar__tile { position: relative; min-height: 42px; background: transparent; }
 .activity-calendar-layout .react-calendar__tile:enabled:hover,.activity-calendar-layout .react-calendar__tile:enabled:focus { background: var(--surface-color); }
-.activity-calendar-layout .react-calendar__tile--active { background: var(--primary-color) !important; color: var(--text-on-primary, #111) !important; }
+.activity-calendar-layout .react-calendar__tile--active { background: var(--primary-color) !important; color: var(--text-on-primary) !important; }
 .activity-calendar-layout .react-calendar__tile--now { outline: 1px solid var(--primary-color); }
 .activity-calendar-dot { position: absolute; bottom: 5px; left: calc(50% - 3px); width: 6px; height: 6px; border-radius: 50%; background: var(--primary-color); }
 .activity-selected-day { min-width: 0; }
