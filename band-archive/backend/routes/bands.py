@@ -1,6 +1,6 @@
 """Phase 3 API: private membership management plus public band discovery."""
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, after_this_request, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
 from band_access import current_audience, optional_auth, read_scope_for_slug
@@ -13,6 +13,7 @@ from band_service import (
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import Band, BandCreationRequest, BandInviteCode, BandMembership
+from routes.search import search_places_for_member
 
 
 bands_bp = Blueprint('bands', __name__, url_prefix='/api/v2')
@@ -196,6 +197,21 @@ def list_memberships(band_id):
     audience = 'management' if membership.role in MANAGER_ROLES else 'member'
     return jsonify({'memberships': [membership_dict(item, audience=audience)
                                     for item in query.order_by(BandMembership.id).all()]})
+
+
+@bands_bp.get('/bands/<int:band_id>/search-places')
+@require_auth
+def search_band_places(band_id):
+    user = current_app_user()
+    require_band_role(user, band_id, roles={'owner', 'admin', 'member'})
+
+    @after_this_request
+    def _prevent_shared_place_search_cache(response):
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.vary.add('Authorization')
+        return response
+
+    return search_places_for_member(user.id)
 
 
 @bands_bp.post('/bands/<int:band_id>/invite-codes')

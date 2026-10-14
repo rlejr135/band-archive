@@ -72,10 +72,10 @@ class PlaceSearchGuard:
         for key in expired_keys:
             del self._requests_by_subject[key]
 
-    def allow_request(self, remote_addr):
-        """Count each valid non-empty request against its socket peer address."""
+    def allow_request(self, requester_identity):
+        """Count each valid non-empty request against a server-side identity."""
         now = self._clock()
-        key = self._subject_key(remote_addr)
+        key = self._subject_key(str(requester_identity))
         with self._lock:
             self._prune_subjects(now)
             events = self._requests_by_subject.get(key)

@@ -16,6 +16,13 @@ _MAX_PROVIDER_BODY_BYTES = 256 * 1024
 
 @search_bp.route('/api/search-places', methods=['GET'])
 def search_places():
+    # Retire the former public proxy. Keep this explicit to make the old
+    # endpoint fail closed even when compatibility writes remain enabled.
+    return jsonify({'error': 'place_search_requires_band_membership'}), 410
+
+
+def search_places_for_member(user_id):
+    """Resolve a search after the caller's active band membership was proven."""
     guard = current_app.extensions['place_search_guard']
     try:
         query = guard.normalize_query(request.args.get('query', ''))
@@ -24,7 +31,10 @@ def search_places():
     if not query:
         return jsonify([])
 
-    allowed, retry_after = guard.allow_request(request.remote_addr)
+    # The user identity comes from the verified bearer token and local profile,
+    # never from a caller-supplied identity header. A user's quota is shared
+    # across every band they belong to.
+    allowed, retry_after = guard.allow_request(f'user:{int(user_id)}')
     if not allowed:
         return jsonify({'error': 'rate_limited'}), 429, {'Retry-After': str(retry_after)}
 
