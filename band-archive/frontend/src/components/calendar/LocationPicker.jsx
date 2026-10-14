@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { API_URL } from '../../services/api';
 import './LocationPicker.css';
 
 const NAVER_MAP_CLIENT_ID = import.meta.env.VITE_NAVER_MAP_CLIENT_ID;
+const HAS_MAP_CLIENT = Boolean(NAVER_MAP_CLIENT_ID && NAVER_MAP_CLIENT_ID !== 'YOUR_CLIENT_ID_HERE');
 const DEFAULT_CENTER = { lat: 37.5665, lng: 126.978 }; // 서울 시청
 
 function loadNaverMapScript() {
@@ -32,10 +32,8 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
   const mapInstance = useRef(null);
   const markerRef = useRef(null);
   const [searchQuery, setSearchQuery] = useState(location || '');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [showResults, setShowResults] = useState(false);
+  const [loading, setLoading] = useState(HAS_MAP_CLIENT);
+  const [error, setError] = useState(HAS_MAP_CLIENT ? '' : 'Naver Map Client ID가 설정되지 않았습니다.');
 
   const updateMarker = useCallback((lat, lng, address) => {
     const { naver } = window;
@@ -71,11 +69,7 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
   }, [onChange]);
 
   useEffect(() => {
-    if (!NAVER_MAP_CLIENT_ID || NAVER_MAP_CLIENT_ID === 'YOUR_CLIENT_ID_HERE') {
-      setError('Naver Map Client ID가 설정되지 않았습니다.');
-      setLoading(false);
-      return;
-    }
+    if (!HAS_MAP_CLIENT) return;
 
     loadNaverMapScript()
       .then(() => {
@@ -101,7 +95,6 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
           const lng = e.coord.lng();
           updateMarker(lat, lng, null);
           reverseGeocode(lat, lng);
-          setShowResults(false);
         });
 
         setLoading(false);
@@ -112,54 +105,10 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
       });
   }, [latitude, longitude, updateMarker, reverseGeocode]);
 
-  const handleSearch = async (e) => {
+  const handleSearch = (e) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
-
-    setError('');
-    try {
-      const resp = await fetch(
-        `${API_URL}/api/search-places?query=${encodeURIComponent(searchQuery.trim())}`
-      );
-      if (!resp.ok) throw new Error('검색 실패');
-      const data = await resp.json();
-
-      if (data.length === 0) {
-        setError('검색 결과가 없습니다.');
-        setTimeout(() => setError(''), 2000);
-        setShowResults(false);
-        return;
-      }
-
-      setSearchResults(data);
-      setShowResults(true);
-    } catch {
-      setError('검색 중 오류가 발생했습니다.');
-      setTimeout(() => setError(''), 2000);
-    }
-  };
-
-  const handleSelectResult = (result) => {
-    const address = result.roadAddress || result.address;
-    const displayName = `${result.title} (${address})`;
-
-    setShowResults(false);
-
-    // Naver Search Local API의 mapx/mapy를 geocode로 정확한 좌표 획득
-    const { naver } = window;
-    if (naver?.maps?.Service) {
-      naver.maps.Service.geocode({ query: address }, (status, response) => {
-        if (status === naver.maps.Service.Status.OK && response.v2.addresses[0]) {
-          const item = response.v2.addresses[0];
-          const lat = parseFloat(item.y);
-          const lng = parseFloat(item.x);
-          updateMarker(lat, lng, displayName);
-          onChange({ location: displayName, latitude: lat, longitude: lng });
-        } else {
-          setSearchQuery(displayName);
-        }
-      });
-    }
+    setError('이전 장소 검색은 종료되었습니다. 장소를 직접 입력해 주세요.');
   };
 
   const handleConfirm = () => {
@@ -175,7 +124,6 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);
-              if (showResults) setShowResults(false);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -188,22 +136,6 @@ const LocationPicker = ({ location, latitude, longitude, onChange, onClose }) =>
           <button type="button" onClick={handleSearch}>검색</button>
         </div>
 
-        {showResults && searchResults.length > 0 && (
-          <ul className="location-results">
-            {searchResults.map((result, idx) => (
-              <li
-                key={idx}
-                className="location-result-item"
-                onClick={() => handleSelectResult(result)}
-              >
-                <span className="location-result-title">{result.title}</span>
-                <span className="location-result-address">
-                  {result.roadAddress || result.address}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
 
       {error && <p className="location-error">{error}</p>}

@@ -175,10 +175,84 @@ test('rejected rapid member submissions issue one request and keep the form usab
 
 test('rehearsal DOM create sends only allowed same-band fields and song ids', async () => {
   await load(); const previousFetch = globalThis.fetch; const writes = [];
-  globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/practice')) return response({ band: { id: 10, slug: 'practice', name: 'Practice', default_visibility: 'MEMBERS', membership: { id: 10, role: 'member' } } }); if (url.includes('/rehearsals') && options.method === 'POST') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }, 201); } if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } }); if (url.includes('/songs?')) return response({ songs: [{ id: 31, title: '같은 밴드 곡', artist: '밴드' }], pagination: { total: 1, has_more: false } }); return response({}); };
+  const placeRequests = [];
+  globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/practice')) return response({ band: { id: 10, slug: 'practice', name: 'Practice', default_visibility: 'MEMBERS', membership: { id: 10, role: 'member' } } }); if (url.includes('/search-places?')) { placeRequests.push({ url, auth: options.headers.Authorization, signal: options.signal }); return response([{ title: '<script>연습실</script>', address: '서울 마포구', roadAddress: '서울 마포구 와우산로' }]); } if (url.includes('/rehearsals') && options.method === 'POST') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }, 201); } if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } }); if (url.includes('/songs?')) return response({ songs: [{ id: 31, title: '같은 밴드 곡', artist: '밴드' }], pagination: { total: 1, has_more: false } }); return response({}); };
   const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
-  const view = render(createElement(App, { entry: '/bands/practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); await userEvent.type(view.getByLabelText('제목'), '9월 합주'); await userEvent.type(view.getByLabelText('날짜'), '2026-09-27'); await userEvent.click(view.getByLabelText(/같은 밴드 곡/)); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
-  assert.deepEqual(writes[0].song_ids, [31]); assert.equal(writes[0].visibility, 'MEMBERS'); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+  const view = render(createElement(App, { entry: '/bands/practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); await userEvent.type(view.getByLabelText('제목'), '9월 합주'); await userEvent.type(view.getByLabelText('날짜'), '2026-09-27'); await userEvent.click(view.getByLabelText(/같은 밴드 곡/));
+  const placeSearch = view.getByLabelText('밴드 장소 검색'); assert.equal(placeSearch.maxLength, 100); await userEvent.type(placeSearch, '홍대'); fireEvent.keyDown(placeSearch, { key: 'Enter' }); assert.equal(writes.length, 0, 'Enter in the search input does not submit the rehearsal form'); await new Promise((resolve) => setTimeout(resolve, 200)); assert.equal(placeRequests.length, 0, 'search waits for the debounce interval');
+  const result = await view.findByRole('button', { name: /연습실/ }); assert.equal(placeRequests.length, 1); assert.equal(new URL(placeRequests[0].url).pathname + new URL(placeRequests[0].url).search, '/api/v2/bands/10/search-places?query=%ED%99%8D%EB%8C%80'); assert.equal(placeRequests[0].auth, 'Bearer token'); await userEvent.click(result);
+  assert.equal(view.getByLabelText('장소').maxLength, 200); assert.equal(view.getByLabelText('장소').value, '<script>연습실</script> (서울 마포구 와우산로)'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
+  assert.deepEqual(writes[0].song_ids, [31]); assert.equal(writes[0].visibility, 'MEMBERS'); assert.equal(writes[0].location, '<script>연습실</script> (서울 마포구 와우산로)'); assert.equal('latitude' in writes[0], false); assert.equal('longitude' in writes[0], false); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('place search treats permission denial as terminal, hides stale results, and keeps manual entry usable', async () => {
+  await load(); const previousFetch = globalThis.fetch; const requests = []; let searchCount = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/place-denied')) return response({ band: { id: 11, slug: 'place-denied', name: '장소 밴드', membership: { id: 11, role: 'member' } } });
+    if (url.includes('/search-places?')) { requests.push(String(url)); searchCount += 1; return searchCount === 1 ? response([{ title: '이전 결과', address: '서울' }]) : response({ message: 'hidden' }, 403); }
+    if (url.includes('/rehearsals') && options.method === 'POST') return response({ rehearsal: {} }, 201);
+    if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } });
+    if (url.includes('/songs?')) return response({ songs: [], pagination: { total: 0, has_more: false } });
+    return response({});
+  };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  try {
+    const view = render(createElement(App, { entry: '/bands/place-denied/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true }));
+    await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' }));
+    const search = view.getByLabelText('밴드 장소 검색'); await userEvent.type(search, '첫 검색'); await view.findByRole('button', { name: /이전 결과/ });
+    fireEvent.change(search, { target: { value: '' } }); await userEvent.type(search, '권한 없음'); await view.findByText(/밴드 멤버만 장소를 검색할 수 있습니다/);
+    assert.equal(view.queryByRole('button', { name: /이전 결과/ }), null);
+    fireEvent.change(search, { target: { value: '' } }); await userEvent.type(search, '추가 시도'); await new Promise((resolve) => setTimeout(resolve, 420)); assert.equal(requests.length, 2, '403 disables search for this workspace');
+    await userEvent.type(view.getByLabelText('장소'), '직접 입력 장소'); assert.equal(view.getByLabelText('장소').value, '직접 입력 장소');
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('place provider failures preserve manual rehearsal location entry', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/place-provider-error')) return response({ band: { id: 12, slug: 'place-provider-error', name: '검색 장애 밴드', membership: { id: 12, role: 'member' } } });
+    if (url.includes('/search-places?')) return response({ message: 'provider unavailable' }, 503);
+    if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } });
+    if (url.includes('/songs?')) return response({ songs: [], pagination: { total: 0, has_more: false } });
+    return response({});
+  };
+  const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  try {
+    const view = render(createElement(App, { entry: '/bands/place-provider-error/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true }));
+    await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' }));
+    await userEvent.type(view.getByLabelText('밴드 장소 검색'), '장소 오류'); await view.findByText(/장소 검색을 사용할 수 없습니다/);
+    await userEvent.type(view.getByLabelText('장소'), '수동 입력 연습실'); assert.equal(view.getByLabelText('장소').value, '수동 입력 연습실'); view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('place search rate limits without retrying automatically and late requests cannot cross account or unmount boundaries', async () => {
+  await load(); const previousFetch = globalThis.fetch; const lateSearch = deferred(); const unmountSearch = deferred(); const calls = []; let phase = 'rate-limit';
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); const method = options.method || 'GET'; const token = options.headers?.Authorization;
+    if (value.includes('/by-slug/place-race')) return response({ band: { id: token === 'Bearer user-b' ? 22 : 21, slug: 'place-race', name: token === 'Bearer user-b' ? 'B 장소 밴드' : 'A 장소 밴드', membership: { id: token === 'Bearer user-b' ? 22 : 21, role: 'member' } } });
+    if (value.includes('/search-places?')) { calls.push({ url: value, signal: options.signal, token }); if (phase === 'rate-limit') return response({}, 429); if (token === 'Bearer user-a') return lateSearch.promise; if (new URL(value).searchParams.get('query') === '언마운트') return unmountSearch.promise; return response([{ title: 'B 장소', address: '서울 B구' }]); }
+    if (value.includes('/rehearsals') && method === 'POST') return response({ rehearsal: {} }, 201);
+    if (value.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } });
+    if (value.includes('/songs?')) return response({ songs: [], pagination: { total: 0, has_more: false } });
+    return response({});
+  };
+  const account = (id) => ({ user: { id }, getAccessToken: async () => id, refreshSession: async () => id, signOut: async () => {} });
+  try {
+    const view = render(createElement(App, { entry: '/bands/place-race/rehearsals', authValue: account('user-a'), bandValue: { activeBands: [] }, rehearsals: true }));
+    await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' }));
+    await userEvent.type(view.getByLabelText('밴드 장소 검색'), '요청 제한'); await view.findByText(/검색 요청이 많습니다/); assert.equal(calls.length, 1);
+    const locationSearch = view.getByLabelText('밴드 장소 검색'); fireEvent.change(locationSearch, { target: { value: '' } }); await userEvent.type(locationSearch, '다른 검색'); await new Promise((resolve) => setTimeout(resolve, 420)); assert.equal(calls.length, 1, 'cooldown blocks additional API traffic');
+    await userEvent.click(view.getByRole('button', { name: '취소' }));
+    await userEvent.click(view.getByRole('button', { name: '합주 추가' }));
+    phase = 'deferred'; await userEvent.type(view.getByLabelText('밴드 장소 검색'), '이전 계정'); await waitFor(() => assert.equal(calls.length, 2));
+    view.rerender(createElement(App, { entry: '/bands/place-race/rehearsals', authValue: account('user-b'), bandValue: { activeBands: [] }, rehearsals: true }));
+    await view.findByText('B 장소 밴드'); assert.equal(calls[1].signal.aborted, true);
+    lateSearch.resolve(response([{ title: 'A 계정 장소', address: '이전 밴드' }])); await new Promise((resolve) => setTimeout(resolve, 0)); assert.equal(view.queryByText('A 계정 장소'), null);
+    await userEvent.click(view.getByRole('button', { name: '합주 추가' })); await userEvent.type(view.getByLabelText('밴드 장소 검색'), '새 계정'); await view.findByRole('button', { name: /B 장소.*서울 B구/ }); assert.equal(calls.at(-1).token, 'Bearer user-b');
+    fireEvent.change(view.getByLabelText('밴드 장소 검색'), { target: { value: '' } }); await userEvent.type(view.getByLabelText('밴드 장소 검색'), '언마운트'); await waitFor(() => assert.equal(calls.length, 4));
+    const pendingSignal = calls.at(-1).signal; await userEvent.click(view.getByRole('button', { name: '취소' })); assert.equal(pendingSignal.aborted, true); unmountSearch.resolve(response([{ title: '닫힌 폼', address: '서울' }])); assert.equal(view.queryByLabelText('밴드 장소 검색'), null); view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test('account change remounts the workspace and clears the prior form, media, and paged list', async () => {

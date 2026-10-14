@@ -7,6 +7,7 @@ export const bandWorkspacePaths = {
   dashboard: (bandId, { month, limit = 25, offset = 0 } = {}) => `${bandBase(bandId)}/dashboard?month=${encodeURIComponent(month)}&limit=${limit}&offset=${offset}`,
   songs: (bandId, page) => `${bandBase(bandId)}/songs${pageQuery(page)}`,
   rehearsals: (bandId, page) => `${bandBase(bandId)}/rehearsals${pageQuery(page)}`,
+  searchPlaces: (bandId, query) => `${bandBase(bandId)}/search-places?query=${encodeURIComponent(String(query || '').slice(0, 100))}`,
   song: (bandId, songId) => `${bandBase(bandId)}/songs/${Number(songId)}`,
   rehearsal: (bandId, rehearsalId) => `${bandBase(bandId)}/rehearsals/${Number(rehearsalId)}`,
   songMedia: (bandId, songId, page) => `${bandBase(bandId)}/songs/${Number(songId)}/media${pageQuery(page)}`,
