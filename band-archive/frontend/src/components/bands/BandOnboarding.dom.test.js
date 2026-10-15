@@ -362,6 +362,64 @@ test('a late featured-image refresh cannot restore a feature after it is cleared
   } finally { globalThis.fetch = previous; }
 });
 
+test('empty featured-gallery 404 does not hide a successful gallery list', async () => {
+  await load(); const previous = globalThis.fetch; const featuredWrites = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url);
+    if (value.includes('/by-slug/no-feature')) return response({ band: { id: 45, slug: 'no-feature', name: '대표 사진 미설정', permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.endsWith('/bands/45/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/45/invite-codes')) return response({ invite_codes: [{ id: 12, created_at: '2026-01-01T00:30:00Z' }] });
+    if (value.endsWith('/bands/45/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/45/gallery/featured')) return response({ error: 'not found' }, 404);
+    if (value.endsWith('/bands/45/gallery?limit=20&offset=0')) return response({ gallery: [{ id: 8, filename: 'available.jpg', url: 'https://media.invalid/available.jpg' }], pagination: { total: 1, has_more: false } });
+    if (value.endsWith('/bands/45/gallery/8/featured') && options.method === 'PATCH') {
+      const body = JSON.parse(options.body); featuredWrites.push(body);
+      return response({ gallery: { id: 8, filename: 'available.jpg', url: 'https://media.invalid/available.jpg', is_featured: body.is_featured } });
+    }
+    throw new Error(`unexpected ${value}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/no-feature/manage', manage: true }));
+    await view.findByText('2026-01-01 09:30 KST');
+    await user.click(await view.findByRole('button', { name: '갤러리에서 선택' }));
+    await view.findByText('available.jpg');
+    assert.equal(view.queryByText('갤러리를 불러오지 못했습니다.'), null);
+    await user.click(view.getByRole('button', { name: '대표 사진으로 선택' }));
+    await view.findAllByRole('button', { name: '대표 사진 해제' });
+    assert.deepEqual(featuredWrites, [{ is_featured: true }]);
+    view.unmount();
+  } finally { globalThis.fetch = previous; }
+});
+
+test('gallery list 404 remains inaccessible while featured-only 404 is optional and 500 stays an error', async () => {
+  await load(); const previous = globalThis.fetch; let mode = 'list-404';
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes('/by-slug/gallery-errors')) return response({ band: { id: 46, slug: 'gallery-errors', name: '갤러리 오류 밴드', permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (value.endsWith('/bands/46/memberships')) return response({ memberships: [] });
+    if (value.endsWith('/bands/46/invite-codes')) return response({ invite_codes: [] });
+    if (value.endsWith('/bands/46/announcement')) return response({ announcement: null });
+    if (value.endsWith('/bands/46/gallery/featured')) return mode === 'list-404' ? response({ error: 'not found' }, 404) : response({ error: 'unavailable' }, 500);
+    if (value.endsWith('/bands/46/gallery?limit=20&offset=0')) return mode === 'list-404'
+      ? response({ error: 'not found' }, 404)
+      : response({ gallery: [], pagination: { total: 0, has_more: false } });
+    throw new Error(`unexpected ${value}`);
+  };
+  try {
+    const missingList = render(createElement(App, { entry: '/bands/gallery-errors/manage', manage: true }));
+    await user.click(await missingList.findByRole('button', { name: '갤러리에서 선택' }));
+    await missingList.findByText('찾을 수 없는 관리 공간입니다.');
+    missingList.unmount();
+
+    mode = 'featured-500';
+    const failedFeature = render(createElement(App, { entry: '/bands/gallery-errors/manage', manage: true }));
+    await user.click(await failedFeature.findByRole('button', { name: '갤러리에서 선택' }));
+    await failedFeature.findByText('갤러리를 불러오지 못했습니다.');
+    assert.ok(failedFeature.getByText('갤러리 오류 밴드 관리'));
+    failedFeature.unmount();
+  } finally { globalThis.fetch = previous; }
+});
+
 test('announcement 403 clears privileged management controls and late save cannot repaint after account switch', async () => {
   await load(); const previous = globalThis.fetch; const oldSave = deferred(); let phase = 'stale';
   globalThis.fetch = async (url, options = {}) => {
