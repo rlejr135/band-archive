@@ -136,8 +136,9 @@ export const BandCreationRequestPage = () => {
 
 export const BandManageRoute = () => {
   const { user } = useAuth();
+  const { membershipRevisions = {} } = useBands();
   const { bandSlug } = useParams();
-  const identity = `${user?.id || 'visitor'}:${bandSlug || ''}`;
+  const identity = `${user?.id || 'visitor'}:${bandSlug || ''}:${membershipRevisions[bandSlug] || 0}`;
   // A key is intentional: it removes privileged roster/invite/raw-code state
   // synchronously before a different account or band can paint.
   return <BandManagePage key={identity} identity={identity} />;

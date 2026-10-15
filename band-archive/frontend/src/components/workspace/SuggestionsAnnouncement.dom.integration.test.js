@@ -50,13 +50,13 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
 });
 
-test('suggestion voting refetches authoritative viewer state, blocks double clicks, retries, and only managers proceed', async () => {
-  await load(); const originalFetch = globalThis.fetch; const originalConfirm = window.confirm; const firstVote = deferred(); const writes = []; let reads = 0; let manager = true;
+test('suggestion voting refetches authoritative viewer state, blocks double clicks, and only server-authorized users proceed', async () => {
+  await load(); const originalFetch = globalThis.fetch; const originalConfirm = window.confirm; const firstVote = deferred(); const writes = []; let reads = 0; let manager = true; let canProceed = true;
   window.confirm = () => true;
   globalThis.fetch = async (url, options = {}) => {
     const method = options.method || 'GET';
     if (url.includes('/by-slug/team')) return response({ band: { id: 42, slug: 'team', name: '팀', default_visibility: 'MEMBERS', membership: { id: 4, role: manager ? 'owner' : 'member', status: 'active' } } });
-    if (url.includes('/suggestions?')) { reads += 1; return response({ suggestions: [{ id: 10, title: '투표 곡', artist: '밴드', link: 'https://example.test/vote', visibility: 'MEMBERS', status: 'pending', vote_score: reads > 1 ? 1 : 0, viewer_vote: reads > 1 ? 1 : 0, can_edit: false, can_delete: false, can_manage: manager }], pagination: { has_more: false } }); }
+    if (url.includes('/suggestions?')) { reads += 1; return response({ suggestions: [{ id: 10, title: '투표 곡', artist: '밴드', link: 'https://example.test/vote', visibility: 'MEMBERS', status: 'pending', vote_score: reads > 1 ? 1 : 0, viewer_vote: reads > 1 ? 1 : 0, can_edit: false, can_delete: false, can_manage: manager, can_proceed: canProceed }], pagination: { has_more: false } }); }
     if (url.endsWith('/suggestions/10/vote') && method === 'PUT') { writes.push({ method, body: JSON.parse(options.body) }); return writes.length === 1 ? firstVote.promise : response({ viewer_vote: 1 }); }
     if (url.endsWith('/suggestions/10/proceed') && method === 'POST') { writes.push({ method, body: JSON.parse(options.body) }); return response({ proceeded: true, song: { id: 90 } }, 201); }
     throw new Error(`unexpected ${method} ${url}`);
@@ -67,7 +67,9 @@ test('suggestion voting refetches authoritative viewer state, blocks double clic
     await act(async () => { firstVote.resolve(response({}, 500)); }); await view.findByRole('alert'); assert.equal(up.disabled, false);
     fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 2)); await waitFor(() => assert.equal(view.getByRole('button', { name: '추천' }).getAttribute('aria-pressed'), 'true'));
     await user.click(view.getByRole('button', { name: '곡으로 진행' })); await waitFor(() => assert.deepEqual(writes[2], { method: 'POST', body: { visibility: 'MEMBERS' } })); assert.ok(reads >= 3);
-    view.unmount(); manager = false;
+    view.unmount(); canProceed = false;
+    const adminWithoutDelete = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('admin') })); await adminWithoutDelete.findByText('투표 곡'); assert.equal(adminWithoutDelete.queryByRole('button', { name: '곡으로 진행' }), null); adminWithoutDelete.unmount();
+    manager = false;
     const nonManager = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('other') })); await nonManager.findByText('투표 곡'); assert.equal(nonManager.queryByRole('button', { name: '곡으로 진행' }), null); nonManager.unmount();
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
 });
