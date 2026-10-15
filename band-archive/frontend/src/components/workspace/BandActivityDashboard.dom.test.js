@@ -33,6 +33,14 @@ const dashboardData = (month, overrides = {}) => ({
   announcement: { id: 901, content: '이번 달 공지입니다.' },
   ...overrides,
 });
+const selectCalendarDay = async (view, day) => {
+  const tile = [...view.container.querySelectorAll('.react-calendar__tile')].find((candidate) => (
+    candidate.textContent.trim() === String(day)
+    && !candidate.classList.contains('react-calendar__month-view__days__day--neighboringMonth')
+  ));
+  assert.ok(tile, `expected current-month calendar day ${day}`);
+  await userEvent.click(tile);
+};
 const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} };
 const load = async () => {
   if (workspace) return;
@@ -133,6 +141,8 @@ test('month pages append updated rows, dedupe ids, and expose missing-row paging
   try {
     const view = render(createElement(ReadOnlyApp, { entry: '/bands/month-band' }));
     await view.findByText('1 / 26건 표시');
+    await selectCalendarDay(view, 14);
+    await view.findByText('첫 합주');
     assert.ok(view.getByText(/이 달의 일정 일부만 표시 중입니다/));
     await userEvent.click(view.getByRole('button', { name: /이 달 합주 더 불러오기/ }));
     await view.findByText('2 / 26건 표시');
@@ -176,6 +186,8 @@ test('image URL refresh during month append does not cancel or overwrite the app
   try {
     const view = render(createElement(ReadOnlyApp, { entry: '/bands/append-image-band' }));
     await view.findByText('1 / 2건 표시');
+    await selectCalendarDay(view, 14);
+    await view.findByText('첫 페이지 합주');
     await userEvent.click(view.getByRole('button', { name: /이 달 합주 더 불러오기/ }));
     await waitFor(() => assert.equal(view.getByRole('button', { name: /합주를 불러오는 중/ }).disabled, true));
     fireEvent.error(view.getByAltText('대표 갤러리 사진'));
