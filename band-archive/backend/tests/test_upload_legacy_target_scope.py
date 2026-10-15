@@ -155,7 +155,7 @@ def test_v1_song_rehearsal_and_media_mutations_reject_foreign_ids_before_storage
         before_sessions = MultipartUploadSession.query.count()
         before_rehearsals = Rehearsal.query.count()
     assert client.put(f'/songs/{foreign_song}', json={'title': 'mutated'}).status_code == 404
-    assert client.delete(f'/songs/{foreign_song}').status_code == 404
+    assert client.delete(f'/songs/{foreign_song}').status_code == 410
     assert client.post(f'/songs/{foreign_song}/upload', data={
         'file': (BytesIO(b'foreign sheet'), 'foreign.pdf'),
     }).status_code == 404
@@ -171,10 +171,10 @@ def test_v1_song_rehearsal_and_media_mutations_reject_foreign_ids_before_storage
     }).status_code == 404
     assert client.patch(f'/media/{foreign_media}/rehearsal', json={'rehearsal_id': legacy_rehearsal}).status_code == 404
     assert client.patch(f'/media/{foreign_media}/featured').status_code == 404
-    assert client.put(f'/media/{foreign_media}/rename', json={'filename': 'renamed.mp4'}).status_code == 404
-    assert client.delete(f'/media/{foreign_media}').status_code == 404
+    assert client.put(f'/media/{foreign_media}/rename', json={'filename': 'renamed.mp4'}).status_code == 410
+    assert client.delete(f'/media/{foreign_media}').status_code == 410
     assert client.put(f'/rehearsals/{foreign_rehearsal}', json={'title': 'mutated'}).status_code == 404
-    assert client.delete(f'/rehearsals/{foreign_rehearsal}').status_code == 404
+    assert client.delete(f'/rehearsals/{foreign_rehearsal}').status_code == 410
     assert client.put(f'/rehearsals/{legacy_rehearsal}', json={
         'song_ids': [foreign_song],
     }).status_code == 404

@@ -139,14 +139,14 @@ class TestCRUD:
     def test_delete_song(self, client, sample_song):
         song_id = sample_song['id']
         resp = client.delete(f'/songs/{song_id}')
-        assert resp.status_code == 200
-        # Verify it's gone
+        assert resp.status_code == 410
+        # The legacy route is closed and must not mutate the source row.
         resp = client.get(f'/songs/{song_id}')
-        assert resp.status_code == 404
+        assert resp.status_code == 200
 
     def test_delete_song_not_found(self, client):
         resp = client.delete('/songs/999')
-        assert resp.status_code == 404
+        assert resp.status_code == 410
 
 
 # ── Step 3: Search & filter tests ──

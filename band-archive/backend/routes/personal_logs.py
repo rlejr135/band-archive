@@ -6,7 +6,7 @@ from extensions import db
 from models import Member, PersonalLog
 from errors import NotFoundError, ValidationError
 from legacy_scope import (legacy_get_or_404, legacy_query, reject_foreign_children,
-                          validate_legacy_graphs)
+                          reject_legacy_destructive_write, validate_legacy_graphs)
 from upload_helpers import prepare_upload
 from storage import storage
 from media_processing import (create_personal_log, save_personal_log_and_start,
@@ -91,6 +91,7 @@ def create_log(member_id):
 
 @personal_logs_bp.route('/personal-logs/<int:log_id>', methods=['DELETE'])
 def delete_log(log_id):
+    reject_legacy_destructive_write()
     log = _get_log_or_404(log_id)
     from models import Comment
     reject_foreign_children(log, Comment, 'personal_log_id', 'Personal log not found')

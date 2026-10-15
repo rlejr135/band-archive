@@ -30,6 +30,9 @@ class RequestAudience:
 
     user_id: int | None
     subject: str | None
+    account_active: bool = False
+    email_verified: bool = False
+    is_platform_admin: bool = False
 
     @property
     def authenticated(self):
@@ -92,7 +95,12 @@ def current_audience():
         # rather than a g-only cache.  It prevents a manually nested or
         # sequential request context from inheriting a prior request's user.
         user = authenticate_request()
-        audience = RequestAudience(user_id=user.id, subject=user.supabase_user_id)
+        audience = RequestAudience(
+            user_id=user.id, subject=user.supabase_user_id,
+            account_active=user.status == ACTIVE,
+            email_verified=user.email_verified is True,
+            is_platform_admin=user.is_platform_admin is True,
+        )
     setattr(request_object, '_band_access_audience', audience)
     return audience
 
@@ -215,11 +223,20 @@ def content_capabilities(scope, content):
     content_band_id = getattr(content, 'band_id', scope.band_id)
     if content_band_id != scope.band_id or not scope.is_member:
         return {'can_edit': False, 'can_delete': False, 'can_manage': False}
+    can_delete = bool(
+        scope.audience.authenticated
+        and scope.audience.account_active
+        and scope.audience.email_verified
+        and (
+            scope.membership.role == 'owner'
+            or scope.audience.is_platform_admin
+        )
+    )
     if scope.can_manage:
-        return {'can_edit': True, 'can_delete': True, 'can_manage': True}
+        return {'can_edit': True, 'can_delete': can_delete, 'can_manage': True}
     created_by = getattr(content, 'created_by_membership_id', None)
     is_author = created_by is not None and created_by == scope.membership.id
-    return {'can_edit': is_author, 'can_delete': is_author, 'can_manage': False}
+    return {'can_edit': is_author, 'can_delete': can_delete, 'can_manage': False}
 
 
 def require_operation_role(scope, roles=MANAGER_ROLES):

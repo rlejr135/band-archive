@@ -142,6 +142,7 @@ def serialize_suggestion(scope, suggestion, viewer_vote=0):
     is_member = bool(scope.membership)
     is_author = is_member and suggestion.created_by_membership_id == scope.membership.id
     is_legacy_managed = bool(is_member and suggestion.created_by_membership_id is None and scope.can_manage)
+    capabilities = content_capabilities(scope, suggestion)
     return {
         'id': suggestion.id,
         'title': suggestion.title,
@@ -162,6 +163,7 @@ def serialize_suggestion(scope, suggestion, viewer_vote=0):
         'visibility': getattr(suggestion, 'visibility', visibility),
         'effective_visibility': visibility,
         'can_edit': bool(is_author or is_legacy_managed),
-        'can_delete': bool(is_author or is_legacy_managed),
+        'can_delete': capabilities['can_delete'],
         'can_manage': bool(scope.can_manage),
+        'can_proceed': bool(scope.can_manage and capabilities['can_delete']),
     }

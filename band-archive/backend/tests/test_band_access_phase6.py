@@ -267,10 +267,10 @@ def test_content_capabilities_and_effective_visibility_are_server_computed(acces
         'can_edit': True, 'can_delete': True, 'can_manage': True,
     }
     assert content_capabilities(admin_scope, SimpleNamespace(created_by_membership_id=member_creator)) == {
-        'can_edit': True, 'can_delete': True, 'can_manage': True,
+        'can_edit': True, 'can_delete': False, 'can_manage': True,
     }
     assert content_capabilities(member_scope, SimpleNamespace(created_by_membership_id=member_creator)) == {
-        'can_edit': True, 'can_delete': True, 'can_manage': False,
+        'can_edit': True, 'can_delete': False, 'can_manage': False,
     }
     assert content_capabilities(member_scope, SimpleNamespace(created_by_membership_id=owner_creator)) == {
         'can_edit': False, 'can_delete': False, 'can_manage': False,

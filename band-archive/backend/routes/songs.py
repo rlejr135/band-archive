@@ -8,7 +8,7 @@ from extensions import db
 from models import Song, SongVote, Media, MediaVote, Rehearsal
 from errors import ValidationError, NotFoundError
 from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
-                          reject_foreign_children, validate_legacy_graph,
+                          reject_foreign_children, reject_legacy_destructive_write, validate_legacy_graph,
                           validate_legacy_graphs)
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
@@ -213,6 +213,7 @@ def update_song(id):
 
 @songs_bp.route('/songs/<int:id>', methods=['DELETE'])
 def delete_song(id):
+    reject_legacy_destructive_write()
     song = _get_legacy_song_or_404(id)
     reject_foreign_children(song, Media, 'song_id', 'Song not found')
 
@@ -349,6 +350,7 @@ def set_featured_media(media_id):
 
 @songs_bp.route('/media/<int:media_id>/rename', methods=['PUT'])
 def rename_media(media_id):
+    reject_legacy_destructive_write()
     media = _get_legacy_media_or_404(media_id)
 
     data = request.get_json()
@@ -414,6 +416,7 @@ def rename_media(media_id):
 
 @songs_bp.route('/media/<int:media_id>', methods=['DELETE'])
 def delete_media(media_id):
+    reject_legacy_destructive_write()
     media = _get_legacy_media_or_404(media_id)
     from models import Comment
     reject_foreign_children(media, Comment, 'media_id', 'Media not found')

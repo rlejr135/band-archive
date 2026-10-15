@@ -258,22 +258,22 @@ def test_song_and_media_vote_share_the_same_request_contract(client, app, payloa
         assert response.get_json() == {'error': message}
 
 
-def test_media_delete_cascades_media_votes(client, app):
+def test_legacy_media_delete_is_retired_and_preserves_media_votes(client, app):
     song_id = _song(client)
     media_id = _media(app, song_id, 'delete.mp3')
     assert _vote(client, media_id, 1).status_code == 200
-    assert client.delete(f'/media/{media_id}').status_code == 200
+    assert client.delete(f'/media/{media_id}').status_code == 410
     with app.app_context():
-        assert MediaVote.query.filter_by(media_id=media_id).count() == 0
+        assert MediaVote.query.filter_by(media_id=media_id).count() == 1
 
 
-def test_song_delete_cascades_media_votes(client, app):
+def test_legacy_song_delete_is_retired_and_preserves_media_votes(client, app):
     song_id = _song(client)
     media_id = _media(app, song_id, 'song-delete.mp3')
     assert _vote(client, media_id, 1).status_code == 200
-    assert client.delete(f'/songs/{song_id}').status_code == 200
+    assert client.delete(f'/songs/{song_id}').status_code == 410
     with app.app_context():
-        assert MediaVote.query.filter_by(media_id=media_id).count() == 0
+        assert MediaVote.query.filter_by(media_id=media_id).count() == 1
 
 
 def test_legacy_song_vote_data_endpoint_remains_compatible_but_is_not_exposed(client, app):

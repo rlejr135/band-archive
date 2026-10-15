@@ -211,3 +211,13 @@ def legacy_writes_enabled(value=None):
         if normalized in _FALSE_VALUES:
             return False
     return False
+
+
+def reject_legacy_destructive_write():
+    """Close legacy destructive routes until they use authenticated v2 policy.
+
+    This is unconditional: the compatibility write flag and legacy tenant
+    proof establish neither an authenticated actor nor delete authority.
+    """
+    from errors import ValidationError
+    raise ValidationError('This legacy destructive endpoint is retired; use an authorized v2 action.', 410)

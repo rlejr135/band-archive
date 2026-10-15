@@ -15,11 +15,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from auth_service import current_app_user
-from band_access import BandReadScope, MembershipAudience, RequestAudience
+from band_access import BandReadScope, MembershipAudience, RequestAudience, content_capabilities
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote, PersonalLog,
+from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote, PersonalLog,
                     Rehearsal, Song, SongSuggestion, SongSuggestionVote)
 from validators import validate_external_http_url
 from v2_content_serializers import (
@@ -77,7 +77,7 @@ def _payload():
     return value
 
 
-def _scope_for_write(band_id, *, lock=False):
+def _scope_for_write(band_id, *, lock=False, lock_actor=False):
     """Return an active-member scope; writes use 403 for a known nonmember."""
     user = current_app_user(required=True)
     band_query = Band.query.filter(Band.id == band_id, Band.deleted_at.is_(None))
@@ -91,7 +91,19 @@ def _scope_for_write(band_id, *, lock=False):
     membership = membership_query.one_or_none()
     if membership is None:
         raise ValidationError('An active band membership is required.', 403)
-    audience = RequestAudience(user_id=user.id, subject=user.supabase_user_id)
+    if lock_actor:
+        actor_query = AppUser.query.filter_by(id=user.id)
+        if lock and db.engine.dialect.name != 'sqlite':
+            actor_query = actor_query.with_for_update()
+        user = actor_query.populate_existing().one_or_none()
+        if user is None:
+            raise ValidationError('An active band membership is required.', 403)
+    audience = RequestAudience(
+        user_id=user.id, subject=user.supabase_user_id,
+        account_active=user.status == ACTIVE,
+        email_verified=user.email_verified is True,
+        is_platform_admin=user.is_platform_admin is True,
+    )
     member_audience = MembershipAudience(
         id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
         user_subject=user.supabase_user_id, user_display_name=user.display_name, user_email=user.email,
@@ -188,6 +200,11 @@ def _can_change_suggestion(item, membership):
     )
 
 
+def _can_delete(scope, item):
+    """Use the same server-derived capability as read DTOs."""
+    return content_capabilities(scope, item)['can_delete']
+
+
 def _owned_or_404(model, record_id, band_id, message='Resource not found', *, lock=False):
     query = model.query.filter(model.id == record_id, model.band_id == band_id)
     if lock and db.engine.dialect.name != 'sqlite':
@@ -213,6 +230,8 @@ def _assert_song_delete_safe(song):
     # delete rather than allowing a damaged foreign tenant edge to cascade.
     if Media.query.filter(Media.song_id == song.id, Media.band_id != song.band_id).first() is not None:
         raise NotFoundError('Song not found')
+    if Media.query.filter_by(song_id=song.id, band_id=song.band_id).first() is not None:
+        raise ValidationError('Delete the song media individually before deleting this song.', 409)
     if any(rehearsal.band_id != song.band_id for rehearsal in song.rehearsals):
         raise NotFoundError('Song not found')
 
@@ -220,6 +239,8 @@ def _assert_song_delete_safe(song):
 def _assert_rehearsal_delete_safe(rehearsal):
     if Media.query.filter(Media.rehearsal_id == rehearsal.id, Media.band_id != rehearsal.band_id).first() is not None:
         raise NotFoundError('Rehearsal not found')
+    if Media.query.filter_by(rehearsal_id=rehearsal.id, band_id=rehearsal.band_id).first() is not None:
+        raise ValidationError('Delete the rehearsal media individually before deleting this rehearsal.', 409)
     if any(song.band_id != rehearsal.band_id for song in rehearsal.songs):
         raise NotFoundError('Rehearsal not found')
 
@@ -364,10 +385,10 @@ def update_song(band_id, song_id):
 @authenticated_write
 def delete_song(band_id, song_id):
     def operation():
-        _scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
         song = _owned_or_404(Song, song_id, band.id, 'Song not found', lock=True)
-        if not _can_change(song, membership):
-            raise ValidationError('You may only delete your own content.', 403)
+        if not _can_delete(scope, song):
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         _assert_song_delete_safe(song)
         audit('content.song.deleted', user, band, song)
         db.session.delete(song)
@@ -440,10 +461,10 @@ def update_rehearsal(band_id, rehearsal_id):
 @authenticated_write
 def delete_rehearsal(band_id, rehearsal_id):
     def operation():
-        _scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
         rehearsal = _owned_or_404(Rehearsal, rehearsal_id, band.id, 'Rehearsal not found', lock=True)
-        if not _can_change(rehearsal, membership):
-            raise ValidationError('You may only delete your own content.', 403)
+        if not _can_delete(scope, rehearsal):
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         _assert_rehearsal_delete_safe(rehearsal)
         audit('content.rehearsal.deleted', user, band, rehearsal)
         db.session.delete(rehearsal)
@@ -522,10 +543,10 @@ def update_comment_v2(band_id, comment_id):
 @authenticated_write
 def delete_comment_v2(band_id, comment_id):
     def operation():
-        _scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
         comment, kind, target = _load_comment_and_target(comment_id, band.id, lock=True)
-        if not _can_change(comment, membership):
-            raise ValidationError('You may only delete your own content.', 403)
+        if not _can_delete(scope, comment):
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         _assert_comment_tree_safe(comment)
         audit('content.comment.deleted', user, band, comment, {'target': kind, 'target_id': target.id})
         db.session.delete(comment)
@@ -672,10 +693,10 @@ def update_suggestion_v2(band_id, suggestion_id):
 @authenticated_write
 def delete_suggestion_v2(band_id, suggestion_id):
     def operation():
-        _scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
         suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
-        if not _can_change_suggestion(suggestion, membership):
-            raise ValidationError('You may only delete your own suggestion.', 403)
+        if not _can_delete(scope, suggestion):
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         audit('content.suggestion.deleted', user, band, suggestion)
         db.session.delete(suggestion)
         return jsonify({'deleted': True, 'id': suggestion_id})
@@ -752,10 +773,12 @@ def proceed_suggestion_v2(band_id, suggestion_id):
     # always come from the reviewed suggestion and cannot be substituted.
     _check_fields(data, {'visibility'})
     def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
         if membership.role not in MANAGER_ROLES:
             raise ValidationError('Insufficient band role.', 403)
         suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
+        if not _can_delete(scope, suggestion):
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         song = Song(
             band_id=band.id, created_by_membership_id=membership.id,
             visibility=_visibility(data.get('visibility'), suggestion.visibility or band.default_visibility),
@@ -802,6 +825,27 @@ def put_announcement_v2(band_id):
             audit('content.announcement.updated', user, band, announcement,
                   {'fields': sorted(set(data) & _ANNOUNCEMENT_FIELDS)})
         return jsonify({'announcement': serialize_announcement(scope, announcement)})
+    return _run_write(operation)
+
+
+@content_writes_bp.delete('/announcement')
+@authenticated_write
+def clear_announcement_v2(band_id):
+    """Clear the singleton announcement without removing its band row."""
+    def operation():
+        scope, band, _membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
+        rows_query = Announcement.query.filter_by(band_id=band.id)
+        if db.engine.dialect.name != 'sqlite':
+            rows_query = rows_query.with_for_update()
+        rows = rows_query.order_by(Announcement.id.asc()).limit(2).all()
+        if len(rows) != 1:
+            raise NotFoundError('Announcement not found')
+        announcement = rows[0]
+        if not _can_delete(scope, announcement):
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
+        announcement.content = ''
+        audit('content.announcement.cleared', user, band, announcement)
+        return jsonify({'announcement': serialize_announcement(scope, announcement), 'cleared': True})
     return _run_write(operation)
 
 

@@ -5,7 +5,8 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Comment, Media, PersonalLog
 from errors import NotFoundError, ValidationError
-from legacy_scope import legacy_get_or_404, legacy_query, reject_foreign_children, validate_legacy_graphs
+from legacy_scope import (legacy_get_or_404, legacy_query, reject_foreign_children,
+                          reject_legacy_destructive_write, validate_legacy_graphs)
 
 comments_bp = Blueprint('comments', __name__)
 
@@ -176,6 +177,7 @@ def update_comment(comment_id):
 
 @comments_bp.route('/comments/<int:comment_id>', methods=['DELETE'])
 def delete_comment(comment_id):
+    reject_legacy_destructive_write()
     comment = _get_comment_or_404(comment_id)
     reject_foreign_children(comment, Comment, 'parent_id', 'Comment not found')
     data = request.json

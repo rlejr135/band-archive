@@ -43,8 +43,8 @@ def test_suggestion_rbac_is_author_scoped_and_never_falls_back_to_password(
     suggestion_id = _candidate(write_client, band_id, principals['member'])
     path = f'/api/v2/bands/{band_id}/suggestions/{suggestion_id}'
 
-    # A different ordinary member cannot adopt a current member's row; a
-    # manager can proceed it but cannot edit/delete it either.
+    # A different ordinary member cannot adopt a current member's row; an
+    # admin can edit under the existing policy but cannot delete/proceed.
     assert write_client.patch(path, headers=other, json={'title': 'no'}).status_code == 403
     assert write_client.delete(path, headers=principals['admin']).status_code == 403
     assert write_client.patch(path, headers=principals['member'], json={
@@ -52,7 +52,8 @@ def test_suggestion_rbac_is_author_scoped_and_never_falls_back_to_password(
     }).status_code == 400
     assert write_client.patch(path, headers=principals['member'], json={'title': 'author edit'}).status_code == 200
     assert write_client.post(f'{path}/proceed', headers=principals['member'], json={'password': 'admin'}).status_code == 400
-    assert write_client.post(f'{path}/proceed', headers=principals['admin'], json={'visibility': 'PUBLIC'}).status_code == 201
+    assert write_client.post(f'{path}/proceed', headers=principals['admin'], json={'visibility': 'PUBLIC'}).status_code == 403
+    assert write_client.post(f'{path}/proceed', headers=principals['owner'], json={'visibility': 'PUBLIC'}).status_code == 201
 
     # Object ids are tenant-bound: another band never learns whether this id
     # exists.  Announcement writes remain manager-only and have no password

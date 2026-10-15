@@ -162,11 +162,11 @@ class TestRehearsalCRUD:
         })
         rid = create_resp.get_json()['id']
         resp = client.delete(f'/rehearsals/{rid}')
-        assert resp.status_code == 200
-        # 삭제 확인
+        assert resp.status_code == 410
+        # Legacy destructive routes are retired, so the record remains.
         resp = client.get(f'/rehearsals/{rid}')
-        assert resp.status_code == 404
+        assert resp.status_code == 200
 
     def test_delete_rehearsal_not_found(self, client):
         resp = client.delete('/rehearsals/999')
-        assert resp.status_code == 404
+        assert resp.status_code == 410

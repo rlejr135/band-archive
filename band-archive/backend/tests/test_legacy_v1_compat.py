@@ -204,7 +204,7 @@ def test_corrupt_media_foreign_song_is_hidden_before_delete_storage_or_cascade(
     media_id = _insert_legacy_media(app, legacy_and_foreign['foreign_song'])
     calls = []
     monkeypatch.setattr(storage, 'delete', lambda *args: calls.append(args))
-    assert client.delete(f'/media/{media_id}').status_code == 404
+    assert client.delete(f'/media/{media_id}').status_code == 410
     assert calls == []
     with app.app_context():
         assert db.session.get(Media, media_id).song_id == legacy_and_foreign['foreign_song']
@@ -222,7 +222,7 @@ def test_corrupt_foreign_vote_child_blocks_media_delete_without_storage(
         db.session.commit()
     calls = []
     monkeypatch.setattr(storage, 'delete', lambda *args: calls.append(args))
-    assert client.delete(f'/media/{media_id}').status_code == 404
+    assert client.delete(f'/media/{media_id}').status_code == 410
     assert calls == []
     with app.app_context():
         assert MediaVote.query.filter_by(media_id=media_id).count() == 1
@@ -240,7 +240,7 @@ def test_corrupt_personal_log_member_and_comment_parent_are_hidden(app, client, 
         bad_log = PersonalLog.query.filter_by(filename='bad.mp4').one()
     calls = []
     monkeypatch.setattr(storage, 'delete', lambda *args: calls.append(args))
-    assert client.delete(f'/personal-logs/{bad_log.id}').status_code == 404
+    assert client.delete(f'/personal-logs/{bad_log.id}').status_code == 410
     assert calls == []
 
 

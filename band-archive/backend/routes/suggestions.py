@@ -3,7 +3,8 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import Song, SongSuggestion
 from errors import NotFoundError, ValidationError
-from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, validate_legacy_graphs
+from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
+                          reject_legacy_destructive_write, validate_legacy_graphs)
 from validators import validate_string_length
 from validators import validate_external_http_url
 
@@ -52,6 +53,7 @@ def create_suggestion():
 
 @suggestions_bp.route('/suggestions/<int:id>', methods=['DELETE'])
 def delete_suggestion(id):
+    reject_legacy_destructive_write()
     suggestion = _get_suggestion_or_404(id)
 
     data = request.json
@@ -66,6 +68,7 @@ def delete_suggestion(id):
 @suggestions_bp.route('/suggestions/<int:id>/promote', methods=['POST'])
 def promote_suggestion(id):
     """Move one approved suggestion into the song list atomically."""
+    reject_legacy_destructive_write()
     suggestion = _get_suggestion_or_404(id)
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or data.get('password') != 'admin':

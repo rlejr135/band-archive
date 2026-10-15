@@ -3,7 +3,8 @@ from flask import Blueprint, jsonify, request
 from extensions import db
 from models import GalleryImage
 from errors import ValidationError, NotFoundError
-from legacy_scope import legacy_band_id, legacy_get_or_404, legacy_query, validate_legacy_graphs
+from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
+                          reject_legacy_destructive_write, validate_legacy_graphs)
 from storage import storage
 from upload_helpers import prepare_upload
 from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
@@ -53,6 +54,7 @@ def upload_image():
 
 @gallery_bp.route('/gallery/<int:id>', methods=['DELETE'])
 def delete_image(id):
+    reject_legacy_destructive_write()
     image = _get_image_or_404(id)
     storage.delete(f'gallery/{image.filename}')
     db.session.delete(image)

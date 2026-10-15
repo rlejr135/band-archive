@@ -4,7 +4,8 @@ from extensions import db
 from models import Member
 from errors import NotFoundError, ValidationError
 from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
-                          reject_foreign_children, validate_legacy_graphs)
+                          reject_foreign_children, reject_legacy_destructive_write,
+                          validate_legacy_graphs)
 from storage import storage
 from media_processing import delete_original_and_audio
 from validators import validate_required_string, validate_string_length
@@ -74,6 +75,7 @@ def update_member(id):
 
 @members_bp.route('/members/<int:id>', methods=['DELETE'])
 def delete_member(id):
+    reject_legacy_destructive_write()
     member = _get_member_or_404(id)
 
     from models import PersonalLog

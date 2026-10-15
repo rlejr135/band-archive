@@ -6,7 +6,7 @@ from extensions import db
 from models import Rehearsal, Song, Media
 from errors import ValidationError, NotFoundError
 from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
-                          reject_foreign_children, validate_legacy_graph,
+                          reject_foreign_children, reject_legacy_destructive_write, validate_legacy_graph,
                           validate_legacy_graphs)
 from storage import storage
 from media_processing import create_media, save_media_and_start
@@ -192,6 +192,7 @@ def update_rehearsal(id):
 
 @rehearsals_bp.route('/rehearsals/<int:id>', methods=['DELETE'])
 def delete_rehearsal(id):
+    reject_legacy_destructive_write()
     rehearsal = _get_legacy_rehearsal_or_404(id)
     reject_foreign_children(rehearsal, Media, 'rehearsal_id', 'Rehearsal not found')
     if any(song.band_id != rehearsal.band_id for song in rehearsal.songs):
