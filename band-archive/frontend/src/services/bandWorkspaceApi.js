@@ -29,6 +29,12 @@ export const bandWorkspacePaths = {
   suggestion: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}`,
   suggestionVote: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}/vote`,
   suggestionProceed: (bandId, suggestionId) => `${bandBase(bandId)}/suggestions/${Number(suggestionId)}/proceed`,
+  media: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}`,
+  personalLog: (bandId, logId) => `${bandBase(bandId)}/personal-logs/${Number(logId)}`,
+  galleryImage: (bandId, galleryId) => `${bandBase(bandId)}/gallery/${Number(galleryId)}`,
+  deletionTask: (bandId, taskId) => `${bandBase(bandId)}/deletion-tasks/${encodeURIComponent(String(taskId))}`,
+  platformDelete: (bandId) => `/api/v2/platform/bands/${Number(bandId)}/deletions`,
+  platformDeletionTask: (taskId) => `/api/v2/platform/deletion-tasks/${encodeURIComponent(String(taskId))}`,
 };
 
 // v2 derives author, ownership and band scope from the authenticated

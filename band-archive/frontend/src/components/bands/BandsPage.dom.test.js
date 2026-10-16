@@ -134,6 +134,35 @@ test('admin page verifies server role, loads pending requests, confirms and refr
   } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
 });
 
+test('superadmin deletion is a manual target-only request with required reason and exact confirmation', async () => {
+  await load(); const previousFetch = globalThis.fetch; const previousConfirm = window.confirm; const calls = []; let confirmed = '';
+  window.confirm = (message) => { confirmed = message; return true; };
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url); const method = options.method || 'GET'; calls.push({ path, method, body: options.body && JSON.parse(options.body) });
+    if (path.endsWith('/api/v2/me')) return response({ user: { is_platform_admin: true } });
+    if (path.includes('/platform/band-creation-requests?')) return response({ requests: [] });
+    if (path.endsWith('/platform/bands/17/deletions') && method === 'POST') return response({ task_id: 'operator-task', status: 'queued', retry_after_seconds: 0 });
+    if (path.endsWith('/platform/deletion-tasks/operator-task')) return response({ task_id: 'operator-task', status: 'completed', resource_type: 'comment', resource_id: 809 });
+    throw new Error(`unexpected ${method} ${path}`);
+  };
+  const authValue = { user: { id: 'verified-operator' }, getAccessToken: async () => 'verified-token', refreshSession: async () => 'verified-token', loading: false };
+  try {
+    const view = render(createElement(auth.AuthContext.Provider, { value: authValue }, createElement(MemoryRouter, null, createElement(admin.BandCreationRequestsAdminRoute))));
+    await view.findByRole('heading', { name: '대상 지정 콘텐츠 삭제' });
+    await userEvent.type(view.getByLabelText('밴드 ID'), '17');
+    fireEvent.change(view.getByLabelText('대상 종류'), { target: { value: 'comment' } });
+    await userEvent.type(view.getByLabelText('대상 ID'), '809');
+    await userEvent.type(view.getByLabelText('삭제 사유'), '사용자 요청에 따른 콘텐츠 삭제 검토');
+    await userEvent.type(view.getByLabelText(/확인 문구/), 'DELETE 17/comment/809');
+    await userEvent.click(view.getByRole('button', { name: '대상 확인 후 삭제 요청' }));
+    await view.findByText('삭제 작업이 완료되었습니다.');
+    assert.match(confirmed, /밴드 ID: 17[\s\S]*대상 유형: comment[\s\S]*대상 ID: 809/);
+    assert.deepEqual(calls.filter((call) => call.method === 'POST').map((call) => ({ ...call, path: call.path.replace(/^https?:\/\/[^/]+/, '') })), [{ path: '/api/v2/platform/bands/17/deletions', method: 'POST', body: { resource_type: 'comment', resource_id: 809, reason: '사용자 요청에 따른 콘텐츠 삭제 검토', confirm: true } }]);
+    assert.equal(calls.some((call) => /\/(media|personal-logs|gallery|songs|rehearsals|members|comments|suggestions)\//.test(call.path)), false, 'the operator path must not fetch a private resource or signed URL');
+    assert.equal(calls.some((call) => call.path.endsWith('/platform/deletion-tasks/operator-task')), true);
+  } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
+});
+
 test('admin page loads requests through the StrictMode effect replay', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => String(url).endsWith('/api/v2/me')

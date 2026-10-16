@@ -60,6 +60,29 @@ test('gallery and suggestions retain paged safe reads, featured image refresh, a
   try { const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} }; const gallery = render(createElement(ReadOnlyApp, { entry: '/bands/read-band/gallery', authValue: visitor })); await gallery.findByRole('heading', { name: '대표 사진' }); const featured = gallery.getByAltText('대표 갤러리 이미지'); fireEvent.error(featured); fireEvent.error(featured); await waitFor(() => assert.equal(featuredReads, 2)); fireEvent.error(gallery.getByAltText('갤러리 이미지')); await waitFor(() => assert.ok(galleryReads >= 2)); await userEvent.click(gallery.getByRole('button', { name: '사진 더 불러오기' })); await waitFor(() => assert.equal(gallery.getAllByAltText('갤러리 이미지').length, 2)); gallery.unmount(); const suggestions = render(createElement(ReadOnlyApp, { entry: '/bands/read-band/suggestions', authValue: visitor })); await suggestions.findByText('읽기 추천곡'); assert.equal(suggestions.queryByRole('button', { name: /추천|투표|추가|생성/ }), null); assert.equal(suggestions.getByText(/점수 4/).textContent.includes('검토 대기'), true); suggestions.unmount(); } finally { globalThis.fetch = previousFetch; }
 });
 
+test('gallery owner deletion uses the async deletion task and never displays actions without can_delete', async () => {
+  await load(); const previousFetch = globalThis.fetch; const previousConfirm = window.confirm; const calls = []; let rows = [{ id: 84, filename: '풍경.jpg', url: 'https://media.invalid/landscape.jpg', can_delete: true }, { id: 85, filename: '보호 사진.jpg', url: 'https://media.invalid/protected.jpg', can_delete: false }]; window.confirm = () => true;
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url); const method = options.method || 'GET'; calls.push({ path, method });
+    if (path.includes('/by-slug/gallery-owner')) return response({ band: { id: 319, slug: 'gallery-owner', name: '사진 밴드', membership: { id: 9, role: 'owner', status: 'active' }, permissions: {} } });
+    if (path.includes('/bands/319/gallery/featured')) return response({}, 404);
+    if (path.includes('/bands/319/gallery?')) return response({ gallery: rows, pagination: { total: rows.length, has_more: false } });
+    if (path.endsWith('/bands/319/gallery/84') && method === 'DELETE') { rows = []; return response({ task_id: 'gallery-task', status: 'queued', retry_after_seconds: 0 }); }
+    if (path.endsWith('/bands/319/deletion-tasks/gallery-task')) return response({ task_id: 'gallery-task', status: 'completed', resource_type: 'gallery', resource_id: 84 });
+    throw new Error(`unexpected ${method} ${path}`);
+  };
+  try {
+    const member = { user: { id: 'gallery-owner' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/gallery-owner/gallery', authValue: member }));
+    await view.findAllByAltText('갤러리 이미지');
+    assert.equal(view.getAllByRole('button', { name: '삭제' }).length, 1);
+    await userEvent.click(view.getByRole('button', { name: '삭제' }));
+    await view.findByText('표시할 사진이 없습니다.');
+    assert.deepEqual(calls.filter((call) => call.method !== 'GET').map(({ path, method }) => ({ path: path.replace(/^https?:\/\/[^/]+/, ''), method })), [{ path: '/api/v2/bands/319/gallery/84', method: 'DELETE' }]);
+    assert.equal(calls.some((call) => call.path.endsWith('/bands/319/deletion-tasks/gallery-task')), true);
+  } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
+});
+
 test('dashboard renders only the bounded public announcement summary and exposes no management controls', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -332,7 +355,7 @@ test('song edit and confirmed delete issue exact scoped requests and refetch the
   } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
 });
 
-test('rejected PATCH and DELETE show generic errors while their controls remain usable', async () => {
+test('rejected PATCH remains retryable while delete permission denial disables the stale action', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
     if (url.includes('/by-slug/reject-edit')) return response({ band: { id: 62, slug: 'reject-edit', name: '실패 밴드', default_visibility: 'MEMBERS', membership: { id: 62, role: 'member' } } });
@@ -344,7 +367,7 @@ test('rejected PATCH and DELETE show generic errors while their controls remain 
   const member = { user: { id: 'editor' }, getAccessToken: async () => 'editor', refreshSession: async () => 'editor', signOut: async () => {} }; const previousConfirm = window.confirm; window.confirm = () => true;
   try {
     const view = render(createElement(App, { entry: '/bands/reject-edit/songs', authValue: member, bandValue: { activeBands: [] }, songs: true })); await view.findByText('실패 곡'); await userEvent.click(view.getByText('실패 곡')); await userEvent.click(view.getByRole('button', { name: '수정' })); await userEvent.click(view.getByRole('button', { name: '저장' })); await view.findByRole('alert'); assert.equal(view.getByRole('button', { name: '저장' }).disabled, false); assert.equal(view.getByLabelText('제목').value, '실패 곡');
-    await userEvent.click(view.getByRole('button', { name: '취소' })); await userEvent.click(view.getByRole('button', { name: '삭제' })); await view.findByText('삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.'); assert.equal(view.getByRole('button', { name: '삭제' }).disabled, false); await userEvent.click(view.getByRole('button', { name: '수정' })); await view.findByRole('button', { name: '저장' }); view.unmount();
+    await userEvent.click(view.getByRole('button', { name: '취소' })); await userEvent.click(view.getByRole('button', { name: '삭제' })); await view.findByText('삭제 권한이 없습니다. 밴드 권한을 새로 확인해 주세요.'); assert.equal(view.getByRole('button', { name: '권한 확인 필요' }).disabled, true); await userEvent.click(view.getByRole('button', { name: '수정' })); await view.findByRole('button', { name: '저장' }); view.unmount();
   } finally { window.confirm = previousConfirm; globalThis.fetch = previousFetch; }
 });
 

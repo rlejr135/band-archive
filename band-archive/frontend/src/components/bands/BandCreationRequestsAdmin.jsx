@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { usePlatformAdmin } from './usePlatformAdmin.js';
+import { PlatformContentDeletion } from './PlatformContentDeletion.jsx';
 import './BandCreationRequestsAdmin.css';
 
 const genericError = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
@@ -84,6 +85,7 @@ export const BandCreationRequestsAdmin = () => {
     <header className="platform-requests-header"><Link to="/bands">← 내 밴드</Link><span>SUPERADMIN</span></header>
     <h1 id="platform-requests-title">밴드 생성 요청 검토</h1>
     <p className="platform-requests-intro">대기 중인 밴드 생성 요청을 확인하고 처리합니다.</p>
+    {permission.admin && !accessDenied && <PlatformContentDeletion key={identity} allowed />}
     {permission.loading ? <p role="status" aria-live="polite">관리자 권한을 확인하는 중입니다…</p>
       : permission.error ? <section className="platform-requests-state" role="alert"><p>{messageFor(permission.error)}</p></section>
         : !permission.admin ? <section className="platform-requests-state"><h2>접근할 수 없습니다</h2><p>플랫폼 관리자만 이 페이지를 사용할 수 있습니다.</p><Link to="/bands">내 밴드로 돌아가기</Link></section>

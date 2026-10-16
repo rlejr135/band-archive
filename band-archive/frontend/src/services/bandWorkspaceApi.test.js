@@ -10,6 +10,12 @@ test('workspace paths remain v2, tenant-scoped, and URL-safe', () => {
   assert.equal(bandWorkspacePaths.songMedia(7, 3), '/api/v2/bands/7/songs/3/media?limit=20&offset=0');
   assert.equal(bandWorkspacePaths.rehearsalMedia(7, 4), '/api/v2/bands/7/rehearsals/4/media?limit=20&offset=0');
   assert.equal(bandWorkspacePaths.mediaVote(7, 4), '/api/v2/bands/7/media/4/vote');
+  assert.equal(bandWorkspacePaths.media(7, 4), '/api/v2/bands/7/media/4');
+  assert.equal(bandWorkspacePaths.personalLog(7, 4), '/api/v2/bands/7/personal-logs/4');
+  assert.equal(bandWorkspacePaths.galleryImage(7, 4), '/api/v2/bands/7/gallery/4');
+  assert.equal(bandWorkspacePaths.deletionTask(7, 'task/4'), '/api/v2/bands/7/deletion-tasks/task%2F4');
+  assert.equal(bandWorkspacePaths.platformDelete(7), '/api/v2/platform/bands/7/deletions');
+  assert.equal(bandWorkspacePaths.platformDeletionTask('task/4'), '/api/v2/platform/deletion-tasks/task%2F4');
   assert.equal(bandWorkspacePaths.mediaComments(7, 4, { limit: 3, offset: 9 }), '/api/v2/bands/7/media/4/comments?limit=3&offset=9');
   assert.equal(bandWorkspacePaths.mediaCommentsWrite(7, 4), '/api/v2/bands/7/media/4/comments');
   assert.equal(bandWorkspacePaths.comment(7, 4), '/api/v2/bands/7/comments/4');
