@@ -195,8 +195,21 @@ def list_memberships(band_id):
     if membership.role not in MANAGER_ROLES:
         query = query.filter_by(status=ACTIVE)
     audience = 'management' if membership.role in MANAGER_ROLES else 'member'
-    return jsonify({'memberships': [membership_dict(item, audience=audience)
-                                    for item in query.order_by(BandMembership.id).all()]})
+    memberships = []
+    for item in query.order_by(BandMembership.id).all():
+        serialized = membership_dict(item, audience=audience)
+        if audience == 'management':
+            target_user = item.user
+            serialized['can_receive_ownership'] = bool(
+                membership.role == 'owner'
+                and item.id != membership.id
+                and item.status == ACTIVE
+                and target_user is not None
+                and target_user.status == ACTIVE
+                and target_user.email_verified is True
+            )
+        memberships.append(serialized)
+    return jsonify({'memberships': memberships})
 
 
 @bands_bp.patch('/bands/<int:band_id>/profile')
@@ -268,7 +281,7 @@ def redeem_invite():
 def transfer_band_ownership(band_id):
     body = payload()
     target_id = body.get('membership_id')
-    if not isinstance(target_id, int):
+    if isinstance(target_id, bool) or not isinstance(target_id, int):
         raise ValidationError('membership_id must be an integer.')
     item = transfer_ownership(current_app_user(), band_id, target_id)
     return jsonify({'membership': membership_dict(item)})
@@ -277,7 +290,10 @@ def transfer_band_ownership(band_id):
 @bands_bp.post('/bands/<int:band_id>/leave')
 @require_auth
 def leave(band_id):
-    return jsonify({'membership': membership_dict(leave_band(current_app_user(), band_id))})
+    item = leave_band(current_app_user(), band_id)
+    membership = membership_dict(item)
+    membership.update({'status': item.status, 'left_at': item.left_at.isoformat() if item.left_at else None})
+    return jsonify({'membership': membership})
 
 
 @bands_bp.delete('/bands/<int:band_id>')

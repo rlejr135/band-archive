@@ -33,6 +33,10 @@ from models import (
 def band_app(monkeypatch):
     app = create_app(TestingConfig, start_worker=False)
     with app.app_context():
+        # create_app initializes historical compatibility tables before the
+        # test fixture runs. Recreate the isolated database from current ORM
+        # metadata so current upload-session attribution columns are present.
+        db.drop_all()
         db.create_all()
         # Unit fixtures create the Phase 3 tables directly; production only
         # enables this switch after the isolated Alembic runner reaches head.
@@ -273,7 +277,8 @@ def test_sqlite_stale_owner_session_cannot_close_after_independent_transfer(tmp_
         with app.app_context():
             db.create_all()
             old_owner = AppUser(supabase_user_id='old-owner', email='old@example.com')
-            new_owner = AppUser(supabase_user_id='new-owner', email='new@example.com')
+            new_owner = AppUser(supabase_user_id='new-owner', email='new@example.com',
+                                email_verified=True)
             db.session.add_all((old_owner, new_owner))
             db.session.flush()
             band = Band(name='Race', slug='race', created_by_user_id=old_owner.id)

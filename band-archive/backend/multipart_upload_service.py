@@ -296,7 +296,7 @@ def session_payload(session):
     }
 
 
-def complete_session(session, object_size, create_item):
+def complete_session(session, object_size, create_item, before_materialize=None):
     """Finalize R2 and create the target record. Returns ``(item, status)``."""
     spec = spec_for_session(session)
     if session.status == 'completed':
@@ -329,6 +329,11 @@ def complete_session(session, object_size, create_item):
         actual_size = object_size(session.object_key)
         if actual_size != session.declared_bytes:
             raise ValidationError('Uploaded object size does not match declared_bytes.')
+        # R2 completion happened after the initial authorization transaction.
+        # Recheck immediately before creating a DB record and retain the lock
+        # through that record's commit.
+        if before_materialize is not None:
+            before_materialize(session)
         item = create_item(session, actual_size)
         mark_session_completed(session, item)
     except ValidationError:

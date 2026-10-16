@@ -175,7 +175,7 @@ def mark_direct_session_completed(session, item):
     db.session.commit()
 
 
-def complete_direct_session(session, object_size, create_item):
+def complete_direct_session(session, object_size, create_item, before_materialize=None):
     """Verify a reserved object and materialize exactly one tenant-scoped row."""
     if session.status == 'completed':
         return completed_item(session), 200
@@ -204,6 +204,11 @@ def complete_direct_session(session, object_size, create_item):
         actual_size = object_size(session.object_key)
         if actual_size != session.declared_bytes:
             raise ValidationError('Uploaded object size does not match declared_bytes.')
+        # The initial capability check and completing claim are separate
+        # commits. Recheck tenant authority after external object verification
+        # and keep its band/membership locks through record materialization.
+        if before_materialize is not None:
+            before_materialize(session)
         item = create_item(session, actual_size)
         mark_direct_session_completed(session, item)
         return item, 201

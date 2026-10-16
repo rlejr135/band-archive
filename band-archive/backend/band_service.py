@@ -11,9 +11,11 @@ from sqlalchemy.exc import IntegrityError
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import (
-    AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership,
-    LegacyBandClaimToken,
+    AppUser, AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership,
+    DirectUploadSession, LegacyBandClaimToken, MultipartUploadSession,
+    PersonalLogMultipartUploadSession,
 )
+from sqlalchemy import and_, or_
 
 
 OWNER_ROLES = {'owner'}
@@ -170,6 +172,8 @@ def band_dict(band, viewer=None, include_roster=False, membership=_UNRESOLVED_ME
             'can_manage_invites': bool(active_member and membership.role in MANAGER_ROLES),
             'can_close_band': bool(active_member and membership.role == 'owner'),
             'can_edit_band_profile': bool(active_member and membership.role == 'owner'),
+            'can_leave': bool(active_member and membership.role in {'admin', 'member'}),
+            'can_transfer_ownership': bool(active_member and membership.role == 'owner'),
         },
         'can_edit': bool(active_member and membership.role in MANAGER_ROLES),
         'can_delete': bool(active_member and membership.role == 'owner'),
@@ -266,12 +270,24 @@ def review_request(admin, request_id, approved, note=None):
 
 
 def join_request(user, band_id):
-    band = Band.query.filter_by(id=band_id, deleted_at=None).one_or_none()
+    _begin_privileged_mutation()
+    band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
     if band is None:
         raise NotFoundError('Band not found')
-    item = BandMembership.query.filter_by(band_id=band.id, user_id=user.id).one_or_none()
+    item = BandMembership.query.filter_by(band_id=band.id, user_id=user.id).with_for_update().populate_existing().one_or_none()
     if item is not None:
-        return item, False
+        if item.status in {ACTIVE, 'pending'}:
+            db.session.commit()
+            return item, False
+        if item.status in {'left', 'rejected'}:
+            item.role = 'member'
+            item.status = 'pending'
+            item.requested_at = now()
+            item.approved_at = None
+            item.acted_by_user_id = user.id
+            audit('membership_rejoin_requested', user, band=band, target=item)
+            db.session.commit()
+            return item, True
     item = BandMembership(band_id=band.id, user_id=user.id)
     db.session.add(item)
     try:
@@ -287,15 +303,24 @@ def join_request(user, band_id):
 
 def approve_membership(actor, membership_id, approved):
     _begin_privileged_mutation()
-    item = BandMembership.query.filter_by(id=membership_id).with_for_update().populate_existing().one_or_none()
+    candidate = BandMembership.query.filter_by(id=membership_id).one_or_none()
+    if candidate is None:
+        raise NotFoundError('Membership not found')
+    # Match leave/upload/transfer ordering: band first, then actor and target
+    # memberships, so approval cannot deadlock with a concurrent leave.
+    band, _ = require_band_role(actor, candidate.band_id, lock=True)
+    item = BandMembership.query.filter_by(id=membership_id, band_id=band.id).with_for_update().populate_existing().one_or_none()
     if item is None:
         raise NotFoundError('Membership not found')
-    band, _ = require_band_role(actor, item.band_id, lock=True)
     if item.status != 'pending':
+        db.session.commit()
         return item, False
     try:
         item.status = ACTIVE if approved else 'rejected'
         item.approved_at = now() if approved else None
+        if approved:
+            item.role = 'member'
+            item.left_at = None
         item.acted_by_user_id = actor.id
         audit('membership_approved' if approved else 'membership_rejected', actor, band=band, target=item)
         db.session.commit()
@@ -607,10 +632,15 @@ def set_role(actor, membership_id, role):
     if role not in {'admin', 'member'}:
         raise ValidationError('role must be admin or member.')
     _begin_privileged_mutation()
-    item = BandMembership.query.filter_by(id=membership_id).with_for_update().populate_existing().one_or_none()
+    candidate = BandMembership.query.filter_by(id=membership_id).one_or_none()
+    if candidate is None:
+        raise NotFoundError('Membership not found')
+    # Use band -> actor membership -> target membership ordering, matching
+    # leave/transfer/upload so concurrent role changes cannot deadlock them.
+    band, actor_membership = require_band_role(actor, candidate.band_id, OWNER_ROLES, lock=True)
+    item = BandMembership.query.filter_by(id=membership_id, band_id=band.id).with_for_update().populate_existing().one_or_none()
     if item is None:
         raise NotFoundError('Membership not found')
-    band, actor_membership = require_band_role(actor, item.band_id, OWNER_ROLES, lock=True)
     if item.status != ACTIVE:
         raise ValidationError('Only active memberships can receive roles.', 409)
     if item.role == 'owner':
@@ -639,7 +669,10 @@ def transfer_ownership(actor, band_id, target_membership_id):
     if target is None:
         raise NotFoundError('Membership not found')
     if target.id == owner.id:
-        return target
+        raise ValidationError('ownership_target_ineligible', 409)
+    target_user = AppUser.query.filter_by(id=target.user_id).with_for_update().populate_existing().one_or_none()
+    if target_user is None or target_user.status != ACTIVE or target_user.email_verified is not True:
+        raise ValidationError('ownership_target_ineligible', 409)
     try:
         # Demote first so the non-deferrable SQLite/Postgres partial unique
         # index is respected.  The transaction remains atomic to readers.
@@ -656,18 +689,67 @@ def transfer_ownership(actor, band_id, target_membership_id):
     return target
 
 
+def _has_completable_upload(actor_membership, band_id):
+    """Check only this membership's live, nonlegacy upload reservations.
+
+    This is a read-only query: leave never invokes expiry/abort cleanup or R2.
+    Expired initiated rows cannot complete because the upload endpoints first
+    expire them; completing rows remain blocking even past their expiry until
+    the in-flight/recovery path reaches a terminal state.
+    """
+    timestamp = now().replace(tzinfo=None)
+    initiated_live = and_(
+        MultipartUploadSession.status == 'initiated',
+        MultipartUploadSession.expires_at > timestamp,
+    )
+    personal_initiated_live = and_(
+        PersonalLogMultipartUploadSession.status == 'initiated',
+        PersonalLogMultipartUploadSession.expires_at > timestamp,
+    )
+    direct_initiated_live = and_(
+        DirectUploadSession.status == 'initiated',
+        DirectUploadSession.expires_at > timestamp,
+    )
+    media_upload = MultipartUploadSession.query.filter(
+        MultipartUploadSession.band_id == band_id,
+        MultipartUploadSession.created_by_membership_id == actor_membership.id,
+        MultipartUploadSession.is_legacy.is_(False),
+        or_(MultipartUploadSession.status == 'completing', initiated_live),
+    ).first()
+    if media_upload is not None:
+        return True
+    personal_upload = PersonalLogMultipartUploadSession.query.filter(
+        PersonalLogMultipartUploadSession.band_id == band_id,
+        PersonalLogMultipartUploadSession.created_by_membership_id == actor_membership.id,
+        PersonalLogMultipartUploadSession.is_legacy.is_(False),
+        or_(PersonalLogMultipartUploadSession.status == 'completing', personal_initiated_live),
+    ).first()
+    if personal_upload is not None:
+        return True
+    return DirectUploadSession.query.filter(
+        DirectUploadSession.band_id == band_id,
+        DirectUploadSession.created_by_membership_id == actor_membership.id,
+        or_(DirectUploadSession.status == 'completing', direct_initiated_live),
+    ).first() is not None
+
+
 def leave_band(actor, band_id):
     _begin_privileged_mutation()
-    band, item = active_membership(actor, band_id)
+    band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
+    if band is None:
+        raise NotFoundError('Band not found')
+    item = BandMembership.query.filter_by(band_id=band.id, user_id=actor.id).with_for_update().populate_existing().one_or_none()
     if item is None:
         raise NotFoundError('Band not found')
+    if item.status == 'left':
+        db.session.commit()
+        return item
+    if item.status != ACTIVE:
+        raise NotFoundError('Band not found')
     if item.role == 'owner':
-        other_owner = BandMembership.query.filter(BandMembership.band_id == band.id,
-                                                  BandMembership.status == ACTIVE,
-                                                  BandMembership.role == 'owner',
-                                                  BandMembership.id != item.id).first()
-        if other_owner is None:
-            raise ValidationError('The sole owner must transfer ownership before leaving.', 409)
+        raise ValidationError('ownership_transfer_required', 409)
+    if _has_completable_upload(item, band.id):
+        raise ValidationError('upload_in_progress', 409)
     item.status = 'left'
     item.left_at = now()
     audit('membership_left', actor, band=band, target=item)

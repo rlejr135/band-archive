@@ -6,7 +6,7 @@ from sqlalchemy import func, inspect, text
 from auth_service import current_app_user
 from band_service import ACTIVE
 from extensions import db
-from models import (Band, BandMembership, Media, Song, Rehearsal, Member,
+from models import (AppUser, Band, BandMembership, Media, Song, Rehearsal, Member,
                     PersonalLog, GalleryImage, MultipartUploadSession,
                     PersonalLogMultipartUploadSession, DirectUploadSession)
 from direct_upload_service import (
@@ -176,6 +176,48 @@ def _v2_direct_session_or_404(session_id, band_id):
         raise NotFoundError('Upload session not found')
     expire_direct_session_if_needed(session)
     return db.session.get(DirectUploadSession, session.id)
+
+
+def _v2_require_upload_session_owner(band_id, session, membership):
+    """Bind completion to its active, verified creator before any R2 work."""
+    if (session.band_id != band_id
+            or session.created_by_membership_id != membership.id):
+        raise NotFoundError('Upload session not found')
+    owner = AppUser.query.filter_by(id=membership.user_id).with_for_update().populate_existing().one_or_none()
+    if owner is None or owner.status != ACTIVE or owner.email_verified is not True:
+        raise ValidationError('An active, verified upload owner is required.', status_code=403)
+    return membership
+
+
+def _v2_reauthorize_upload_session_owner(band_id, session):
+    """Recheck creator authority after the completion claim and R2 verify."""
+    _, membership = _v2_active_membership(band_id, lock=True)
+    return _v2_require_upload_session_owner(band_id, session, membership)
+
+
+def _v2_direct_completion_session(session_id, band_id):
+    """Authorize the original creator before expiry cleanup can touch R2."""
+    _, membership = _v2_active_membership(band_id, lock=True)
+    session = DirectUploadSession.query.filter_by(id=session_id, band_id=band_id).one_or_none()
+    if session is None:
+        raise NotFoundError('Upload session not found')
+    _v2_require_upload_session_owner(band_id, session, membership)
+    expire_direct_session_if_needed(session)
+    return db.session.get(DirectUploadSession, session.id)
+
+
+def _v2_multipart_completion_session(session_id, band_id):
+    """Authorize the original creator before multipart recovery/expiry I/O."""
+    _, membership = _v2_active_membership(band_id, lock=True)
+    session = None
+    for model in (MultipartUploadSession, PersonalLogMultipartUploadSession):
+        session = model.query.filter_by(id=session_id, band_id=band_id).one_or_none()
+        if session is not None:
+            break
+    if session is None or session.is_legacy:
+        raise NotFoundError('Upload session not found')
+    _v2_require_upload_session_owner(band_id, session, membership)
+    return _v2_session_or_404(session_id, band_id, recover_aborting=False)
 
 
 def _legacy_session_or_404(session_id, *, recover_aborting=True):
@@ -383,10 +425,12 @@ def v2_initiate_direct_upload(band_id):
 @_v2_upload_write
 def v2_complete_direct_upload(band_id, session_id):
     def operation():
-        _v2_active_membership(band_id, lock=True)  # Recheck before materializing an uploaded object.
-        session = _v2_direct_session_or_404(session_id, band_id)
+        session = _v2_direct_completion_session(session_id, band_id)
         require_direct_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
-        return complete_direct_session(session, _object_size, _v2_direct_item)
+        return complete_direct_session(
+            session, _object_size, _v2_direct_item,
+            before_materialize=lambda completing: _v2_reauthorize_upload_session_owner(band_id, completing),
+        )
 
     item, status = _v2_write(operation)
     session = db.session.get(DirectUploadSession, session_id)
@@ -433,12 +477,14 @@ def v2_initiate_direct_gallery_upload(band_id):
 @_v2_upload_write
 def v2_complete_direct_gallery_upload(band_id, session_id):
     def operation():
-        _v2_active_membership(band_id, lock=True)
-        session = _v2_direct_session_or_404(session_id, band_id)
+        session = _v2_direct_completion_session(session_id, band_id)
         if session.kind != 'gallery':
             raise NotFoundError('Upload session not found')
         require_direct_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
-        return complete_direct_session(session, _object_size, _v2_direct_gallery_item)
+        return complete_direct_session(
+            session, _object_size, _v2_direct_gallery_item,
+            before_materialize=lambda completing: _v2_reauthorize_upload_session_owner(band_id, completing),
+        )
 
     item, status = _v2_write(operation)
     session = db.session.get(DirectUploadSession, session_id)
@@ -540,10 +586,12 @@ def v2_acknowledge_multipart_part(band_id, session_id, part_number):
 @_v2_upload_write
 def v2_complete_multipart_upload(band_id, session_id):
     def operation():
-        _v2_active_membership(band_id, lock=True)  # Recheck at materialization time.
-        session = _v2_session_or_404(session_id, band_id, recover_aborting=False)
+        session = _v2_multipart_completion_session(session_id, band_id)
         require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
-        return complete_session(session, _object_size, _v2_multipart_item)
+        return complete_session(
+            session, _object_size, _v2_multipart_item,
+            before_materialize=lambda completing: _v2_reauthorize_upload_session_owner(band_id, completing),
+        )
     item, status = _v2_write(operation)
     session = _v2_session_or_404(session_id, band_id)
     return jsonify(completion_payload(session, item)), status
