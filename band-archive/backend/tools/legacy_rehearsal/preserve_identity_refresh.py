@@ -41,6 +41,7 @@ PROTECTED_TABLES = frozenset({
     # New-account policy receipts are immutable account security records,
     # never copied from an archive snapshot or cleared during refresh.
     "policy_acceptance_receipt",
+    "band_availability_state", "band_availability_day", "band_personal_schedule_note",
     # Deletion tasks are operational history and must never be refreshed from
     # a source snapshot or emptied as part of identity-preserving refresh.
     "r2_deletion_task",

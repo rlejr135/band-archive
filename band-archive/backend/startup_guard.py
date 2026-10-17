@@ -59,6 +59,19 @@ def assert_postgres_startup_ready(engine):
             )).all()
             if marker != [('phase4_tenant_scope', 'validated')]:
                 raise RuntimeError('PostgreSQL tenant backfill is not uniquely validated')
+            # The new tables deliberately do not alter the historical
+            # membership table to add a composite candidate key. Verify the
+            # redundant tenant key without disclosing note bodies.
+            inconsistent_calendar = connection.execute(text('''
+                SELECT (SELECT count(*) FROM public.band_availability_day d
+                    JOIN public.band_membership m ON m.id=d.membership_id WHERE m.band_id<>d.band_id)
+                  + (SELECT count(*) FROM public.band_personal_schedule_note n
+                    JOIN public.band_membership m ON m.id=n.membership_id WHERE m.band_id<>n.band_id)
+                  + (SELECT count(*) FROM public.band_availability_state s
+                    JOIN public.band_membership m ON m.id=s.last_reset_by_membership_id WHERE m.band_id<>s.band_id)
+            ''')).scalar_one()
+            if inconsistent_calendar:
+                raise RuntimeError('PostgreSQL availability tenant relationship is invalid')
             ownership = connection.execute(text("""
                 SELECT count(*) FROM pg_class AS cls
                 WHERE cls.relnamespace='public'::regnamespace AND cls.relkind IN ('r','p')

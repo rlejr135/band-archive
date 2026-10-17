@@ -134,6 +134,55 @@ class BandMembership(db.Model):
     )
 
 
+class BandAvailabilityState(db.Model):
+    __tablename__ = 'band_availability_state'
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), primary_key=True,
+                        autoincrement=False)
+    generation = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_reset_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_reset_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True)
+    __table_args__ = (db.CheckConstraint('generation >= 0', name='ck_availability_state_generation'),)
+
+
+class BandAvailabilityDay(db.Model):
+    __tablename__ = 'band_availability_day'
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), nullable=False)
+    membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id', ondelete='CASCADE'), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    morning = db.Column(db.String(20), nullable=False, default='UNKNOWN', server_default='UNKNOWN')
+    afternoon = db.Column(db.String(20), nullable=False, default='UNKNOWN', server_default='UNKNOWN')
+    evening = db.Column(db.String(20), nullable=False, default='UNKNOWN', server_default='UNKNOWN')
+    revision = db.Column(db.Integer, nullable=False, default=1, server_default='1')
+    __table_args__ = (
+        db.UniqueConstraint('band_id', 'membership_id', 'date', name='uq_availability_day_member_date'),
+        db.Index('ix_availability_day_band_date_member', 'band_id', 'date', 'membership_id'),
+        db.CheckConstraint('revision > 0', name='ck_availability_day_revision'),
+        *(db.CheckConstraint(f"{period} IN ('AVAILABLE', 'UNAVAILABLE', 'UNKNOWN')",
+                             name=f'ck_availability_day_{period}') for period in ('morning', 'afternoon', 'evening')),
+    )
+
+
+class BandPersonalScheduleNote(db.Model):
+    __tablename__ = 'band_personal_schedule_note'
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), nullable=False)
+    membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id', ondelete='CASCADE'), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    period = db.Column(db.String(20), nullable=False)
+    # NULL is a deletion tombstone: old clients cannot recreate a deleted note.
+    body = db.Column(db.String(200), nullable=True)
+    visibility = db.Column(db.String(20), nullable=False, default='PRIVATE', server_default='PRIVATE')
+    revision = db.Column(db.Integer, nullable=False, default=1, server_default='1')
+    __table_args__ = (
+        db.UniqueConstraint('band_id', 'membership_id', 'date', 'period', name='uq_schedule_note_member_date_period'),
+        db.Index('ix_schedule_note_band_date_member', 'band_id', 'date', 'membership_id'),
+        db.CheckConstraint('revision > 0', name='ck_schedule_note_revision'),
+        db.CheckConstraint("period IN ('morning', 'afternoon', 'evening')", name='ck_schedule_note_period'),
+        db.CheckConstraint("visibility IN ('PRIVATE', 'BAND')", name='ck_schedule_note_visibility'),
+    )
+
+
 class BandCreationRequest(db.Model):
     __tablename__ = 'band_creation_request'
 

@@ -25,7 +25,7 @@ from migration_bootstrap import (
     PHASE12_REVISION,
     PHASE13_REVISION,
     PHASE15_REVISION,
-    PHASE16_REVISION,
+    PHASE17_REVISION,
     create_migration_app,
     metadata_for_recorded_revision,
     phase11_metadata,
@@ -359,7 +359,7 @@ def test_postgres_email_outbox_revision_is_private_and_exact_head_is_required(pr
                 )).scalar_one() == 1
                 assert connection.execute(text(
                     'SELECT version_num FROM public.alembic_version'
-                )).scalar_one() == PHASE16_REVISION
+                )).scalar_one() == PHASE17_REVISION
                 assert connection.execute(text(
                     "SELECT to_regclass('public.r2_deletion_task') IS NOT NULL"
                 )).scalar_one() is True

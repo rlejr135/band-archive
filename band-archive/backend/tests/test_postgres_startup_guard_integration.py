@@ -64,7 +64,7 @@ def test_private_pg_startup_has_no_ddl_or_automatic_jobs_and_rejects_drift(priva
         for sql, undo in (
             ('ALTER TABLE public.song DISABLE ROW LEVEL SECURITY', 'ALTER TABLE public.song ENABLE ROW LEVEL SECURITY'),
             ("UPDATE public.tenant_backfill_state SET status='planned'", "UPDATE public.tenant_backfill_state SET status='validated'"),
-            ("UPDATE public.alembic_version SET version_num='20261006_12'", "UPDATE public.alembic_version SET version_num='20261017_16'"),
+            ("UPDATE public.alembic_version SET version_num='20261006_12'", "UPDATE public.alembic_version SET version_num='20261017_17'"),
             ('ALTER TABLE public.song ADD COLUMN unreviewed_startup_column integer', 'ALTER TABLE public.song DROP COLUMN unreviewed_startup_column'),
             ('GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO PUBLIC', 'REVOKE SELECT ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC'),
             ('CREATE VIEW public.unreviewed_startup_view AS SELECT 1 AS value', 'DROP VIEW public.unreviewed_startup_view'),

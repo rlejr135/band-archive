@@ -39,6 +39,7 @@ PHASE13_REVISION = '20261010_13'
 PHASE14_REVISION = '20261014_14'
 PHASE15_REVISION = '20261016_15'
 PHASE16_REVISION = '20261017_16'
+PHASE17_REVISION = '20261017_17'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -50,7 +51,9 @@ DATA_API_MANAGED_TABLES_PHASE13 = (
 )
 DATA_API_MANAGED_TABLES_PHASE14 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13, 'band_request_email_outbox')))
 DATA_API_MANAGED_TABLES_PHASE15 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
-DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
+DATA_API_MANAGED_TABLES_PHASE16 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
+AVAILABILITY_TABLES = ('band_availability_day', 'band_availability_state', 'band_personal_schedule_note')
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES)))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -189,6 +192,9 @@ def _remove_future_policy_acceptance(metadata):
         table._columns.remove(table.c.join_introduction)
     if 'policy_acceptance_receipt' in metadata.tables:
         metadata.remove(metadata.tables['policy_acceptance_receipt'])
+    for name in AVAILABILITY_TABLES:
+        if name in metadata.tables:
+            metadata.remove(metadata.tables[name])
     return metadata
 
 
@@ -348,6 +354,14 @@ def phase16_metadata():
     membership = metadata.tables['band_membership']
     membership.append_column(db.metadata.tables['band_membership'].c.join_introduction._copy())
     db.metadata.tables['policy_acceptance_receipt'].to_metadata(metadata)
+    return metadata
+
+
+def phase17_metadata():
+    """Private band-scoped availability tables; historical snapshots stay exact."""
+    metadata = phase16_metadata()
+    for name in AVAILABILITY_TABLES:
+        db.metadata.tables[name].to_metadata(metadata)
     return metadata
 
 
@@ -744,8 +758,10 @@ def _expected_check_constraints(table, dialect=None):
                 ('policy_acceptance_receipt', 'ck_policy_receipt_terms_version'),
                 ('policy_acceptance_receipt', 'ck_policy_receipt_privacy_version'),
             },
-            allow_greater_equal=(table.name, constraint.name) ==
-            ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
+            allow_greater_equal=(table.name, constraint.name) in {
+                ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
+                ('band_availability_state', 'ck_availability_state_generation'),
+            },
             )
         if (getattr(dialect, 'name', None) == 'postgresql'
                 and not (isinstance(canonical, tuple) and canonical[:1] == ('policy_boolean_true',))):
@@ -791,8 +807,10 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
                 ('policy_acceptance_receipt', 'ck_policy_receipt_terms_version'),
                 ('policy_acceptance_receipt', 'ck_policy_receipt_privacy_version'),
             },
-            allow_greater_equal=(table_name, constraint.get('name')) ==
-            ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
+            allow_greater_equal=(table_name, constraint.get('name')) in {
+                ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
+                ('band_availability_state', 'ck_availability_state_generation'),
+            },
             )
         if (getattr(dialect, 'name', None) == 'postgresql' and table is not None
                 and not (isinstance(canonical, tuple) and canonical[:1] == ('policy_boolean_true',))):
@@ -1667,6 +1685,8 @@ def metadata_for_recorded_revision(revision):
         return phase15_metadata()
     if revision == PHASE16_REVISION:
         return phase16_metadata()
+    if revision == PHASE17_REVISION:
+        return phase17_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(
