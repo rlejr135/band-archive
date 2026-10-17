@@ -103,11 +103,11 @@ function AvailabilityEditor({ band, api }) {
       {data.last_reset_at && <p className="availability-notice">owner가 {resetTime(data.last_reset_at)}에 일정을 초기화했습니다. 가능한 일정을 다시 등록해 주세요.</p>}
       <div className="availability-layout"><section className="availability-panel" aria-labelledby="my-availability-title">
         <h2 id="my-availability-title">내 가능 시간</h2>
-        <p className="workspace-muted">달력에서 날짜를 드래그한 뒤 적용을 눌러 시간대를 골라 주세요. 미정은 가능으로 계산하지 않습니다.</p>
+        <p className="workspace-muted">날짜 선택 → 시간대·가능 여부 설정 → 저장 순서로 등록해요. 날짜 선택이나 설정 화면 열기만으로는 저장되지 않습니다. 미정은 가능으로 계산하지 않습니다.</p>
         <label className="availability-check"><input type="checkbox" checked={touchMode} onChange={(event) => setTouchMode(event.target.checked)} />터치 범위 선택 모드 <small>끄면 시작·끝 날짜를 차례로 탭하고, 켜면 드래그로 여러 날짜를 선택합니다.</small></label>
         <p className="availability-keyboard-hint">키보드: 방향키로 이동 · Space/Enter로 선택 · Shift와 함께 범위 선택</p>
         <table className={`availability-month-grid ${touchMode ? 'touch-selecting' : ''}`} onPointerMove={moveTouch}>
-          <caption className="availability-sr">{month} 내 가능 시간 달력. 날짜를 선택한 후 적용 버튼을 누르세요.</caption>
+          <caption className="availability-sr">{month} 내 가능 시간 달력. 날짜를 선택하고 선택 날짜의 가능 여부 설정 버튼에서 시간대·상태를 고른 뒤 저장하세요.</caption>
           <thead><tr>{['일', '월', '화', '수', '목', '금', '토'].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
           <tbody>{calendarWeeks(month).map((week, index) => <tr key={index}>{week.map((date, column) => {
             if (!date) return <td className="availability-empty-day" key={`empty-${column}`} aria-hidden="true" />;
@@ -123,7 +123,7 @@ function AvailabilityEditor({ band, api }) {
         </table>
         <div className="availability-selection-bar">
           <span aria-live="polite">{selectedDays.length ? `${selectedDays.length}일 선택 · ${selectedDays[0].slice(5)} ~ ${selectedDays.at(-1).slice(5)}` : '날짜를 선택해 주세요'}</span>
-          <button className="primary-btn" disabled={busy || !selectedDays.length} onClick={() => setApplyOpen(true)}>적용</button>
+          <button className="primary-btn" disabled={busy || !selectedDays.length} onClick={() => setApplyOpen(true)}>선택 날짜의 가능 여부 설정</button>
           <button className="secondary-btn" disabled={busy || !selectedDays.length} onClick={() => { setSelectedDays([]); anchor.current = null; }}>선택 취소</button>
         </div>
         {applyOpen && <ApplyAvailabilityDialog dates={selectedDays} busy={busy} onClose={() => { if (!busy) setApplyOpen(false); }} onSave={saveDays} />}
@@ -156,10 +156,10 @@ function ApplyAvailabilityDialog({ dates, busy, onClose, onSave }) {
   };
   return <div className="availability-dialog-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <section ref={dialog} className="availability-apply-dialog" role="dialog" aria-modal="true" aria-labelledby="availability-apply-title" aria-describedby="availability-apply-description" tabIndex={-1} onKeyDown={keyboard}>
-      <p className="availability-eyebrow">SET YOUR AVAILABILITY</p><h2 id="availability-apply-title">선택한 날짜에 적용</h2>
+      <p className="availability-eyebrow">SET YOUR AVAILABILITY</p><h2 id="availability-apply-title">선택 날짜의 가능 여부 설정</h2>
       <p id="availability-apply-description">{dates[0]} ~ {dates.at(-1)} · {dates.length}일<br />시간대를 여러 개 선택할 수 있어요. 선택하지 않은 시간대는 유지됩니다.</p>
-      <fieldset disabled={busy}><legend>시간대 · 복수 선택</legend><div className="availability-option-tabs" role="group" aria-label="적용할 시간대">{PERIODS.map((period) => <button type="button" key={period} aria-pressed={periods.includes(period)} onClick={() => setPeriods((current) => current.includes(period) ? current.filter((p) => p !== period) : PERIODS.filter((p) => p === period || current.includes(p)))}>{PERIOD_LABELS[period]}<span aria-hidden="true">{periods.includes(period) ? '✓' : '+'}</span></button>)}</div></fieldset>
-      <fieldset disabled={busy}><legend>가능 여부 · 하나 선택</legend><div className="availability-option-tabs availability-status-tabs" role="group" aria-label="적용할 상태">{Object.entries(STATUS_LABELS).map(([value, label]) => <button type="button" key={value} aria-pressed={status === value} onClick={() => setStatus(value)}>{label}</button>)}</div></fieldset>
+      <fieldset disabled={busy}><legend>시간대 · 복수 선택</legend><div className="availability-option-tabs" role="group" aria-label="설정할 시간대">{PERIODS.map((period) => <button type="button" key={period} aria-pressed={periods.includes(period)} onClick={() => setPeriods((current) => current.includes(period) ? current.filter((p) => p !== period) : PERIODS.filter((p) => p === period || current.includes(p)))}>{PERIOD_LABELS[period]}<span aria-hidden="true">{periods.includes(period) ? '✓' : '+'}</span></button>)}</div></fieldset>
+      <fieldset disabled={busy}><legend>가능 여부 · 하나 선택</legend><div className="availability-option-tabs availability-status-tabs" role="group" aria-label="설정할 가능 여부">{Object.entries(STATUS_LABELS).map(([value, label]) => <button type="button" key={value} aria-pressed={status === value} onClick={() => setStatus(value)}>{label}</button>)}</div></fieldset>
       {!periods.length && <p className="availability-dialog-help">오전·오후·저녁 중 한 개 이상 선택해 주세요.</p>}
       <div className="form-actions"><button type="button" className="secondary-btn" disabled={busy} onClick={onClose}>취소</button><button type="button" className="primary-btn" disabled={busy || !periods.length} onClick={() => onSave(periods, status)}>{busy ? '저장 중…' : '저장'}</button></div>
     </section>

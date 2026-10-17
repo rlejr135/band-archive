@@ -22,8 +22,8 @@ const app = (api, props = {}) => createElement(MemoryRouter, null, createElement
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const day = (view, value) => view.getByRole('button', { name: `${value} 일정 선택` });
 const chooseRange = (view, from, to) => { fireEvent.pointerDown(day(view, from), { pointerType: 'mouse', button: 0 }); fireEvent.pointerEnter(day(view, to), { pointerType: 'mouse' }); fireEvent.pointerUp(window); };
-const openApply = (view) => { const button = view.getByRole('button', { name: '적용', exact: true }); button.focus(); fireEvent.click(button); return view.getByRole('dialog', { name: '선택한 날짜에 적용' }); };
-const choosePeriods = (dialog, periods) => { const group = within(dialog).getByRole('group', { name: '적용할 시간대' }); periods.forEach((p) => fireEvent.click(within(group).getByRole('button', { name: new RegExp(`^${p}`) }))); };
+const openApply = (view) => { const button = view.getByRole('button', { name: '선택 날짜의 가능 여부 설정', exact: true }); button.focus(); fireEvent.click(button); return view.getByRole('dialog', { name: '선택 날짜의 가능 여부 설정' }); };
+const choosePeriods = (dialog, periods) => { const group = within(dialog).getByRole('group', { name: '설정할 시간대' }); periods.forEach((p) => fireEvent.click(within(group).getByRole('button', { name: new RegExp(`^${p}`) }))); };
 afterEach(() => cleanup()); after(async () => { await vite?.close(); dom.window.close(); });
 
 test('inactive membership makes no calendar request', async () => {
@@ -54,8 +54,8 @@ test('apply modal cancels without mutation, traps focus and restores apply focus
   fireEvent.keyDown(first, { key: 'Tab', shiftKey: true }); assert.equal(document.activeElement, within(dialog).getByRole('button', { name: '취소', exact: true }));
   choosePeriods(dialog, ['오전']); fireEvent.click(within(dialog).getByRole('button', { name: '취소', exact: true })); assert.equal(view.queryByRole('dialog'), null); assert.equal(writes, 0);
   const again = openApply(view); assert.equal(within(again).getByRole('button', { name: '저장', exact: true }).disabled, true);
-  fireEvent.keyDown(again, { key: 'Escape' }); assert.equal(view.queryByRole('dialog'), null); assert.equal(document.activeElement, view.getByRole('button', { name: '적용', exact: true })); assert.equal(document.body.style.overflow, '');
-  fireEvent.click(view.getByRole('button', { name: '선택 취소' })); assert.equal(view.getByRole('button', { name: '적용', exact: true }).disabled, true);
+  fireEvent.keyDown(again, { key: 'Escape' }); assert.equal(view.queryByRole('dialog'), null); assert.equal(document.activeElement, view.getByRole('button', { name: '선택 날짜의 가능 여부 설정', exact: true })); assert.equal(document.body.style.overflow, '');
+  fireEvent.click(view.getByRole('button', { name: '선택 취소' })); assert.equal(view.getByRole('button', { name: '선택 날짜의 가능 여부 설정', exact: true }).disabled, true);
 });
 test('keyboard range, single status selection and 409 discard stale selection then reload generation', async () => {
   await load(); let gets = 0; const writes = []; const api = { requestJson: async (_url, options = {}) => { if (options.method) { writes.push(JSON.parse(options.body)); const error = new Error('Conflict'); error.status = 409; throw error; } return snapshot({ generation: gets++ ? 1 : 0 }); } };
@@ -63,16 +63,16 @@ test('keyboard range, single status selection and 409 discard stale selection th
   fireEvent.keyDown(day(view, date), { key: ' ' }); fireEvent.keyDown(day(view, dates[7]), { key: 'Enter', shiftKey: true });
   assert.equal(view.container.querySelectorAll('.availability-day[aria-pressed=true]').length, 8);
   const dialog = openApply(view); choosePeriods(dialog, ['오전']);
-  const statuses = within(dialog).getByRole('group', { name: '적용할 상태' }); fireEvent.click(within(statuses).getByRole('button', { name: '불가', exact: true }));
+  const statuses = within(dialog).getByRole('group', { name: '설정할 가능 여부' }); fireEvent.click(within(statuses).getByRole('button', { name: '불가', exact: true }));
   assert.equal(within(statuses).getByRole('button', { name: '가능', exact: true }).getAttribute('aria-pressed'), 'false');
   fireEvent.click(within(dialog).getByRole('button', { name: '저장', exact: true }));
   await view.findByText(/다른 기기에서 수정했거나 owner가 초기화했습니다/); await waitFor(() => assert.equal(gets, 2)); assert.equal(writes[0].days[0].morning, 'UNAVAILABLE');
-  assert.equal(view.queryByRole('dialog'), null); assert.equal(view.getByRole('button', { name: '적용', exact: true }).disabled, true);
+  assert.equal(view.queryByRole('dialog'), null); assert.equal(view.getByRole('button', { name: '선택 날짜의 가능 여부 설정', exact: true }).disabled, true);
 });
 test('month navigation clears date selection and does not save', async () => {
   await load(); const calls = []; const view = render(app({ requestJson: async (_url, options = {}) => { calls.push(options); return snapshot(); } }));
   await view.findByRole('button', { name: `${date} 일정 선택` }); chooseRange(view, date, otherDate); fireEvent.click(view.getByRole('button', { name: '다음 달' }));
-  await view.findByText('날짜를 선택해 주세요'); assert.equal(calls.filter((options) => options.method).length, 0); assert.equal(view.getByRole('button', { name: '적용', exact: true }).disabled, true);
+  await view.findByText('날짜를 선택해 주세요'); assert.equal(calls.filter((options) => options.method).length, 0); assert.equal(view.getByRole('button', { name: '선택 날짜의 가능 여부 설정', exact: true }).disabled, true);
 });
 test('owner reset still requires explicit confirmation and preserves separate permissions', async () => {
   await load(); const writes = []; const api = { requestJson: async (_url, options = {}) => { if (options.method) writes.push(options); return options.method ? { generation: 1 } : snapshot({ can_reset: true }); } };
@@ -94,7 +94,7 @@ test('late old band response is aborted and cannot replace next band state', asy
 });
 test('touch scrolling is free until selection mode, then hit-testing selects inclusive dates', async () => {
   await load(); const view = render(app({ requestJson: async () => snapshot() })); await view.findByRole('button', { name: `${date} 일정 선택` });
-  fireEvent.pointerDown(day(view, date), { pointerType: 'touch', button: 0 }); fireEvent.pointerEnter(day(view, dates[7]), { pointerType: 'touch' }); assert.equal(view.getByRole('button', { name: '적용', exact: true }).disabled, true);
+  fireEvent.pointerDown(day(view, date), { pointerType: 'touch', button: 0 }); fireEvent.pointerEnter(day(view, dates[7]), { pointerType: 'touch' }); assert.equal(view.getByRole('button', { name: '선택 날짜의 가능 여부 설정', exact: true }).disabled, true);
   fireEvent.click(view.getByLabelText(/터치 범위 선택 모드/)); const originalHit = document.elementFromPoint; document.elementFromPoint = () => day(view, dates[7]);
   try { fireEvent.pointerDown(day(view, date), { pointerType: 'touch', button: 0 }); fireEvent.pointerMove(day(view, date), { pointerType: 'touch', clientX: 30, clientY: 40 }); fireEvent.pointerUp(window); } finally { document.elementFromPoint = originalHit; }
   assert.equal(view.container.querySelectorAll('.availability-day[aria-pressed=true]').length, 8);
