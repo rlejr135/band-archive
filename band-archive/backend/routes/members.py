@@ -9,6 +9,7 @@ from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
 from storage import storage
 from media_processing import delete_original_and_audio
 from validators import validate_required_string, validate_string_length
+from legacy_read_visibility import legacy_read_scope
 
 members_bp = Blueprint('members', __name__)
 
@@ -21,6 +22,7 @@ def _get_member_or_404(id):
 def get_members():
     members = legacy_query(Member).all()
     validate_legacy_graphs(members, 'Member not found')
+    legacy_read_scope(members[0].band_id if members else legacy_band_id(), roster=True)
     return jsonify([m.to_dict() for m in members])
 
 
@@ -48,6 +50,8 @@ def create_member():
 @members_bp.route('/members/<int:id>', methods=['GET'])
 def get_member(id):
     member = _get_member_or_404(id)
+    validate_legacy_graphs([member], 'Member not found')
+    legacy_read_scope(member.band_id, roster=True)
     return jsonify(member.to_dict())
 
 

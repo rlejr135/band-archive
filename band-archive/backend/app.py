@@ -31,6 +31,7 @@ from routes.migrations import migrations_bp
 from routes.auth import auth_bp
 from routes.bands import bands_bp
 from routes.content_reads import content_reads_bp
+from routes.deletion_tasks import deletion_tasks_bp
 from config import DevelopmentConfig, validate_supabase_auth_config
 from startup_guard import assert_postgres_startup_ready, postgres_automation_allowed
 
@@ -479,6 +480,7 @@ def create_app(config_class=None, start_worker=None):
     app.register_blueprint(bands_bp)
     app.register_blueprint(content_reads_bp)
     app.register_blueprint(content_writes_bp)
+    app.register_blueprint(deletion_tasks_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
     app.register_blueprint(members_bp)
@@ -526,6 +528,9 @@ def create_app(config_class=None, start_worker=None):
     if start_worker and (not postgres_runtime or app.config.get('PG_AUDIO_WORKER_ENABLED') is True):
         from media_processing import start_worker as start_audio_worker
         start_audio_worker(app)
+    if start_worker and app.config.get('PG_R2_DELETION_WORKER_ENABLED') is True:
+        from deletion_worker import start_worker as start_deletion_worker
+        start_deletion_worker(app)
 
     return app
 

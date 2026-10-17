@@ -4,6 +4,7 @@ from extensions import db
 from models import Announcement
 from errors import NotFoundError, ValidationError
 from legacy_scope import legacy_band_id, legacy_query, validate_legacy_graph
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
 
 announcements_bp = Blueprint('announcements', __name__)
 
@@ -14,6 +15,9 @@ def get_announcement():
     if not announcement:
         return jsonify({'id': None, 'content': '', 'updated_at': None})
     validate_legacy_graph(announcement, 'Announcement not found')
+    scope = legacy_read_scope(announcement.band_id)
+    if not legacy_item_visible(scope, announcement.visibility):
+        return jsonify({'id': None, 'content': '', 'updated_at': None})
     return jsonify(announcement.to_dict())
 
 

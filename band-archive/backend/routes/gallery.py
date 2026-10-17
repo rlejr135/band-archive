@@ -9,6 +9,8 @@ from storage import storage
 from upload_helpers import prepare_upload
 from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
                         guess_content_type)
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+from v2_remaining_read_serializers import gallery_visibility
 
 gallery_bp = Blueprint('gallery', __name__)
 
@@ -20,6 +22,10 @@ def _get_image_or_404(id):
 def get_images():
     images = legacy_query(GalleryImage).order_by(GalleryImage.created_at.desc()).all()
     validate_legacy_graphs(images, 'Image not found')
+    scope = legacy_read_scope(images[0].band_id if images else legacy_band_id())
+    images = [image for image in images if legacy_item_visible(
+        scope, gallery_visibility(scope, image),
+    )]
     return jsonify([img.to_dict() for img in images])
 
 
@@ -81,4 +87,7 @@ def get_featured():
     if not image:
         return jsonify(None), 200
     validate_legacy_graphs([image], 'Image not found')
+    scope = legacy_read_scope(image.band_id)
+    if not legacy_item_visible(scope, gallery_visibility(scope, image)):
+        return jsonify(None), 200
     return jsonify(image.to_dict()), 200

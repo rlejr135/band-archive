@@ -7,6 +7,9 @@ from models import Comment, Media, PersonalLog
 from errors import NotFoundError, ValidationError
 from legacy_scope import (legacy_get_or_404, legacy_query, reject_foreign_children,
                           reject_legacy_destructive_write, validate_legacy_graphs)
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+from v2_content_serializers import media_visibility
+from v2_remaining_read_serializers import personal_log_visibility
 
 comments_bp = Blueprint('comments', __name__)
 
@@ -104,6 +107,9 @@ def _create_comment(data, media_id=None, personal_log_id=None, parent_id=None, t
 @comments_bp.route('/media/<int:media_id>/comments', methods=['GET'])
 def get_media_comments(media_id):
     media = legacy_get_or_404(Media, media_id, "Media not found")
+    scope = legacy_read_scope(media.band_id)
+    if not legacy_item_visible(scope, media_visibility(scope, media)):
+        raise NotFoundError('Media not found')
     return jsonify(_get_top_level_comments(Comment.media_id == media_id))
 
 
@@ -119,6 +125,9 @@ def create_media_comment(media_id):
 @comments_bp.route('/personal-logs/<int:log_id>/comments', methods=['GET'])
 def get_personal_log_comments(log_id):
     log = legacy_get_or_404(PersonalLog, log_id, "Personal log not found")
+    scope = legacy_read_scope(log.band_id, roster=True)
+    if not legacy_item_visible(scope, personal_log_visibility(scope, log)):
+        raise NotFoundError('Personal log not found')
     return jsonify(_get_top_level_comments(Comment.personal_log_id == log_id))
 
 

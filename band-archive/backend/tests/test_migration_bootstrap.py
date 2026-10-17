@@ -147,10 +147,11 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            assert migration_head_revision() == '20261014_14'
+            assert migration_head_revision() == '20261016_15'
             assert _version(app) == migration_head_revision()
             with db.engine.connect() as connection:
                 assert 'band_request_email_outbox' in inspect(connection).get_table_names()
+                assert 'r2_deletion_task' in inspect(connection).get_table_names()
                 assert schema_differences(connection) == []
                 assert schema_contract_differences(connection) == []
 
@@ -175,7 +176,9 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
             with pytest.raises(RuntimeError, match='Refusing to drop a populated email outbox'):
                 from alembic import command
                 command.downgrade(config, PHASE13_REVISION)
-            assert _version(app) == migration_head_revision()
+            # The empty queue downgrade completed before the populated
+            # email-outbox guard stopped the following revision rollback.
+            assert _version(app) == '20261014_14'
             with db.engine.connect() as connection:
                 assert connection.execute(text(
                     'SELECT count(*) FROM band_request_email_outbox'

@@ -9,10 +9,12 @@ class StorageClient:
     def __init__(self, app=None):
         self._client = None
         self._bucket = None
+        self._app = None
         if app:
             self.init_app(app)
 
     def init_app(self, app):
+        self._app = app
         self._bucket = app.config['S3_BUCKET_NAME']
         self._presign_expires = app.config.get('S3_PRESIGN_EXPIRES', 3600)
         # Tests replace the public methods with a local fake.  Do not let boto3
@@ -42,6 +44,22 @@ class StorageClient:
     def delete(self, key):
         """파일 삭제"""
         self._client.delete_object(Bucket=self._bucket, Key=key)
+
+    def delete_bounded(self, key):
+        """Delete with one short, non-retrying request for the durable worker."""
+        if self._app is None or self._app.testing:
+            return self.delete(key)
+        client = boto3.client(
+            's3', endpoint_url=self._app.config['S3_ENDPOINT_URL'],
+            aws_access_key_id=self._app.config['S3_ACCESS_KEY'],
+            aws_secret_access_key=self._app.config['S3_SECRET_KEY'],
+            config=BotoConfig(signature_version='s3v4', connect_timeout=3, read_timeout=10,
+                              retries={'total_max_attempts': 1, 'mode': 'standard'}),
+        )
+        try:
+            client.delete_object(Bucket=self._bucket, Key=key)
+        finally:
+            client.close()
 
     def generate_url(self, key, expires_in=None):
         """presigned URL 생성 (기본: config S3_PRESIGN_EXPIRES)"""

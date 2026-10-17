@@ -156,6 +156,8 @@ class BandRequestEmailOutbox(db.Model):
         db.Integer, db.ForeignKey('band_creation_request.id', ondelete='SET NULL'),
         nullable=True,
     )
+
+
     recipient_user_id = db.Column(
         db.Integer, db.ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True,
     )
@@ -198,6 +200,58 @@ class BandRequestEmailOutbox(db.Model):
         db.UniqueConstraint('request_id', name='uq_band_request_email_request'),
         db.Index('ix_band_request_email_due', 'status', 'next_attempt_at', 'id'),
         db.Index('ix_band_request_email_lease', 'status', 'lease_until', 'id'),
+    )
+
+
+class R2DeletionTask(db.Model):
+    """Private, durable state for one user-requested file deletion."""
+    __tablename__ = 'r2_deletion_task'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
+    resource_type = db.Column(db.String(32), nullable=False)
+    resource_id = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='queued', server_default='queued')
+    # Contains only server-resolved, validated keys while incomplete. The
+    # final DB transaction nulls it together with deleting the target row.
+    object_keys = db.Column(db.JSON(none_as_null=True), nullable=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    available_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                             default=lambda: datetime.now(timezone.utc))
+    lease_token = db.Column(db.String(64), nullable=True)
+    lease_expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    error_code = db.Column(db.String(40), nullable=False, default='none', server_default='none')
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('band_id', 'resource_type', 'resource_id',
+                            name='uq_r2_deletion_task_target'),
+        db.CheckConstraint("resource_type IN ('media', 'personal_log', 'gallery')",
+                           name='ck_r2_deletion_task_resource_type'),
+        db.CheckConstraint("status IN ('queued', 'processing', 'retry_wait', 'blocked', 'completed')",
+                           name='ck_r2_deletion_task_status'),
+        db.CheckConstraint('attempt_count >= 0', name='ck_r2_deletion_task_attempt_count'),
+        db.CheckConstraint('resource_id > 0', name='ck_r2_deletion_task_resource_id'),
+        db.CheckConstraint("error_code IN ('none', 'storage_unavailable', 'key_conflict', 'invalid_key', 'unknown')",
+                           name='ck_r2_deletion_task_error_code'),
+        db.CheckConstraint(
+            "(status = 'completed' AND object_keys IS NULL) OR "
+            "(status != 'completed' AND object_keys IS NOT NULL)",
+            name='ck_r2_deletion_task_manifest_state',
+        ),
+        db.CheckConstraint(
+            "(status = 'processing' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+            "(status != 'processing' AND lease_token IS NULL AND lease_expires_at IS NULL)",
+            name='ck_r2_deletion_task_lease_state',
+        ),
+        db.Index('ix_r2_deletion_task_due', 'status', 'available_at', 'created_at'),
+        db.Index('ix_r2_deletion_task_lease', 'status', 'lease_expires_at'),
     )
 
 
@@ -321,15 +375,17 @@ class Song(db.Model):
         db.Index('ix_song_band_visibility_id', 'band_id', 'visibility', 'id'),
     )
 
-    def to_dict(self, media_viewer_votes=None):
+    def to_dict(self, media_viewer_votes=None, *, media_items=None, rehearsal_items=None):
         media_viewer_votes = media_viewer_votes or {}
         # Keep the pre-vote list order for Song itself.  Votes only rank media
         # within a song; ties retain the historical ID/insertion order.
+        media_source = self.media_files if media_items is None else media_items
+        rehearsal_source = self.rehearsals if rehearsal_items is None else rehearsal_items
         media = sorted(
-            (item for item in self.media_files if item.band_id == self.band_id),
+            (item for item in media_source if item.band_id == self.band_id),
             key=lambda item: (-item.vote_score, item.id),
         )
-        rehearsals = [item for item in self.rehearsals if item.band_id == self.band_id]
+        rehearsals = [item for item in rehearsal_source if item.band_id == self.band_id]
         return {
             'id': self.id,
             'title': self.title,
@@ -752,7 +808,9 @@ class Rehearsal(db.Model):
         db.Index('ix_rehearsal_band_visibility_date_id', 'band_id', 'visibility', 'date', 'id'),
     )
 
-    def to_dict(self):
+    def to_dict(self, *, song_items=None, media_items=None):
+        songs = self.songs if song_items is None else song_items
+        media = self.media_files if media_items is None else media_items
         return {
             'id': self.id,
             'title': self.title,
@@ -766,8 +824,8 @@ class Rehearsal(db.Model):
             'memo': self.memo,
             'color': self.color,
             'songs': [{'id': s.id, 'title': s.title, 'artist': s.artist}
-                      for s in self.songs if s.band_id == self.band_id],
-            'media_count': sum(media.band_id == self.band_id for media in self.media_files),
+                      for s in songs if s.band_id == self.band_id],
+            'media_count': sum(item.band_id == self.band_id for item in media),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -814,12 +872,23 @@ class GalleryImage(db.Model):
 
     def to_dict(self):
         from storage import storage
+        from deletion_service import is_pending_deletion
+        pending = is_pending_deletion('gallery', self.id, self.band_id)
+        visible = True
+        from flask import has_request_context
+        if has_request_context():
+            from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+            from v2_remaining_read_serializers import gallery_visibility
+            scope = legacy_read_scope(self.band_id)
+            visible = legacy_item_visible(scope, gallery_visibility(scope, self))
         return {
             'id': self.id,
             'filename': self.original_filename or self.filename,
             'file_size': self.file_size,
             'is_featured': self.is_featured,
-            'url': storage.generate_url(self.object_key or f'gallery/{self.filename}'),
+            'url': None if pending or not visible else storage.generate_url(
+                self.object_key or f'gallery/{self.filename}',
+            ),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 

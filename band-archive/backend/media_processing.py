@@ -13,7 +13,7 @@ import time
 from sqlalchemy import func
 
 from extensions import db
-from models import Media, PersonalLog
+from models import Media, PersonalLog, R2DeletionTask
 from storage import storage
 
 SAFE_ERRORS = {
@@ -128,8 +128,42 @@ def select_media_source_keys(record, key_prefix):
     return {'original': original_key, 'video_720': video_720_key, 'audio': audio_key}
 
 
-def processing_fields(record, key_prefix):
+def processing_fields(record, key_prefix, *, scope=None):
     """Shared JSON fields; callers retain their established endpoint names."""
+    from deletion_service import is_pending_deletion
+    from flask import has_request_context
+
+    resource_type = 'personal_log' if isinstance(record, PersonalLog) else 'media'
+    hidden = False
+    if has_request_context():
+        # Legacy model serializers are also used inside nested v1 responses.
+        # Recheck visibility here so a caller cannot mint a private child's
+        # presigned URL merely by serializing its public parent.
+        from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+        from v2_remaining_read_serializers import personal_log_visibility
+        from v2_content_serializers import media_visibility
+
+        if scope is None:
+            scope = legacy_read_scope(
+                record.band_id, roster=resource_type == 'personal_log',
+            )
+        visibility = (
+            personal_log_visibility(scope, record)
+            if resource_type == 'personal_log'
+            else media_visibility(scope, record)
+        )
+        hidden = not legacy_item_visible(scope, visibility)
+
+    if hidden or is_pending_deletion(resource_type, record.id, record.band_id):
+        return {
+            'url': None, 'original_url': None,
+            'original_pruned': bool(getattr(record, 'original_pruned_at', None)),
+            'video_720_url': None, 'video_720_filename': None,
+            'video_720_source_etag': None, 'video_720_profile': None,
+            'video_720_completed_at': None, 'audio_url': None,
+            'transcoding_status': getattr(record, 'transcoding_status', None),
+            'audio_filename': None, 'error': None,
+        }
     original_pruned = bool(getattr(record, 'original_pruned_at', None))
     source_keys = select_media_source_keys(record, key_prefix)
     original_url = storage.generate_url(source_keys['original']) if source_keys['original'] else None
@@ -265,6 +299,10 @@ def retry_audio_processing_record(app, record, spec):
         raise ValueError(f'Only video {spec.label}s can be retried.')
     if getattr(record, 'original_pruned_at', None):
         raise RuntimeError('The original video was pruned, so audio extraction cannot be retried.')
+    if R2DeletionTask.query.filter_by(
+        band_id=record.band_id, resource_type=spec.kind, resource_id=record.id,
+    ).filter(R2DeletionTask.status != 'completed').first():
+        raise RuntimeError('Deletion is pending; audio processing cannot be retried.')
     if record.transcoding_status in ('queued', 'processing'):
         raise RuntimeError('Audio processing is already queued or running.')
     record.transcoding_status = 'queued'
@@ -298,7 +336,13 @@ def _claim_media(media_id=None):
 def _claim_record(spec, record_id=None):
     model = spec.model
     now = utcnow()
-    query = model.query.filter_by(transcoding_status='queued', file_type='video')
+    pending_delete = R2DeletionTask.query.filter(
+        R2DeletionTask.band_id == model.band_id,
+        R2DeletionTask.resource_type == spec.kind,
+        R2DeletionTask.resource_id == model.id,
+        R2DeletionTask.status != 'completed',
+    ).exists()
+    query = model.query.filter_by(transcoding_status='queued', file_type='video').filter(~pending_delete)
     if record_id is not None:
         query = query.filter_by(id=record_id)
     else:
@@ -380,17 +424,40 @@ def process_claimed_record(spec, record_id, config):
     record = db.session.get(spec.model, record_id)
     if not record or record.transcoding_status != 'processing':
         return
+    if R2DeletionTask.query.filter_by(
+        band_id=record.band_id, resource_type=spec.kind, resource_id=record.id,
+    ).filter(R2DeletionTask.status != 'completed').first():
+        return
+    source_key = getattr(record, 'object_key', None) or f'{spec.key_prefix}/{record.filename}'
+    if not source_key.startswith((f'bands/{record.band_id}/{spec.key_prefix}/', f'{spec.key_prefix}/')):
+        return
+    output_key = f"{source_key.rsplit('/', 1)[0]}/{audio_filename_for(source_key.rsplit('/', 1)[-1])}"
     try:
         audio_filename = extract_m4a_audio(
             record.filename, source_prefix=spec.key_prefix,
+            source_key=source_key, destination_key=output_key,
             timeout_seconds=config['AUDIO_PROCESSING_TIMEOUT_SECONDS'],
             heartbeat=lambda: _heartbeat_record(spec, record_id),
             heartbeat_seconds=config['AUDIO_PROCESSING_HEARTBEAT_SECONDS'],
         )
-        if not storage.exists(f'{spec.key_prefix}/{audio_filename}'):
+        if not storage.exists(output_key):
             raise AudioProcessingError('output_missing')
-        record = db.session.get(spec.model, record_id)
+        query = spec.model.query.filter_by(id=record_id, transcoding_status='processing')
+        if db.engine.dialect.name == 'postgresql':
+            query = query.with_for_update()
+        record = query.one_or_none()
+        if record is None:
+            db.session.rollback()
+            storage.delete(output_key)
+            return
+        if R2DeletionTask.query.filter_by(
+            band_id=record.band_id, resource_type=spec.kind, resource_id=record.id,
+        ).filter(R2DeletionTask.status != 'completed').first():
+            db.session.rollback()
+            storage.delete(output_key)
+            return
         record.audio_filename = audio_filename
+        record.audio_object_key = output_key
         record.transcoding_status = 'completed'
         record.processing_error = None
         record.processing_completed_at = utcnow()
@@ -447,19 +514,20 @@ def _audio_codec(input_path, timeout_seconds):
     return codec
 
 
-def extract_m4a_audio(filename, source_prefix='media', timeout_seconds=1800, heartbeat=None, heartbeat_seconds=15):
+def extract_m4a_audio(filename, source_prefix='media', timeout_seconds=1800, heartbeat=None,
+                      heartbeat_seconds=15, source_key=None, destination_key=None):
     """Download one source video and upload exactly one M4A derivative to R2."""
     output_filename = audio_filename_for(filename)
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = os.path.join(tmpdir, filename)
         output_path = os.path.join(tmpdir, output_filename)
         with open(input_path, 'wb') as source:
-            storage.download(f'{source_prefix}/{filename}', source)
+            storage.download(source_key or f'{source_prefix}/{filename}', source)
         codec = _audio_codec(input_path, timeout_seconds)
         command = ['ffmpeg', '-y', '-i', input_path, '-vn', '-map', '0:a:0']
         command.extend(['-c:a', 'copy'] if codec == 'aac' else ['-c:a', 'aac', '-b:a', '128k'])
         command.append(output_path)
         _run_command(command, timeout_seconds, heartbeat, heartbeat_seconds)
         with open(output_path, 'rb') as output:
-            storage.upload(f'{source_prefix}/{output_filename}', output, content_type='audio/mp4')
+            storage.upload(destination_key or f'{source_prefix}/{output_filename}', output, content_type='audio/mp4')
     return output_filename

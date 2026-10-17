@@ -19,8 +19,10 @@ from band_access import BandReadScope, MembershipAudience, RequestAudience, cont
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote, PersonalLog,
-                    Rehearsal, Song, SongSuggestion, SongSuggestionVote)
+from models import (Announcement, AppUser, Band, BandMembership, Comment, DirectUploadSession,
+                    GalleryImage, Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
+                    PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
+                    SongSuggestion, SongSuggestionVote)
 from validators import validate_external_http_url
 from v2_content_serializers import (
     media_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
@@ -207,6 +209,18 @@ def _can_delete(scope, item):
 
 def _owned_or_404(model, record_id, band_id, message='Resource not found', *, lock=False):
     query = model.query.filter(model.id == record_id, model.band_id == band_id)
+    resource_type = {
+        Media: 'media', PersonalLog: 'personal_log', GalleryImage: 'gallery',
+        Song: 'song', Rehearsal: 'rehearsal', Member: 'member', Comment: 'comment',
+        SongSuggestion: 'suggestion', Announcement: 'announcement',
+    }.get(model)
+    if resource_type:
+        query = query.filter(~db.session.query(R2DeletionTask.id).filter(
+            R2DeletionTask.band_id == band_id,
+            R2DeletionTask.resource_type == resource_type,
+            R2DeletionTask.resource_id == model.id,
+            R2DeletionTask.status != 'completed',
+        ).exists())
     if lock and db.engine.dialect.name != 'sqlite':
         query = query.with_for_update()
     item = query.one_or_none()
@@ -232,6 +246,18 @@ def _assert_song_delete_safe(song):
         raise NotFoundError('Song not found')
     if Media.query.filter_by(song_id=song.id, band_id=song.band_id).first() is not None:
         raise ValidationError('Delete the song media individually before deleting this song.', 409)
+    if song.sheet_music_object_key or song.sheet_music:
+        raise ValidationError('Delete the song sheet music before deleting this song.', 409)
+    live_multipart = MultipartUploadSession.query.filter(
+        MultipartUploadSession.song_id == song.id,
+        MultipartUploadSession.status.in_(('initiated', 'completing', 'expiring', 'aborting')),
+    ).first()
+    live_direct = DirectUploadSession.query.filter(
+        DirectUploadSession.song_id == song.id,
+        DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
+    ).first()
+    if live_multipart or live_direct:
+        raise ValidationError('Wait for attached uploads to finish cleanup before deleting this song.', 409)
     if any(rehearsal.band_id != song.band_id for rehearsal in song.rehearsals):
         raise NotFoundError('Song not found')
 
@@ -241,6 +267,16 @@ def _assert_rehearsal_delete_safe(rehearsal):
         raise NotFoundError('Rehearsal not found')
     if Media.query.filter_by(rehearsal_id=rehearsal.id, band_id=rehearsal.band_id).first() is not None:
         raise ValidationError('Delete the rehearsal media individually before deleting this rehearsal.', 409)
+    live_multipart = MultipartUploadSession.query.filter(
+        MultipartUploadSession.rehearsal_id == rehearsal.id,
+        MultipartUploadSession.status.in_(('initiated', 'completing', 'expiring', 'aborting')),
+    ).first()
+    live_direct = DirectUploadSession.query.filter(
+        DirectUploadSession.rehearsal_id == rehearsal.id,
+        DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
+    ).first()
+    if live_multipart or live_direct:
+        raise ValidationError('Wait for attached uploads to finish cleanup before deleting this rehearsal.', 409)
     if any(song.band_id != rehearsal.band_id for song in rehearsal.songs):
         raise NotFoundError('Rehearsal not found')
 
@@ -390,6 +426,9 @@ def delete_song(band_id, song_id):
         if not _can_delete(scope, song):
             raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         _assert_song_delete_safe(song)
+        from deletion_service import cleanup_terminal_parent_upload_sessions
+        if not cleanup_terminal_parent_upload_sessions('song', song):
+            raise ValidationError('Upload history is not in a safe terminal state.', 409)
         audit('content.song.deleted', user, band, song)
         db.session.delete(song)
         return jsonify({'deleted': True, 'id': song_id})
@@ -466,6 +505,9 @@ def delete_rehearsal(band_id, rehearsal_id):
         if not _can_delete(scope, rehearsal):
             raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         _assert_rehearsal_delete_safe(rehearsal)
+        from deletion_service import cleanup_terminal_parent_upload_sessions
+        if not cleanup_terminal_parent_upload_sessions('rehearsal', rehearsal):
+            raise ValidationError('Upload history is not in a safe terminal state.', 409)
         audit('content.rehearsal.deleted', user, band, rehearsal)
         db.session.delete(rehearsal)
         return jsonify({'deleted': True, 'id': rehearsal_id})
@@ -831,18 +873,15 @@ def put_announcement_v2(band_id):
 @content_writes_bp.delete('/announcement')
 @authenticated_write
 def clear_announcement_v2(band_id):
-    """Clear the singleton announcement without removing its band row."""
+    """Clear the singleton announcement synchronously; never enqueue text."""
     def operation():
-        scope, band, _membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        rows_query = Announcement.query.filter_by(band_id=band.id)
-        if db.engine.dialect.name != 'sqlite':
-            rows_query = rows_query.with_for_update()
-        rows = rows_query.order_by(Announcement.id.asc()).limit(2).all()
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
+        if membership.role != 'owner' and user.is_platform_admin is not True:
+            raise ValidationError('Only an active verified owner may clear the announcement.', 403)
+        rows = Announcement.query.filter_by(band_id=band.id).order_by(Announcement.id.asc()).limit(2).all()
         if len(rows) != 1:
             raise NotFoundError('Announcement not found')
         announcement = rows[0]
-        if not _can_delete(scope, announcement):
-            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
         announcement.content = ''
         audit('content.announcement.cleared', user, band, announcement)
         return jsonify({'announcement': serialize_announcement(scope, announcement), 'cleared': True})

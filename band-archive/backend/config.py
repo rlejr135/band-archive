@@ -135,6 +135,13 @@ class Config:
     # upload sessions. These independent opt-ins do not affect SQLite.
     PG_AUDIO_WORKER_ENABLED = _env_flag('PG_AUDIO_WORKER_ENABLED')
     PG_MULTIPART_RECOVERY_ENABLED = _env_flag('PG_MULTIPART_RECOVERY_ENABLED')
+    # File deletion has a separate bounded worker. PostgreSQL startup never
+    # enables it implicitly; deploy config must opt in after schema review.
+    PG_R2_DELETION_WORKER_ENABLED = _env_flag('PG_R2_DELETION_WORKER_ENABLED')
+    R2_DELETION_WORKER_POLL_SECONDS = _env_int('R2_DELETION_WORKER_POLL_SECONDS', 5, minimum=1)
+    R2_DELETION_WORKER_BATCH_SIZE = _env_int('R2_DELETION_WORKER_BATCH_SIZE', 2, minimum=1)
+    R2_DELETION_WORKER_LEASE_SECONDS = _env_int('R2_DELETION_WORKER_LEASE_SECONDS', 120, minimum=30)
+    R2_DELETION_MAX_ATTEMPTS = _env_int('R2_DELETION_MAX_ATTEMPTS', 8, minimum=1)
 
     # Supabase Auth is intentionally optional during the v1 compatibility
     # period.  Production enables it only after every required setting is set;

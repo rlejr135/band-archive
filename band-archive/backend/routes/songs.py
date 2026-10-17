@@ -29,6 +29,8 @@ from validators import (
     guess_content_type,
     ALLOWED_EXTENSIONS,
 )
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+from v2_content_serializers import media_visibility, rehearsal_visibility, song_visibility
 
 songs_bp = Blueprint('songs', __name__)
 
@@ -46,7 +48,42 @@ def _get_legacy_media_or_404(media_id):
 
 
 def _song_with_media_viewer_votes(song, voter_hash=None):
-    return song.to_dict(media_viewer_votes=media_viewer_votes(song.media_files, voter_hash))
+    scope = legacy_read_scope(song.band_id)
+    if not _visible_song(scope, song):
+        raise NotFoundError('Song not found')
+    return _legacy_song_payload(scope, song, voter_hash)
+
+
+def _visible_song(scope, song):
+    return legacy_item_visible(scope, song_visibility(scope, song))
+
+
+def _legacy_song_payload(scope, song, vote_hash=None, viewer_votes=None):
+    visible_media = []
+    for media in song.media_files:
+        if media.band_id != song.band_id:
+            continue
+        if legacy_item_visible(scope, media_visibility(scope, media)):
+            from deletion_service import is_pending_deletion
+            if not is_pending_deletion('media', media.id, media.band_id):
+                visible_media.append(media)
+    visible_rehearsals = [
+        rehearsal for rehearsal in song.rehearsals
+        if rehearsal.band_id == song.band_id
+        and legacy_item_visible(scope, rehearsal_visibility(scope, rehearsal))
+    ]
+    votes = viewer_votes if viewer_votes is not None else media_viewer_votes(visible_media, vote_hash)
+    return song.to_dict(media_viewer_votes=votes, media_items=visible_media,
+                        rehearsal_items=visible_rehearsals)
+
+
+def _legacy_song_or_404(song_id):
+    song = _get_legacy_song_or_404(song_id)
+    validate_legacy_graph(song, 'Song not found')
+    scope = legacy_read_scope(song.band_id)
+    if not _visible_song(scope, song):
+        raise NotFoundError('Song not found')
+    return song, scope
 
 
 
@@ -77,16 +114,24 @@ def get_songs():
     # Restore the pre-song-vote list behavior: no vote-score ordering.
     songs = query.order_by(Song.id.asc()).all()
     validate_legacy_graphs(songs, 'Song not found')
-    viewer_votes = media_viewer_votes(
-        [media for song in songs for media in song.media_files], voter_hash_value,
-    )
-    return jsonify([song.to_dict(media_viewer_votes=viewer_votes) for song in songs])
+    scope = legacy_read_scope(songs[0].band_id if songs else _legacy_band_id())
+    songs = [song for song in songs if _visible_song(scope, song)]
+    all_visible_media = [media for song in songs for media in _visible_media_for_song(scope, song)]
+    viewer_votes = media_viewer_votes(all_visible_media, voter_hash_value)
+    return jsonify([_legacy_song_payload(scope, song, voter_hash_value, viewer_votes) for song in songs])
+
+
+def _visible_media_for_song(scope, song):
+    from deletion_service import is_pending_deletion
+    return [media for media in song.media_files if media.band_id == song.band_id
+            and legacy_item_visible(scope, media_visibility(scope, media))
+            and not is_pending_deletion('media', media.id, media.band_id)]
 
 
 @songs_bp.route('/songs/<int:id>', methods=['GET'])
 def get_song(id):
-    song = _get_legacy_song_or_404(id)
-    return jsonify(_song_with_media_viewer_votes(song, voter_hash()))
+    song, scope = _legacy_song_or_404(id)
+    return jsonify(_legacy_song_payload(scope, song, voter_hash()))
 
 
 @songs_bp.route('/songs/<int:id>/vote', methods=['PATCH'])
@@ -265,12 +310,16 @@ def upload_sheet_music(id):
 
 @songs_bp.route('/songs/<int:id>/media', methods=['GET'])
 def get_media_list(id):
-    _get_legacy_song_or_404(id)
+    song, scope = _legacy_song_or_404(id)
     voter_hash_value = voter_hash()
     media_files = legacy_query(Media).filter(Media.song_id == id).order_by(
         Media.vote_score.desc(), Media.id.asc(),
     ).all()
     validate_legacy_graphs(media_files, 'Media not found')
+    from deletion_service import is_pending_deletion
+    media_files = [media for media in media_files if media.band_id == song.band_id
+                   and legacy_item_visible(scope, media_visibility(scope, media))
+                   and not is_pending_deletion('media', media.id, media.band_id)]
     viewer_votes = media_viewer_votes(media_files, voter_hash_value)
     return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 
@@ -431,6 +480,13 @@ def delete_media(media_id):
 @songs_bp.route('/media/<int:media_id>/processing', methods=['GET'])
 def get_media_processing(media_id):
     media = _get_legacy_media_or_404(media_id)
+    validate_legacy_graph(media, 'Media not found')
+    scope = legacy_read_scope(media.band_id)
+    if not legacy_item_visible(scope, media_visibility(scope, media)):
+        raise NotFoundError('Media not found')
+    from deletion_service import is_pending_deletion
+    if is_pending_deletion('media', media.id, media.band_id):
+        raise NotFoundError('Media not found')
     return jsonify(processing_status_response(media, 'media'))
 
 
@@ -454,9 +510,15 @@ def uploaded_file(filename):
     # real legacy-scoped record whose currently allowed original source is the
     # exact legacy key.  This also rejects pruned originals without signing.
     matching_records = legacy_query(Media).filter(Media.filename == filename).all()
+    from deletion_service import is_pending_deletion
     validate_legacy_graphs(matching_records, 'Media source not found')
-    if not any(select_media_source_keys(media, 'media')['original'] == requested_key
-               for media in matching_records):
+    matching_records = [record for record in matching_records if not is_pending_deletion(
+        'media', record.id, record.band_id,
+    ) and legacy_item_visible(
+        legacy_read_scope(record.band_id),
+        media_visibility(legacy_read_scope(record.band_id), record),
+    )]
+    if not any(select_media_source_keys(media, 'media')['original'] == requested_key for media in matching_records):
         raise NotFoundError("Media source not found")
     url = storage.generate_url(requested_key)
     return redirect(url)

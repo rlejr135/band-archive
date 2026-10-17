@@ -21,6 +21,9 @@ from validators import (
     guess_content_type,
     ALLOWED_EXTENSIONS,
 )
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+from v2_content_serializers import media_visibility, song_visibility
+from v2_content_serializers import rehearsal_visibility
 
 rehearsals_bp = Blueprint('rehearsals', __name__)
 
@@ -31,6 +34,25 @@ def _legacy_band_id():
 
 def _get_legacy_rehearsal_or_404(rehearsal_id):
     return legacy_get_or_404(Rehearsal, rehearsal_id, 'Rehearsal not found')
+
+
+def _visible_rehearsal_payload(scope, rehearsal):
+    songs = [song for song in rehearsal.songs if song.band_id == rehearsal.band_id
+             and legacy_item_visible(scope, song_visibility(scope, song))]
+    from deletion_service import is_pending_deletion
+    media = [item for item in rehearsal.media_files if item.band_id == rehearsal.band_id
+             and legacy_item_visible(scope, media_visibility(scope, item))
+             and not is_pending_deletion('media', item.id, item.band_id)]
+    return rehearsal.to_dict(song_items=songs, media_items=media)
+
+
+def _visible_rehearsal_or_404(rehearsal_id):
+    rehearsal = _get_legacy_rehearsal_or_404(rehearsal_id)
+    validate_legacy_graph(rehearsal, 'Rehearsal not found')
+    scope = legacy_read_scope(rehearsal.band_id)
+    if not legacy_item_visible(scope, rehearsal_visibility(scope, rehearsal)):
+        raise NotFoundError('Rehearsal not found')
+    return rehearsal, scope
 
 
 def _parse_date(value, field_name):
@@ -80,13 +102,17 @@ def get_rehearsals():
 
     rehearsals = query.order_by(Rehearsal.date.asc()).all()
     validate_legacy_graphs(rehearsals, 'Rehearsal not found')
-    return jsonify([r.to_dict() for r in rehearsals])
+    scope = legacy_read_scope(rehearsals[0].band_id if rehearsals else _legacy_band_id())
+    rehearsals = [rehearsal for rehearsal in rehearsals if legacy_item_visible(
+        scope, rehearsal_visibility(scope, rehearsal),
+    )]
+    return jsonify([_visible_rehearsal_payload(scope, item) for item in rehearsals])
 
 
 @rehearsals_bp.route('/rehearsals/<int:id>', methods=['GET'])
 def get_rehearsal(id):
-    rehearsal = _get_legacy_rehearsal_or_404(id)
-    return jsonify(rehearsal.to_dict())
+    rehearsal, scope = _visible_rehearsal_or_404(id)
+    return jsonify(_visible_rehearsal_payload(scope, rehearsal))
 
 
 @rehearsals_bp.route('/rehearsals', methods=['POST'])
@@ -205,11 +231,15 @@ def delete_rehearsal(id):
 
 @rehearsals_bp.route('/rehearsals/<int:id>/media', methods=['GET'])
 def get_rehearsal_media(id):
-    rehearsal = _get_legacy_rehearsal_or_404(id)
+    rehearsal, scope = _visible_rehearsal_or_404(id)
     media_files = legacy_query(Media).filter(Media.rehearsal_id == rehearsal.id).order_by(
         Media.vote_score.desc(), Media.id.asc(),
     ).all()
     validate_legacy_graphs(media_files, 'Media not found')
+    from deletion_service import is_pending_deletion
+    media_files = [media for media in media_files if media.band_id == rehearsal.band_id
+                   and legacy_item_visible(scope, media_visibility(scope, media))
+                   and not is_pending_deletion('media', media.id, media.band_id)]
     viewer_votes = media_viewer_votes(media_files, voter_hash())
     return jsonify([media.to_dict(viewer_vote=viewer_votes.get(media.id, 0)) for media in media_files])
 

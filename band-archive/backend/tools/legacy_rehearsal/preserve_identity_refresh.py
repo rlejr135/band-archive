@@ -38,6 +38,9 @@ PROTECTED_TABLES = frozenset({
     "app_user", "auth_bootstrap_state", "band", "band_membership",
     "legacy_band_claim_token", "audit_event", "tenant_backfill_state",
     "band_request_email_outbox",
+    # Deletion tasks are operational history and must never be refreshed from
+    # a source snapshot or emptied as part of identity-preserving refresh.
+    "r2_deletion_task",
 })
 REFRESHED_TABLES = frozenset({
     "announcement", "gallery_image", "member", "rehearsal", "song",

@@ -43,6 +43,10 @@ def _ttl(visibility):
 
 
 def _personal_playback(log, visibility):
+    from deletion_service import is_pending_deletion
+    if is_pending_deletion('personal_log', log.id, log.band_id):
+        return {'url': None, 'video_url': None, 'audio_url': None,
+                'original_pruned': bool(getattr(log, 'original_pruned_at', None))}
     sources = select_media_source_keys(log, 'personal_logs')
     # Personal logs do not currently have a 720p field.  The shared source
     # selector still provides canonical-first, pruned-safe original/audio
@@ -113,14 +117,16 @@ def serialize_personal_comment(scope, comment, visibility):
 
 
 def serialize_gallery_image(scope, image):
+    from deletion_service import is_pending_deletion
     visibility = gallery_visibility(scope, image)
     key = image.object_key or (f'gallery/{image.filename}' if image.filename else None)
+    pending = is_pending_deletion('gallery', image.id, image.band_id)
     return {
         'id': image.id,
         'file_size': image.file_size,
         'is_featured': bool(image.is_featured),
         'created_at': _iso(image.created_at),
-        'url': storage.generate_url(key, expires_in=_ttl(visibility)) if key else None,
+        'url': storage.generate_url(key, expires_in=_ttl(visibility)) if key and not pending else None,
         **_flags(scope, image, visibility),
     }
 

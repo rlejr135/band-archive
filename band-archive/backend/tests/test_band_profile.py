@@ -206,7 +206,7 @@ def test_sqlite_profile_update_serializes_with_concurrent_ownership_transfer(tmp
             owner = AppUser(supabase_user_id='11111111-1111-1111-1111-111111111111',
                             email='owner@example.com')
             admin = AppUser(supabase_user_id='22222222-2222-2222-2222-222222222222',
-                            email='admin@example.com')
+                            email='admin@example.com', email_verified=True)
             band = Band(name='Race', slug='profile-race', description='original')
             db.session.add_all((owner, admin, band))
             db.session.flush()

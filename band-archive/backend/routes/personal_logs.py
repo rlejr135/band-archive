@@ -19,6 +19,8 @@ from validators import (
     generate_secure_filename,
     detect_file_type,
 )
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
+from v2_remaining_read_serializers import personal_log_visibility
 
 personal_logs_bp = Blueprint('personal_logs', __name__)
 
@@ -35,14 +37,28 @@ def _get_log_or_404(log_id):
     return legacy_get_or_404(PersonalLog, log_id, "Personal log not found")
 
 
+def _get_visible_log_or_404(log_id):
+    log = _get_log_or_404(log_id)
+    validate_legacy_graphs([log], 'Personal log not found')
+    scope = legacy_read_scope(log.band_id, roster=True)
+    if not legacy_item_visible(scope, personal_log_visibility(scope, log)):
+        raise NotFoundError('Personal log not found')
+    return log
+
+
 
 @personal_logs_bp.route('/members/<int:member_id>/logs', methods=['GET'])
 def get_logs(member_id):
-    _get_member_or_404(member_id)
+    member = _get_member_or_404(member_id)
+    validate_legacy_graphs([member], 'Member not found')
+    scope = legacy_read_scope(member.band_id, roster=True)
     logs = legacy_query(PersonalLog).filter(PersonalLog.member_id == member_id).order_by(
         PersonalLog.created_at.desc(),
     ).all()
     validate_legacy_graphs(logs, 'Personal log not found')
+    logs = [log for log in logs if legacy_item_visible(
+        scope, personal_log_visibility(scope, log),
+    )]
     return jsonify([log.to_dict() for log in logs])
 
 
@@ -105,7 +121,7 @@ def delete_log(log_id):
 
 @personal_logs_bp.route('/personal-logs/<int:log_id>/processing', methods=['GET'])
 def get_log_processing(log_id):
-    log = _get_log_or_404(log_id)
+    log = _get_visible_log_or_404(log_id)
     return jsonify(processing_status_response(log, 'personal_logs'))
 
 
@@ -126,9 +142,18 @@ def serve_personal_log_file(filename):
     """하위 호환: presigned URL로 리다이렉트"""
     requested_key = f'personal_logs/{filename}'
     records = legacy_query(PersonalLog).filter(PersonalLog.filename == filename).all()
+    from deletion_service import is_pending_deletion
     validate_legacy_graphs(records, 'Personal log source not found')
+    records = [record for record in records if not is_pending_deletion(
+        'personal_log', record.id, record.band_id,
+    )]
+    readable = []
+    for record in records:
+        scope = legacy_read_scope(record.band_id, roster=True)
+        if legacy_item_visible(scope, personal_log_visibility(scope, record)):
+            readable.append(record)
     if not any(select_media_source_keys(record, 'personal_logs')['original'] == requested_key
-               for record in records):
+               for record in readable):
         raise NotFoundError('Personal log source not found')
     url = storage.generate_url(requested_key)
     return redirect(url)

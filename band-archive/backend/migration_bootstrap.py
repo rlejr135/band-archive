@@ -37,6 +37,7 @@ PHASE11_REVISION = '20261004_11'
 PHASE12_REVISION = '20261006_12'
 PHASE13_REVISION = '20261010_13'
 PHASE14_REVISION = '20261014_14'
+PHASE15_REVISION = '20261016_15'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -46,7 +47,8 @@ DATA_API_MANAGED_TABLES_PHASE13 = (
     'personal_log_multipart_upload_session', 'rehearsal', 'rehearsal_songs', 'song', 'song_suggestion',
     'song_suggestion_vote', 'song_vote', 'tenant_backfill_state',
 )
-DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13, 'band_request_email_outbox')))
+DATA_API_MANAGED_TABLES_PHASE14 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13, 'band_request_email_outbox')))
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -169,12 +171,20 @@ def _remove_future_email_outbox(metadata):
     return metadata
 
 
+def _remove_future_r2_deletion_task(metadata):
+    """Keep all immutable snapshots before revision 15 structurally exact."""
+    if 'r2_deletion_task' in metadata.tables:
+        metadata.remove(metadata.tables['r2_deletion_task'])
+    return metadata
+
+
 def phase4_metadata():
     """Exact revision-05 snapshot before Phase 6 contracts tenant reads."""
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -213,6 +223,7 @@ def phase6_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -226,6 +237,7 @@ def phase7_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -238,6 +250,7 @@ def phase8_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -249,6 +262,7 @@ def phase9_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase10_direct_expiry_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -261,6 +275,7 @@ def phase10_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -272,6 +287,7 @@ def phase11_metadata():
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
+    _remove_future_r2_deletion_task(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
@@ -288,6 +304,20 @@ def phase12_metadata():
     # metadata; future schema changes must update this builder deliberately.
     metadata = phase11_metadata()
     db.metadata.tables['legacy_band_claim_token'].to_metadata(metadata)
+    return metadata
+
+
+def phase14_metadata():
+    """Exact immutable revision-14 snapshot, before deletion tasks existed."""
+    metadata = phase12_metadata()
+    db.metadata.tables['band_request_email_outbox'].to_metadata(metadata)
+    return metadata
+
+
+def phase15_metadata():
+    """Exact revision-15 structural snapshot with the private deletion queue."""
+    metadata = phase14_metadata()
+    db.metadata.tables['r2_deletion_task'].to_metadata(metadata)
     return metadata
 
 
@@ -668,7 +698,15 @@ def _expected_check_constraints(table, dialect=None):
             constraint.sqltext, dialect,
             allow_or=(table.name, constraint.name) in {
                 ('direct_upload_session', 'ck_direct_upload_session_target'),
+                ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
+                ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
             },
+            allow_not_equal=(table.name, constraint.name) in {
+                ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
+                ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
+            },
+            allow_greater_equal=(table.name, constraint.name) ==
+            ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
         )
         if getattr(dialect, 'name', None) == 'postgresql':
             canonical = _normalize_postgres_check_for_table(canonical, table)
@@ -697,7 +735,15 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             constraint['sqltext'], dialect,
             allow_or=(table_name, constraint.get('name')) in {
                 ('direct_upload_session', 'ck_direct_upload_session_target'),
+                ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
+                ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
             },
+            allow_not_equal=(table_name, constraint.get('name')) in {
+                ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
+                ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
+            },
+            allow_greater_equal=(table_name, constraint.get('name')) ==
+            ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
         )
         if getattr(dialect, 'name', None) == 'postgresql' and table is not None:
             canonical = _normalize_postgres_check_for_table(canonical, table)
@@ -783,7 +829,9 @@ def _postgres_check_in_values(value):
     return frozenset(parsed)
 
 
-def _canonical_postgres_check_constraint(value, allow_or=False):
+def _canonical_postgres_check_constraint(
+    value, allow_or=False, allow_not_equal=False, allow_greater_equal=False,
+):
     """Canonicalize the reflected, literal-only PostgreSQL CHECK grammar.
 
     This intentionally recognizes only equality, IN/ANY literal checks, and
@@ -802,15 +850,23 @@ def _canonical_postgres_check_constraint(value, allow_or=False):
         if not allow_or:
             return None
         canonical_branches = [
-            _canonical_postgres_check_and_branch(branch, allow_null_tests=True) for branch in branches
+            _canonical_postgres_check_and_branch(
+                branch, allow_null_tests=True, allow_not_equal=allow_not_equal,
+                allow_greater_equal=allow_greater_equal,
+            ) for branch in branches
         ]
         if any(branch is None for branch in canonical_branches) or len(set(canonical_branches)) != len(canonical_branches):
             return None
         return ('or', frozenset(canonical_branches))
-    return _canonical_postgres_check_and_branch(expression, allow_null_tests=allow_or)
+    return _canonical_postgres_check_and_branch(
+        expression, allow_null_tests=allow_or, allow_not_equal=allow_not_equal,
+        allow_greater_equal=allow_greater_equal,
+    )
 
 
-def _canonical_postgres_check_and_branch(value, allow_null_tests=False):
+def _canonical_postgres_check_and_branch(
+    value, allow_null_tests=False, allow_not_equal=False, allow_greater_equal=False,
+):
     atoms = _split_postgres_predicate_and(value)
     if not atoms:
         return None
@@ -836,6 +892,27 @@ def _canonical_postgres_check_and_branch(value, allow_null_tests=False):
                 return None
             parsed.append((column[1], 'in', parsed_values, column[2], None))
             continue
+        if allow_not_equal:
+            not_equal_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '<>')
+            if not_equal_parts is None or len(not_equal_parts) != 2:
+                not_equal_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '!=')
+            if not_equal_parts is not None and len(not_equal_parts) == 2:
+                left = _postgres_check_operand(not_equal_parts[0])
+                right = _postgres_check_operand(not_equal_parts[1])
+                if not left or not right or left[0] != 'column' or right[0] != 'literal':
+                    return None
+                parsed.append((left[1], '!=', right[1], left[2], right[2]))
+                continue
+        if allow_greater_equal:
+            greater_equal_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '>=')
+            if greater_equal_parts is not None and len(greater_equal_parts) == 2:
+                left = _postgres_check_operand(greater_equal_parts[0])
+                right = _postgres_check_operand(greater_equal_parts[1])
+                if (not left or not right or left[0] != 'column' or right[0] != 'literal'
+                        or not re.fullmatch(r'-?\d+', right[1])):
+                    return None
+                parsed.append((left[1], '>=', right[1], left[2], right[2]))
+                continue
         greater_parts = _split_postgres_top_level(_strip_sql_parentheses(atom), '>')
         if greater_parts is not None and len(greater_parts) == 2:
             left = _postgres_check_operand(greater_parts[0])
@@ -940,9 +1017,14 @@ def _normalize_postgres_check_for_table(canonical, table):
     return frozenset(normalized)
 
 
-def _canonical_check_constraint(value, dialect, allow_or=False):
+def _canonical_check_constraint(
+    value, dialect, allow_or=False, allow_not_equal=False, allow_greater_equal=False,
+):
     if getattr(dialect, 'name', None) == 'postgresql':
-        return _canonical_postgres_check_constraint(str(value), allow_or=allow_or)
+        return _canonical_postgres_check_constraint(
+            str(value), allow_or=allow_or, allow_not_equal=allow_not_equal,
+            allow_greater_equal=allow_greater_equal,
+        )
     return _normalize_sql(value)
 
 
@@ -1519,6 +1601,10 @@ def metadata_for_recorded_revision(revision):
         # is identical to revision 12. Keep this historical snapshot explicit
         # so upgrades from the recorded 13 head can be safely preflighted.
         return phase12_metadata()
+    if revision == PHASE14_REVISION:
+        return phase14_metadata()
+    if revision == PHASE15_REVISION:
+        return phase15_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

@@ -133,6 +133,10 @@ def scope_with_band_visibility(scope, band):
 
 def media_playback(media, visibility):
     """Sign only playable sources, using a TTL derived from effective access."""
+    from deletion_service import is_pending_deletion
+    if is_pending_deletion('media', media.id, media.band_id):
+        return {'url': None, 'video_url': None, 'audio_url': None,
+                'original_pruned': bool(media.original_pruned_at)}
     ttl = MEMBERS_URL_TTL if visibility == MEMBERS else PUBLIC_URL_TTL
     sources = select_media_source_keys(media, 'media')
     video_url = None

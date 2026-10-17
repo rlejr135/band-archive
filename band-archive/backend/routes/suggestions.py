@@ -7,6 +7,7 @@ from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
                           reject_legacy_destructive_write, validate_legacy_graphs)
 from validators import validate_string_length
 from validators import validate_external_http_url
+from legacy_read_visibility import legacy_item_visible, legacy_read_scope
 
 suggestions_bp = Blueprint('suggestions', __name__)
 
@@ -21,6 +22,10 @@ def get_suggestions():
         (SongSuggestion.thumbs_up - SongSuggestion.thumbs_down).desc()
     ).all()
     validate_legacy_graphs(suggestions, 'Suggestion not found')
+    scope = legacy_read_scope(suggestions[0].band_id if suggestions else legacy_band_id())
+    suggestions = [suggestion for suggestion in suggestions if legacy_item_visible(
+        scope, suggestion.visibility,
+    )]
     return jsonify([s.to_dict() for s in suggestions])
 
 

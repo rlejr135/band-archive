@@ -14,7 +14,7 @@ from band_access import (
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
-                    Member, PersonalLog, Rehearsal, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
+                    Member, PersonalLog, Rehearsal, R2DeletionTask, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
@@ -35,6 +35,13 @@ MAX_PAGE_LIMIT = 100
 MAX_PAGE_OFFSET = 100_000
 KOREA_TZ = timezone(timedelta(hours=9))
 SONG_STATUSES = ('Practice', 'Completed', 'OnHold')
+
+
+def _not_pending_delete(entity, resource_type):
+    return ~exists().where(and_(R2DeletionTask.band_id == entity.band_id,
+                                R2DeletionTask.resource_type == resource_type,
+                                R2DeletionTask.resource_id == entity.id,
+                                R2DeletionTask.status != 'completed'))
 
 
 @content_reads_bp.before_request
@@ -98,7 +105,8 @@ def _song_query(scope, *, with_rehearsals=True):
     return visible_query(
         query, Song, scope,
         parent_visibility=scope.band_visibility,
-    ).filter(*_song_graph_sql(scope), _creator_is_scoped_sql(Song, scope))
+    ).filter(*_song_graph_sql(scope), _creator_is_scoped_sql(Song, scope),
+             _not_pending_delete(Song, 'song'))
 
 
 def _rehearsal_query(scope, *, with_songs=True):
@@ -107,7 +115,8 @@ def _rehearsal_query(scope, *, with_songs=True):
     return visible_query(
         query, Rehearsal, scope,
         parent_visibility=scope.band_visibility,
-    ).filter(*_rehearsal_graph_sql(scope), _creator_is_scoped_sql(Rehearsal, scope))
+    ).filter(*_rehearsal_graph_sql(scope), _creator_is_scoped_sql(Rehearsal, scope),
+             _not_pending_delete(Rehearsal, 'rehearsal'))
 
 
 def _dashboard_rehearsal_summary_map(scope, rehearsals):
@@ -247,7 +256,8 @@ def _roster_visible_or_404(scope):
 
 def _member_or_404(member_id, scope):
     _roster_visible_or_404(scope)
-    member = Member.query.filter(Member.id == member_id, Member.band_id == scope.band_id).one_or_none()
+    member = Member.query.filter(Member.id == member_id, Member.band_id == scope.band_id,
+                                 _not_pending_delete(Member, 'member')).one_or_none()
     if member is None:
         raise NotFoundError('Resource not found')
     return member
@@ -259,6 +269,7 @@ def _personal_logs_query(scope):
     return visible_query(PersonalLog.query.options(selectinload(PersonalLog.member)), PersonalLog, scope,
                          parent_visibility=scope.band_visibility).filter(
                              member_is_scoped, _creator_is_scoped_sql(PersonalLog, scope),
+                             _not_pending_delete(PersonalLog, 'personal_log'),
                          )
 
 
@@ -354,7 +365,7 @@ def _rehearsal_graph_sql(scope):
 
 def _song_or_404(song_id, scope):
     song = visible_query(Song.query, Song, scope, parent_visibility=scope.band_visibility).filter(
-        Song.id == song_id, *_song_graph_sql(scope),
+        Song.id == song_id, *_song_graph_sql(scope), _not_pending_delete(Song, 'song'),
     ).one_or_none()
     if song is None or not visible_to_scope(scope, song_visibility(scope, song)):
         raise NotFoundError('Resource not found')
@@ -363,7 +374,7 @@ def _song_or_404(song_id, scope):
 
 def _rehearsal_or_404(rehearsal_id, scope):
     rehearsal = visible_query(Rehearsal.query, Rehearsal, scope, parent_visibility=scope.band_visibility).filter(
-        Rehearsal.id == rehearsal_id, *_rehearsal_graph_sql(scope),
+        Rehearsal.id == rehearsal_id, *_rehearsal_graph_sql(scope), _not_pending_delete(Rehearsal, 'rehearsal'),
     ).one_or_none()
     if rehearsal is None or not visible_to_scope(scope, rehearsal_visibility(scope, rehearsal)):
         raise NotFoundError('Resource not found')
@@ -371,7 +382,11 @@ def _rehearsal_or_404(rehearsal_id, scope):
 
 
 def _media_or_404(media_id, scope):
-    media = visible_object_or_404(Media, media_id, scope, parent_visibility=scope.band_visibility)
+    media = visible_query(Media.query, Media, scope, parent_visibility=scope.band_visibility).filter(
+        Media.id == media_id, _not_pending_delete(Media, 'media'), *_media_graph_sql(scope),
+    ).one_or_none()
+    if media is None:
+        raise NotFoundError('Resource not found')
     # The schema contract prevents cross-band graph edges.  Preserve a
     # fail-closed response if a hand-modified database violates that contract.
     if not graph_is_scoped(scope, media):
@@ -411,6 +426,7 @@ def list_song_media(band_id, song_id):
         Media.query.options(selectinload(Media.rehearsal), selectinload(Media.song).selectinload(Song.rehearsals)),
         Media, scope, parent_visibility=scope.band_visibility,
     ).filter(Media.song_id == song.id, *_media_graph_sql(scope))
+    query = query.filter(_not_pending_delete(Media, 'media'))
     page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
     viewer_votes = _page_viewer_votes(scope, page)
     return jsonify({'media': [serialize_media(scope, item, viewer_votes.get(item.id, 0)) for item in page], 'pagination': pagination})
@@ -446,6 +462,7 @@ def list_rehearsal_media(band_id, rehearsal_id):
         Media.query.options(selectinload(Media.rehearsal), selectinload(Media.song).selectinload(Song.rehearsals)),
         Media, scope, parent_visibility=scope.band_visibility,
     ).filter(Media.rehearsal_id == rehearsal.id, *_media_graph_sql(scope))
+    query = query.filter(_not_pending_delete(Media, 'media'))
     page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
     viewer_votes = _page_viewer_votes(scope, page)
     return jsonify({'media': [serialize_media(scope, item, viewer_votes.get(item.id, 0)) for item in page], 'pagination': pagination})
@@ -471,6 +488,7 @@ def get_media_comments(band_id, media_id):
     comments = Comment.query.filter(
         Comment.band_id == scope.band_id,
         Comment.media_id == media.id,
+        _not_pending_delete(Comment, 'comment'),
     )
     page, pagination = _page_query(comments, (Comment.created_at.asc(), Comment.id.asc()), limit, offset)
     return jsonify({'comments': [serialize_comment(scope, item, visibility, include_replies=False) for item in page],
@@ -590,7 +608,7 @@ def list_members(band_id):
     scope = _scope(band_id)
     _roster_visible_or_404(scope)
     limit, offset = _page_request()
-    query = Member.query.filter(Member.band_id == scope.band_id)
+    query = Member.query.filter(Member.band_id == scope.band_id, _not_pending_delete(Member, 'member'))
     page, pagination = _page_query(query, (Member.name.asc(), Member.id.asc()), limit, offset)
     return jsonify({'members': [serialize_member(scope, item) for item in page], 'pagination': pagination})
 
@@ -627,7 +645,8 @@ def get_personal_log_comments(band_id, log_id):
     limit, offset = _page_request()
     log = _personal_log_or_404(log_id, scope)
     page, pagination = _page_query(
-        Comment.query.filter(*_personal_comment_graph_sql(scope, log.id)),
+        Comment.query.filter(*_personal_comment_graph_sql(scope, log.id),
+                             _not_pending_delete(Comment, 'comment')),
         (Comment.created_at.asc(), Comment.id.asc()), limit, offset,
     )
     visibility = personal_log_visibility(scope, log)
@@ -639,6 +658,7 @@ def _gallery_query(scope):
     return visible_query(GalleryImage.query, GalleryImage, scope,
                          parent_visibility=scope.band_visibility).filter(
                              _creator_is_scoped_sql(GalleryImage, scope),
+                             _not_pending_delete(GalleryImage, 'gallery'),
                          )
 
 
@@ -654,6 +674,7 @@ def _featured_gallery_rows_query(scope):
     return GalleryImage.query.filter(
         GalleryImage.band_id == scope.band_id,
         GalleryImage.is_featured.is_(True),
+        _not_pending_delete(GalleryImage, 'gallery'),
     ).order_by(GalleryImage.id.asc()).limit(2)
 
 
@@ -689,6 +710,7 @@ def _announcement_query(scope):
     return visible_query(Announcement.query, Announcement, scope,
                          parent_visibility=scope.band_visibility).filter(
                              _creator_is_scoped_sql(Announcement, scope),
+                             _not_pending_delete(Announcement, 'announcement'),
                          )
 
 
@@ -710,6 +732,7 @@ def list_suggestions(band_id):
     query = visible_query(SongSuggestion.query, SongSuggestion, scope,
                           parent_visibility=scope.band_visibility).filter(
                               _creator_is_scoped_sql(SongSuggestion, scope),
+                              _not_pending_delete(SongSuggestion, 'suggestion'),
                           )
     score = (func.coalesce(SongSuggestion.thumbs_up, 0) - func.coalesce(SongSuggestion.thumbs_down, 0))
     page, pagination = _page_query(query, (score.desc(), SongSuggestion.id.asc()), limit, offset)
