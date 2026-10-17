@@ -40,7 +40,17 @@
 ## 미확정 사항
 
 - 공급자별 실제 처리·백업·로그 보유 사실과 정책 본문 공표 가능 상태.
-- 계정 삭제의 이메일 접수·본인 확인 후 수동 처리 운영 절차(사용자 확인 요청 중).
-- Turnstile 위젯 공개 Site Key, 허용 호스트와 실제 서버 검증 활성화.
+- 실제 Supabase CAPTCHA 서버 검증 활성화 및 누락·오류 토큰 거부 확인. Secret Key는 채팅·저장소에 보관하지 않는다.
+
+## 구현·운영 진행 기록 (2026-10-17)
+
+- 계정 삭제는 문의 이메일 접수·본인 확인 후 운영자가 수동 처리하는 방식으로 사용자 승인 완료. 자동 계정 삭제 기능은 이번 범위가 아니다.
+- Turnstile 공개 Site Key 수령 및 운영 API 설정 완료. 웹 호스트 `band-archive.pages.dev`에서 위젯 준비 후 Supabase Auth CAPTCHA를 별도로 활성화한다. UI 활성화만으로 서버 봇 차단이 완료된 것은 아니다.
+- 가입 소개 UI `8503b96`, 정책·CAPTCHA UI `acb3273`, BE·migration `b2648f7`로 분리 커밋했다.
+- BE 전체 840개, FE 전체 235개 테스트 및 FE 빌드 통과. 운영 절차 자체의 소유 로컬 PostgreSQL 백업·복원·적용·실패 롤백 테스트 10개도 통과했다.
+- 운영 public 스키마 v15를 읽기 전용 백업하고 로컬 복원·v16 적용을 검증한 후, 승인된 운영 스키마 `20261017_16` 적용 및 새 연결의 시작 검증을 완료했다. 기존 행 데이터·기존 카탈로그 보존, 기존 소개 NULL, 새 receipt 0건, RLS·직접 접근 차단을 확인했다. 백업과 상세 증거는 무시된 비공개 `backend/tools/.state` 아래 보관하며 Git에 포함하지 않는다.
+- Fly v57 배포 완료: NRT 머신 `080e444f9643d8`, shared 2 CPU / 2048MB, 기존 `/data` 볼륨 유지. 이미지 `sha256:d63efe325ea43aa36eb657a6db2527fd1bc3ffb267291acef90da8e871d20456`. `/members`, `/api/v2/policy` HTTP 200, 운영 CORS, 미인증 receipt API 401, 최신 시작 로그를 확인했다. 별도 Fly health check는 정의되어 있지 않아 배포 smoke check와 실제 HTTP로 검증했다.
+- 정책 본문 공표와 필수 동의는 아직 비활성이다. 공급자별 실제 처리·보관 정보를 확정한 뒤 버전·cutoff와 함께 별도 활성화해야 한다. 준비 중 화면을 최종 개인정보처리방침으로 간주하지 않는다.
+- 이번 작업은 기존 R2 객체 삭제·재변환·스케일 변경·실제 SMTP 활성화를 하지 않는다. FE는 승인된 일반 push 후 Cloudflare 실제 번들·화면을 확인한다.
 
 참고: [Supabase CAPTCHA](https://supabase.com/docs/guides/auth/auth-captcha), [개인정보위 필수동의 관행 안내](https://pipc.go.kr/np/cop/bbs/selectBoardArticle.do?bbsId=BS074&mCode=C020010000&nttId=10566).
