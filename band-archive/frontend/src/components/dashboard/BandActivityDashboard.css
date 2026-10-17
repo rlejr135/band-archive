@@ -2,7 +2,7 @@
 .activity-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .activity-header h1 { margin: 0; }
 .activity-header .workspace-description { margin: 8px 0 0; }
-.activity-all-songs { flex: 0 0 auto; text-decoration: none; }
+.activity-all-songs { flex: 0 0 auto; }
 .activity-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .activity-stat { min-width: 0; padding: 16px; border-radius: 10px; background: var(--background-color); display: flex; flex-direction: column; gap: 4px; }
 .activity-stat > strong { color: var(--primary-color); font-size: 1.7rem; line-height: 1.1; }
@@ -13,14 +13,16 @@
 .activity-status strong { color: var(--text-primary); }
 .activity-card { min-width: 0; padding: 18px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--surface-color); }
 .activity-card h2 { margin: 0; font-size: 1.1rem; color: var(--text-primary); }
-.activity-card-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.activity-card-heading > a,.activity-rehearsal a,.activity-practice-list a { color: var(--primary-color); }
-.activity-card-heading > a { font-size: .9rem; white-space: nowrap; }
+.activity-card-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.activity-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.activity-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; max-width: 100%; box-sizing: border-box; padding: 9px 14px; font: inherit; font-size: .9rem; font-weight: 600; line-height: 1.4; text-align: center; text-decoration: none; overflow-wrap: anywhere; }
+.activity-action:focus-visible { outline: 3px solid var(--primary-color); outline-offset: 3px; }
+.activity-action:disabled { opacity: .6; cursor: not-allowed; }
+.activity-rehearsal a,.activity-practice-list a { color: var(--primary-color); }
 .activity-muted { color: var(--text-secondary); }
 .activity-announcement { background: var(--background-color); }
 .activity-announcement-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.activity-text-button { padding: 0; border: 0; background: none; color: var(--primary-color); text-decoration: underline; cursor: pointer; font: inherit; }
-.activity-announcement > .activity-text-button { margin-top: 9px; }
+.activity-announcement > .activity-action { margin-top: 12px; }
 .activity-inline-error,.activity-error { color: var(--accent-color); }
 .activity-inline-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .activity-error { padding: 12px; }

@@ -103,9 +103,9 @@ const AnnouncementCard = ({ announcement, api, bandId, workspaceKey }) => {
     <div className="activity-card-heading"><h2 id="activity-announcement-title">공지사항</h2></div>
     {announcement?.content ? <>
       <p className="activity-announcement-content">{content}</p>
-      {announcement.content_truncated && !expanded && <button type="button" className="activity-text-button" onClick={() => { setExpanded(true); loadFullAnnouncement(); }}>전체 공지 보기</button>}
+      {announcement.content_truncated && !expanded && <button type="button" className="secondary-btn activity-action" onClick={() => { setExpanded(true); loadFullAnnouncement(); }}>전체 공지 보기</button>}
       {fullState.loading && <p className="activity-muted" aria-live="polite">전체 공지를 불러오는 중입니다…</p>}
-      {fullState.error && <div className="activity-inline-error" role="alert"><span>{fullState.error}</span><button type="button" className="activity-text-button" onClick={loadFullAnnouncement}>다시 시도</button></div>}
+      {fullState.error && <div className="activity-inline-error" role="alert"><span>{fullState.error}</span><button type="button" className="secondary-btn activity-action" onClick={loadFullAnnouncement}>다시 시도</button></div>}
     </> : <p className="activity-muted">현재 공개된 공지사항이 없습니다.</p>}
   </section>;
 };
@@ -235,14 +235,14 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
     return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><p aria-live="polite">대시보드를 불러오는 중입니다…</p></section>;
   }
   if (state.error && !dashboard) {
-    return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><div className="activity-error" role="alert"><p>{state.error}</p><button type="button" className="secondary-btn" onClick={() => { setState({ month, loading: true, error: '', pageLoading: false, pageError: '', dashboard: null }); requestPage({ targetMonth: month, offset: 0 }); }}>다시 시도</button></div></section>;
+    return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><div className="activity-error" role="alert"><p>{state.error}</p><button type="button" className="secondary-btn activity-action" onClick={() => { setState({ month, loading: true, error: '', pageLoading: false, pageError: '', dashboard: null }); requestPage({ targetMonth: month, offset: 0 }); }}>다시 시도</button></div></section>;
   }
 
   return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title">
-    <header className="activity-header"><div><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p></div><Link className="secondary-btn activity-all-songs" to={`/bands/${encodeURIComponent(band.slug)}/songs`}>전체 곡 보기</Link></header>
+    <header className="activity-header"><div><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p></div><Link className="secondary-btn activity-action activity-all-songs" to={`/bands/${encodeURIComponent(band.slug)}/songs`}>전체 곡 보기</Link></header>
 
     <section className="activity-card activity-featured" aria-labelledby="activity-featured-title">
-      <div className="activity-card-heading"><h2 id="activity-featured-title">대표 사진</h2><Link to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>갤러리</Link></div>
+      <div className="activity-card-heading"><h2 id="activity-featured-title">대표 사진</h2><Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>갤러리</Link></div>
       {dashboard?.featured_gallery ? <DashboardImage image={dashboard.featured_gallery} kind="featured" workspaceKey={workspaceKey} month={month} failedUrls={failedUrls} onError={handleImageError} /> : <div className="activity-image-placeholder activity-image-placeholder-featured" role="img" aria-label="등록된 대표 사진이 없습니다">대표 사진이 없습니다</div>}
     </section>
 
@@ -256,7 +256,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
 
     <div className="activity-main-grid">
       <section className="activity-card activity-practice" aria-labelledby="activity-practice-title">
-        <div className="activity-card-heading"><h2 id="activity-practice-title">연습할 곡</h2><Link to={`/bands/${encodeURIComponent(band.slug)}/songs`}>전체 목록</Link></div>
+        <div className="activity-card-heading"><h2 id="activity-practice-title">연습할 곡</h2><Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/songs`}>전체 목록</Link></div>
         {practiceSongs.length ? <ol className="activity-practice-list">{practiceSongs.map((song) => {
           const href = songHref(band, song);
           return <li key={song.id}>{href ? <Link to={href}><strong>{song.title || '제목 없음'}</strong><span>{song.artist || '아티스트 정보 없음'}</span></Link> : <div><strong>{song.title || '제목 없음'}</strong><span>{song.artist || '아티스트 정보 없음'}</span></div>}</li>;
@@ -264,7 +264,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
       </section>
 
       <section className="activity-card activity-upcoming" aria-labelledby="activity-upcoming-title">
-        <div className="activity-card-heading"><h2 id="activity-upcoming-title">다가오는 합주</h2><div>{activeAvailabilityMember(band) && <Link to={`/bands/${encodeURIComponent(band.slug)}/availability`}>일정 조율하기 · </Link>}<Link to={`/bands/${encodeURIComponent(band.slug)}/rehearsals`}>전체 일정</Link></div></div>
+        <div className="activity-card-heading"><h2 id="activity-upcoming-title">다가오는 합주</h2><div className="activity-card-actions">{activeAvailabilityMember(band) && <Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/availability`}>일정 조율하기</Link>}<Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/rehearsals`}>전체 일정</Link></div></div>
         {upcoming.length ? <div className="activity-rehearsal-list">{upcoming.map((rehearsal) => <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal} compact />)}</div> : <p className="activity-muted">예정된 합주가 없습니다.</p>}
       </section>
 
@@ -287,12 +287,12 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
             {selectedItems.length ? <div className="activity-rehearsal-list">{selectedItems.map((rehearsal) => <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal} />)}</div> : !pagination.has_more && <p className="activity-muted">이 날짜에 등록된 합주가 없습니다.</p>}
           </div>
         </div>
-        {state.pageError && <div className="activity-inline-error" role="alert"><span>{state.pageError}</span><button type="button" className="activity-text-button" onClick={() => requestPage({ targetMonth: month, offset: pagination.next_offset ?? loadedCount, mode: 'append' })}>다시 시도</button></div>}
-        {pagination.has_more && <button type="button" className="secondary-btn activity-load-more" disabled={state.pageLoading} onClick={() => requestPage({ targetMonth: month, offset: pagination.next_offset ?? loadedCount, mode: 'append' })}>{state.pageLoading ? '합주를 불러오는 중…' : `이 달 합주 더 불러오기 (${loadedCount}/${totalMonthItems})`}</button>}
+        {state.pageError && <div className="activity-inline-error" role="alert"><span>{state.pageError}</span><button type="button" className="secondary-btn activity-action" onClick={() => requestPage({ targetMonth: month, offset: pagination.next_offset ?? loadedCount, mode: 'append' })}>다시 시도</button></div>}
+        {pagination.has_more && <button type="button" className="secondary-btn activity-action activity-load-more" disabled={state.pageLoading} onClick={() => requestPage({ targetMonth: month, offset: pagination.next_offset ?? loadedCount, mode: 'append' })}>{state.pageLoading ? '합주를 불러오는 중…' : `이 달 합주 더 불러오기 (${loadedCount}/${totalMonthItems})`}</button>}
       </section>
 
       <section className="activity-card activity-gallery" aria-labelledby="activity-gallery-title">
-        <div className="activity-card-heading"><h2 id="activity-gallery-title">최근 갤러리</h2><Link to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>사진 더 보기</Link></div>
+        <div className="activity-card-heading"><h2 id="activity-gallery-title">최근 갤러리</h2><Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>사진 더 보기</Link></div>
         {recentGallery.length ? <div className="activity-gallery-grid">{recentGallery.map((image) => <DashboardImage key={image.id} image={image} kind="recent" workspaceKey={workspaceKey} month={month} failedUrls={failedUrls} onError={handleImageError} />)}</div> : <p className="activity-muted">표시할 사진이 없습니다.</p>}
       </section>
     </div>

@@ -102,6 +102,70 @@ test('activity dashboard loads one scoped v2 bundle and bounds each summary sect
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('dashboard section actions share button styling and keep member-only scheduling and content links intact', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  let membership = { status: 'active', role: 'member' };
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes('/by-slug/action-band')) return response({ band: { id: 401, slug: 'action-band', name: '활동 밴드', membership } });
+    if (value.includes('/bands/401/dashboard?')) return response({ dashboard: dashboardData(monthForTest(), { announcement: { id: 901, content: '요약 공지', content_truncated: true } }) });
+    return response({});
+  };
+  try {
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/action-band' }));
+    await view.findByText('요약 공지');
+    const actions = [
+      ['전체 곡 보기', 'songs'], ['갤러리', 'gallery'], ['전체 목록', 'songs'],
+      ['일정 조율하기', 'availability'], ['전체 일정', 'rehearsals'], ['사진 더 보기', 'gallery'],
+    ];
+    for (const [name, path] of actions) {
+      const namedLink = [...view.container.querySelectorAll('.band-activity-dashboard a')].find((entry) => entry.textContent === name);
+      assert.ok(namedLink);
+      assert.equal(namedLink?.getAttribute('href'), `/bands/action-band/${path}`);
+      assert.ok(namedLink.classList.contains('secondary-btn'));
+      assert.ok(namedLink.classList.contains('activity-action'));
+    }
+    const scheduleGroup = view.container.querySelector('.activity-upcoming .activity-card-actions');
+    assert.equal(scheduleGroup.querySelectorAll('a').length, 2);
+    assert.equal(scheduleGroup.textContent.includes('·'), false);
+    assert.ok(view.getByRole('button', { name: '전체 공지 보기' }).classList.contains('activity-action'));
+    const songLink = view.getByRole('link', { name: '연습곡 1 밴드' });
+    assert.equal(songLink.getAttribute('href'), '/bands/action-band/songs?song=501');
+    assert.equal(songLink.classList.contains('activity-action'), false);
+    assert.equal(view.container.querySelector('.react-calendar__tile.activity-action'), null);
+    view.unmount();
+    for (const next of [null, { status: 'pending', role: 'member' }]) {
+      membership = next;
+      const visitorView = render(createElement(ReadOnlyApp, { entry: '/bands/action-band' }));
+      await visitorView.findByText('요약 공지');
+      assert.equal(visitorView.queryByRole('link', { name: '일정 조율하기' }), null);
+      assert.ok(visitorView.getByRole('link', { name: '전체 일정' }).classList.contains('activity-action'));
+      visitorView.unmount();
+    }
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('dashboard load failure offers the same styled retry action and recovers without changing band', async () => {
+  await load(); const previousFetch = globalThis.fetch; let failed = true;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes('/by-slug/retry-band')) return response({ band: { id: 401, slug: 'retry-band', name: '재시도 밴드', membership: null } });
+    if (value.includes('/bands/401/dashboard?')) return failed ? response({}, 500) : response({ dashboard: dashboardData(monthForTest()) });
+    return response({});
+  };
+  try {
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/retry-band' }));
+    const retry = await view.findByRole('button', { name: '다시 시도' });
+    assert.ok(retry.classList.contains('secondary-btn'));
+    assert.ok(retry.classList.contains('activity-action'));
+    failed = false;
+    await userEvent.click(retry);
+    await view.findByText('이번 달 공지입니다.');
+    assert.equal(view.getByRole('link', { name: '전체 곡 보기' }).getAttribute('href'), '/bands/retry-band/songs');
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('workspace management navigation follows both server permissions, not membership or platform role labels', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
