@@ -42,6 +42,56 @@ const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => c
   ),
 );
 
+test('active member roster marks self, edits optional profile and refreshes cards without administrator edits', async () => {
+  await load(); const previousFetch = globalThis.fetch; let listReads = 0; const writes = [];
+  let mine = { id: 41, band_id: 340, name: '내 이름', biography: '', positions: [], profile_revision: 0, custom_position: '', is_self: true, can_edit_profile: true, can_delete: false };
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/profile-band')) return response({ band: { id: 340, slug: 'profile-band', name: '프로필 밴드', permissions: { can_view_roster: true }, membership: { id: 1, status: 'ACTIVE', role: 'owner' } } });
+    if (url.includes('/bands/340/members?')) { listReads += 1; return response({ members: [mine, { id: 42, name: '다른 멤버', biography: '다른 소개', positions: ['DRUMS'], is_self: false, can_edit_profile: false }], pagination: { has_more: false } }); }
+    if (url.endsWith('/bands/340/members/me')) {
+      if (options.method === 'PATCH') { writes.push(JSON.parse(options.body)); mine = { ...mine, ...writes.at(-1), profile_revision: 1 }; }
+      return response({ member: mine });
+    }
+    return response({});
+  };
+  try {
+    const member = { user: { id: 'self' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/profile-band/members', authValue: member }));
+    await view.findByText('내 이름'); assert.equal(view.getAllByText('나').length, 1); assert.equal(view.getAllByRole('button', { name: '내 프로필 수정' }).length, 2);
+    assert.match(view.getByText('다른 멤버').closest('article').textContent, /드럼/);
+    assert.equal(view.getByText('다른 멤버').closest('article').querySelector('button'), null);
+    await userEvent.click(view.getAllByRole('button', { name: '내 프로필 수정' })[0]);
+    await view.findByLabelText('간단한 소개'); await userEvent.type(view.getByLabelText('간단한 소개'), '함께 연주해요');
+    await userEvent.click(view.getByRole('checkbox', { name: '베이스', exact: true }));
+    await userEvent.click(view.getByRole('button', { name: '저장', exact: true }));
+    await view.findByText('내 프로필을 저장했습니다.'); await view.findByText('함께 연주해요');
+    assert.equal(listReads, 2); assert.equal(writes.length, 1); assert.deepEqual(writes[0].positions, ['BASS']);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('self detail updates its biography immediately while other member profile remains read only', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  let mine = { id: 51, band_id: 341, name: '내 상세', biography: '기존 소개', positions: ['VOCAL'], profile_revision: 1, custom_position: '', is_self: true, can_edit_profile: true, can_delete: false };
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/profile-detail')) return response({ band: { id: 341, slug: 'profile-detail', name: '상세 밴드', permissions: { can_view_roster: true }, membership: { id: 1, status: 'ACTIVE' } } });
+    if (url.includes('/logs?')) return response({ logs: [], pagination: { has_more: false } });
+    if (url.endsWith('/members/me')) { if (options.method === 'PATCH') mine = { ...mine, ...JSON.parse(options.body), profile_revision: 2 }; return response({ member: mine }); }
+    if (url.endsWith('/members/51')) return response({ member: mine });
+    if (url.endsWith('/members/52')) return response({ member: { id: 52, name: '읽기 전용', biography: '다른 사람', positions: ['KEYBOARD'], is_self: false, can_edit_profile: false, membership_status: 'inactive' } });
+    return response({});
+  };
+  try {
+    const member = { user: { id: 'self' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/profile-detail/members/51', authValue: member }));
+    await view.findByText('기존 소개'); await userEvent.click(view.getByRole('button', { name: '내 프로필 수정' }));
+    await view.findByLabelText('간단한 소개'); await userEvent.setup({ document: dom.window.document }).clear(view.getByLabelText('간단한 소개')); await userEvent.type(view.getByLabelText('간단한 소개'), '변경한 소개');
+    await userEvent.click(view.getByRole('button', { name: '저장', exact: true })); await view.findByText('변경한 소개'); assert.equal(view.queryByRole('button', { name: '삭제' }), null);
+    view.unmount();
+    const other = render(createElement(ReadOnlyApp, { entry: '/bands/profile-detail/members/52', authValue: member }));
+    await other.findByText('다른 사람'); await other.findByText(/현재 밴드 멤버가 아닙니다/); assert.equal(other.queryByRole('button', { name: '내 프로필 수정' }), null);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('visitor roster denial is non-inferential and does not expose a member navigation link', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, options = {}) => { calls.push({ url, method: options.method || 'GET' }); if (url.includes('/by-slug/hidden-roster')) return response({ band: { id: 301, slug: 'hidden-roster', name: '공개 밴드', permissions: { can_view_roster: false }, membership: null } }); if (url.includes('/members?')) return response({}, 404); if (url.includes('/gallery?') || url.includes('/suggestions?')) return response({ pagination: { has_more: false } }); return response({}); };

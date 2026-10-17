@@ -17,6 +17,7 @@ export const bandWorkspacePaths = {
   mediaCommentsWrite: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments`,
   comment: (bandId, commentId) => `${bandBase(bandId)}/comments/${Number(commentId)}`,
   members: (bandId, page) => `${bandBase(bandId)}/members${pageQuery(page)}`,
+  myMemberProfile: (bandId) => `${bandBase(bandId)}/members/me`,
   member: (bandId, memberId) => `${bandBase(bandId)}/members/${Number(memberId)}`,
   memberLogs: (bandId, memberId, page) => `${bandBase(bandId)}/members/${Number(memberId)}/logs${pageQuery(page)}`,
   personalLogProcessing: (bandId, logId) => `${bandBase(bandId)}/personal-logs/${Number(logId)}/processing`,

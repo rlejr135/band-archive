@@ -1,0 +1,15 @@
+.member-profile-editor { padding: 20px; margin: 18px 0; border: 1px solid var(--border-color); border-radius: var(--radius-default); background: var(--surface-color); }
+.member-profile-editor h2 { margin: 0; }
+.member-profile-editor h2:focus { outline: none; }
+.member-profile-fields { display: grid; gap: 12px; min-width: 0; }
+.member-position-options { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.member-position-options .check-row { min-height: 44px; cursor: pointer; }
+.member-position-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.member-position-tags span { padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border-color); color: var(--text-secondary); font-size: .85rem; overflow-wrap: anywhere; }
+.member-profile-summary { min-width: 0; }
+.member-profile-summary .member-biography { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); }
+.member-biography-compact { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.member-self-badge { display: inline-flex; margin-left: 8px; color: var(--primary-color); font-size: .8rem; }
+.member-profile-card .workspace-card-link { display: grid; gap: 12px; color: inherit; width: auto; font-size: inherit; }
+.member-profile-card > button { margin-top: auto; }
+.member-profile-card a:focus-visible, .member-profile-editor input:focus-visible, .member-profile-editor textarea:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
