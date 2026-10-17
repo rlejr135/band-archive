@@ -9,7 +9,7 @@ import { BandsPage } from './components/bands/BandsPage.jsx';
 import { BandCreationRequestsAdminRoute } from './components/bands/BandCreationRequestsAdmin.jsx';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
 import RequireAuth from './components/layout/RequireAuth.jsx';
-import { BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
+import { AvailabilityWorkspace, BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
 import './App.css';
 import './components/bands/BandsPage.css';
 import './components/home/WelcomeLanding.css';
@@ -91,6 +91,7 @@ export const AppRoutes = () => <Routes>
     <Route index element={<BandDashboard />} />
     <Route path="songs" element={<SongWorkspace />} />
     <Route path="rehearsals" element={<RehearsalWorkspace />} />
+    <Route path="availability" element={<AvailabilityWorkspace />} />
     <Route path="members" element={<MembersWorkspace />} />
     <Route path="members/:memberId" element={<MemberDetailWorkspace />} />
     <Route path="gallery" element={<GalleryWorkspace />} />

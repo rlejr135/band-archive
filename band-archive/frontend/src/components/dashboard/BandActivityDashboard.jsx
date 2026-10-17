@@ -13,6 +13,7 @@ import {
   strictPositiveId,
 } from '../workspace/bandDashboardState.js';
 import './BandActivityDashboard.css';
+import { activeAvailabilityMember } from '../workspace/availabilityState.js';
 
 const requestOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
 const DASHBOARD_ERROR = '대시보드를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
@@ -263,7 +264,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
       </section>
 
       <section className="activity-card activity-upcoming" aria-labelledby="activity-upcoming-title">
-        <div className="activity-card-heading"><h2 id="activity-upcoming-title">다가오는 합주</h2><Link to={`/bands/${encodeURIComponent(band.slug)}/rehearsals`}>전체 일정</Link></div>
+        <div className="activity-card-heading"><h2 id="activity-upcoming-title">다가오는 합주</h2><div>{activeAvailabilityMember(band) && <Link to={`/bands/${encodeURIComponent(band.slug)}/availability`}>일정 조율하기 · </Link>}<Link to={`/bands/${encodeURIComponent(band.slug)}/rehearsals`}>전체 일정</Link></div></div>
         {upcoming.length ? <div className="activity-rehearsal-list">{upcoming.map((rehearsal) => <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal} compact />)}</div> : <p className="activity-muted">예정된 합주가 없습니다.</p>}
       </section>
 

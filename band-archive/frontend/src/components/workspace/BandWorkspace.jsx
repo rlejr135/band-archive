@@ -1,9 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
 import BandSwitcher from '../bands/BandSwitcher.jsx';
 import BandActivityDashboard from '../dashboard/BandActivityDashboard.jsx';
+import AvailabilityCalendar, { RehearsalTabs } from './AvailabilityCalendar.jsx';
+import { availabilityFingerprint, availabilityPath, PERIOD_LABELS, validDay } from './availabilityState.js';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload, suggestionPayload, votePayload } from '../../services/bandWorkspaceApi.js';
 import { uploadBandGalleryImageFile } from '../../services/mediaUploadManager.js';
@@ -53,6 +55,7 @@ export const BandWorkspaceRoute = () => {
 
 export const BandWorkspace = () => {
   const { bandSlug } = useParams();
+  const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, getAccessToken, refreshSession, signOut } = useAuth();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
@@ -96,7 +99,7 @@ export const BandWorkspace = () => {
         <nav aria-label="밴드 공간">
           <NavLink end to={`/bands/${encodeURIComponent(state.band.slug)}`}>대시보드</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/songs`}>곡</NavLink>
-          <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/rehearsals`}>합주</NavLink>
+          <NavLink className={({ isActive }) => isActive || pathname.endsWith('/availability') ? 'active' : ''} to={`/bands/${encodeURIComponent(state.band.slug)}/rehearsals`}>합주</NavLink>
           {state.band.permissions?.can_view_roster && <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/members`}>멤버</NavLink>}
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/gallery`}>갤러리</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/suggestions`}>추천곡</NavLink>
@@ -150,14 +153,18 @@ export const SongWorkspace = () => {
 };
 export const RehearsalWorkspace = () => {
   const { band, workspaceKey } = useWorkspace();
-  return <ContentWorkspace key={`${workspaceKey}:${band.id}:rehearsals`} kind="rehearsals" />;
+  return <><RehearsalTabs band={band} /><ContentWorkspace key={`${workspaceKey}:${band.id}:rehearsals`} kind="rehearsals" /></>;
+};
+export const AvailabilityWorkspace = () => {
+  const { band, api, workspaceKey } = useWorkspace();
+  return <AvailabilityCalendar key={workspaceKey} band={band} api={api} workspaceKey={workspaceKey} />;
 };
 
 const ContentWorkspace = ({ kind }) => {
   const { band, api, workspaceKey } = useWorkspace();
   const { loading, error, entries, pagination, refresh, loadMore } = useCollection(kind);
-  const [selected, setSelected] = useState(null); const [formMode, setFormMode] = useState(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [selected, setSelected] = useState(null); const [formMode, setFormMode] = useState(() => kind === 'rehearsals' && searchParams.get('create') === '1' && band.membership ? 'create' : null);
   const detailParam = kind === 'songs' ? 'song' : 'rehearsal';
   const detailValue = searchParams.get(detailParam);
   const detailId = detailValue == null ? null : strictPositiveId(detailValue);
@@ -197,17 +204,19 @@ const ContentWorkspace = ({ kind }) => {
   const clearDetailQuery = () => {
     const next = new URLSearchParams(searchParams);
     next.delete(detailParam);
+    ['create', 'date', 'period', 'availability'].forEach((key) => next.delete(key));
     setSearchParams(next, { replace: true });
   };
   const selectEntry = (entry) => { setSelected(entry); setFormMode(null); if (detailValue != null) clearDetailQuery(); };
   const startCreate = () => { setSelected(null); setFormMode('create'); if (detailValue != null) clearDetailQuery(); };
   const deleteActive = () => { setSelected(null); setFormMode(null); if (detailValue != null) clearDetailQuery(); refresh(); };
-  const finishEdit = () => { setFormMode(null); setSelected(null); if (detailValue != null) clearDetailQuery(); refresh(); };
+  const finishEdit = () => { setFormMode(null); setSelected(null); if (detailValue != null || searchParams.has('create')) clearDetailQuery(); refresh(); };
+  const cancelEdit = () => { setFormMode(null); if (searchParams.has('create')) { clearDetailQuery(); refresh(); } };
   return <section className="workspace-page content-workspace" aria-labelledby={`${kind}-title`}>
     <div className="workspace-page-heading"><div><h1 id={`${kind}-title`}>{label} 목록</h1><p>{member ? `${label}을 관리하고 재생 미디어를 확인하세요.` : `공개된 ${label}만 표시합니다.`}</p></div>{member && <button className="primary-btn" onClick={startCreate}>{label} 추가</button>}</div>
     {!member && <WriteGuidance />}
     {loading && entries.length === 0 ? <p aria-live="polite">{label}을 불러오는 중입니다…</p> : error ? <ErrorState message={error} retry={refresh} /> : entries.length === 0 && !formMode && detailValue == null ? <div className="workspace-empty"><p>표시할 {label}이 없습니다.</p>{member && <button className="secondary-btn" onClick={startCreate}>첫 {label} 추가</button>}</div> : <div className="workspace-grid"><div className="workspace-list"><ul>{entries.map((entry) => <li key={entry.id}><button className={activeItem?.id === entry.id ? 'workspace-row selected' : 'workspace-row'} onClick={() => selectEntry(entry)}><strong>{entry.title}</strong><span>{kind === 'songs' ? entry.artist : entry.date}</span><small>{entry.effective_visibility === 'MEMBERS' ? '멤버 전용' : '공개'} · {entry.status || (entry.songs?.length ? `${entry.songs.length}곡` : '')}</small></button></li>)}</ul>{pagination?.has_more && <button className="secondary-btn" disabled={loading} onClick={loadMore}>{loading ? '불러오는 중…' : '더 불러오기'}</button>}</div>
-      <div className="workspace-detail">{formMode ? <ContentForm kind={kind} item={formMode === 'edit' ? activeItem : null} onDone={finishEdit} onCancel={() => setFormMode(null)} /> : detailValue != null ? queryDetail.loading ? <p aria-live="polite">{label} 정보를 불러오는 중입니다…</p> : queryDetail.error ? <ErrorState message={queryDetail.error} /> : activeItem ? <ContentDetail kind={kind} item={activeItem} onEdit={() => setFormMode('edit')} onDeleted={deleteActive} /> : <p className="workspace-placeholder">항목을 불러오지 못했습니다.</p> : activeItem ? <ContentDetail kind={kind} item={activeItem} onEdit={() => setFormMode('edit')} onDeleted={deleteActive} /> : <p className="workspace-placeholder">항목을 선택하면 상세 정보와 재생 미디어를 볼 수 있습니다.</p>}</div></div>}
+      <div className="workspace-detail">{formMode ? <ContentForm kind={kind} item={formMode === 'edit' ? activeItem : null} onDone={finishEdit} onCancel={cancelEdit} /> : detailValue != null ? queryDetail.loading ? <p aria-live="polite">{label} 정보를 불러오는 중입니다…</p> : queryDetail.error ? <ErrorState message={queryDetail.error} /> : activeItem ? <ContentDetail kind={kind} item={activeItem} onEdit={() => setFormMode('edit')} onDeleted={deleteActive} /> : <p className="workspace-placeholder">항목을 불러오지 못했습니다.</p> : activeItem ? <ContentDetail kind={kind} item={activeItem} onEdit={() => setFormMode('edit')} onDeleted={deleteActive} /> : <p className="workspace-placeholder">항목을 선택하면 상세 정보와 재생 미디어를 볼 수 있습니다.</p>}</div></div>}
   </section>;
 };
 
@@ -256,12 +265,38 @@ const PlaybackMedia = ({ media, band, api, workspaceKey, onMediaUpdate, onAuthor
 
 const ContentForm = ({ kind, item, onDone, onCancel }) => {
   const { band, api, workspaceKey } = useWorkspace(); const [saving, setSaving] = useState(false); const savingRef = useRef(false); const [error, setError] = useState(''); const [songs, setSongs] = useState([]);
-  const initial = kind === 'songs' ? { title: item?.title || '', artist: item?.artist || '', status: item?.status || 'Practice', chords: item?.chords || '', link: item?.link || '', memo: item?.memo || '', genre: item?.genre || '', difficulty: item?.difficulty || '', visibility: item?.visibility || band.default_visibility || 'MEMBERS' } : { title: item?.title || '', date: item?.date || '', start_date: item?.start_date || '', end_date: item?.end_date || '', time: item?.time || '', location: item?.location || '', memo: item?.memo || '', color: item?.color || '', visibility: item?.visibility || band.default_visibility || 'MEMBERS', song_ids: item?.songs?.map((song) => String(song.id)) || [] };
+  const [resultUnknown, setResultUnknown] = useState(false);
+  const [searchParams] = useSearchParams();
+  const candidate = useRef(!item && kind === 'rehearsals' && validDay(searchParams.get('date')) && Object.hasOwn(PERIOD_LABELS, searchParams.get('period')) ? { date: searchParams.get('date'), period: searchParams.get('period'), fingerprint: searchParams.get('availability') || '' } : null);
+  const saveController = useRef(null); const live = useRef(true);
+  useEffect(() => { live.current = true; return () => { live.current = false; saveController.current?.abort(); }; }, []);
+  const initial = kind === 'songs' ? { title: item?.title || '', artist: item?.artist || '', status: item?.status || 'Practice', chords: item?.chords || '', link: item?.link || '', memo: item?.memo || '', genre: item?.genre || '', difficulty: item?.difficulty || '', visibility: item?.visibility || band.default_visibility || 'MEMBERS' } : { title: item?.title || '', date: item?.date || candidate.current?.date || '', start_date: item?.start_date || '', end_date: item?.end_date || '', time: item?.time || '', location: item?.location || '', memo: item?.memo || '', color: item?.color || '', visibility: item?.visibility || band.default_visibility || 'MEMBERS', song_ids: item?.songs?.map((song) => String(song.id)) || [] };
   const [value, setValue] = useState(initial);
   useEffect(() => { if (kind !== 'rehearsals') return undefined; const controller = new AbortController(); api.requestJson(bandWorkspacePaths.songs(band.id, { limit: 100, offset: 0 }), requestOptions(controller.signal)).then((response) => setSongs(response?.songs || [])).catch(() => setSongs([])); return () => controller.abort(); }, [api, band.id, kind]);
   const change = (event) => setValue((previous) => ({ ...previous, [event.target.name]: event.target.value }));
-  const save = async (event) => { event.preventDefault(); if (savingRef.current) return; savingRef.current = true; setSaving(true); setError(''); try { const path = kind === 'songs' ? (item ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.songs(band.id)) : (item ? bandWorkspacePaths.rehearsal(band.id, item.id) : bandWorkspacePaths.rehearsals(band.id)); await api.requestJson(path, { method: item ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(kind === 'songs' ? songPayload(value) : rehearsalPayload(value)) }); onDone(); } catch { setError('저장하지 못했습니다. 입력값을 확인하고 다시 시도해 주세요.'); setSaving(false); } finally { savingRef.current = false; } };
-  return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2><label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label><BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} /><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving}>{saving ? '저장 중…' : '저장'}</button></div></form>;
+  const save = async (event) => {
+    event.preventDefault(); if (savingRef.current || resultUnknown) return; savingRef.current = true; setSaving(true); setError(''); const controller = new AbortController(); saveController.current = controller; let submitted = false;
+    try {
+      if (candidate.current) {
+        const current = await api.requestJson(availabilityPath(band.id, value.date, value.date), { signal: controller.signal });
+        if (controller.signal.aborted || !live.current) return;
+        const fingerprint = availabilityFingerprint(current, value.date);
+        if (value.date !== candidate.current.date || fingerprint !== candidate.current.fingerprint) {
+          const changed = current.days.filter((day) => day.date === value.date); const available = changed.filter((day) => day[candidate.current.period] === 'AVAILABLE').length;
+          if (!window.confirm(`가능 일정이나 날짜가 변경되었습니다. ${value.date} ${PERIOD_LABELS[candidate.current.period]} 현재 가능 ${available}명 / 활성 멤버 ${current.members.length}명입니다. 미응답은 가능에 포함하지 않습니다. 이대로 합주를 저장할까요?`)) return;
+        }
+      }
+      const path = kind === 'songs' ? (item ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.songs(band.id)) : (item ? bandWorkspacePaths.rehearsal(band.id, item.id) : bandWorkspacePaths.rehearsals(band.id));
+      submitted = true;
+      await api.requestJson(path, { method: item ? 'PATCH' : 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(kind === 'songs' ? songPayload(value) : rehearsalPayload(value)) });
+      if (!controller.signal.aborted && live.current) onDone();
+    } catch (cause) { if (!controller.signal.aborted && live.current) {
+      if (candidate.current && submitted && (!cause.status || cause.status >= 500)) { setResultUnknown(true); setError('저장 결과를 확인하지 못했습니다. 중복 생성을 막기 위해 다시 저장하지 않습니다. 취소로 폼을 닫은 뒤 합주 목록을 새로고침해 결과를 확인해 주세요.'); }
+      else setError('저장하지 못했습니다. 입력값을 확인하고 다시 시도해 주세요.');
+    } }
+    finally { savingRef.current = false; if (live.current) setSaving(false); }
+  };
+  return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2>{candidate.current && <p className="availability-notice">조율 후보: {candidate.current.date} · {PERIOD_LABELS[candidate.current.period]}. 정확한 합주 시각은 직접 입력해 주세요. 저장 직전 가능 상태를 다시 확인하지만 예약이나 참석을 보장하지는 않습니다.</p>}<label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label><BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} /><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving || resultUnknown}>{saving ? '저장 중…' : '저장'}</button></div></form>;
 };
 
 export const AnnouncementEditor = ({ announcement, band, api, workspaceKey, onSaved, onForbidden }) => {
