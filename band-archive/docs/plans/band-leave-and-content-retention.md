@@ -169,4 +169,5 @@
 - 구현 커밋은 `7a87ec3`, 배포 준비 소스는 `dfb3403`이다. public 스키마 읽기 전용 백업을 소유 로컬 PostgreSQL 17에 복원하고, 데이터·카탈로그·소유자 보존과 v15 migration을 검증했다. 운영 적용 도구의 사전 모듈 함수 조회 오류는 쓰기 전 중단됐음을 원격 읽기 전용 확인 후 수정했으며, 추가 로컬 테스트 11개가 통과했다.
 - 운영 DB는 `20261014_14 → 20261016_15`로 단일 트랜잭션 적용·사후 검증을 완료했다. 기존 데이터·카탈로그 보존, 신규 작업 테이블 0건·RLS·브라우저 접근 차단을 확인했다. R2 객체는 변경하지 않았다.
 - Fly `v56` 배포 완료: 이미지 `registry.fly.io/band-archive@sha256:092fea392406ee563d2e9d376b0f7a7f0eeab8d37805465c49b9996e3343df65`, 머신 `080e444f9643d8`, NRT shared 2 CPU/2048MB, 기존 `vol_r7y6jnw1e1xolwyr` 유지. `/members` 200, 운영 Pages CORS 허용, 무인증 운영자 작업 조회 401, preflight 200 및 최신 시작 로그 정상. 별도 Fly health check 정의는 없어 배포 smoke check와 HTTP로 확인했다.
-- 다음 확인은 일반 `origin/master` push로 Cloudflare Pages가 이 FE 소스를 배포한 뒤 라이브 번들 기능 표식·API URL·HTTP/CORS를 검증하는 것이다. 실제 사용자 콘텐츠 삭제로 검증하지 않는다.
+- `90c25bf`까지 일반 `origin/master` push 후 Cloudflare Pages 운영 반영을 확인했다. 라이브 `/assets/index-C3xl1Pmv.js`에 삭제 작업·대상 지정 운영자 UI 표식과 `https://band-archive.fly.dev`가 포함돼 있고 HTML HTTP 200·API CORS가 정상이다. FE 운영 빌드도 통과했다. 실제 사용자 콘텐츠 삭제로 검증하지 않았다.
+- 이 계획의 구현·검증·운영 출시는 완료됐다. 사용자 확인 동선은 `/bands`의 밴드 탈퇴(소유자는 이전 필요), 각 콘텐츠의 서버 권한 기반 삭제 버튼, superadmin 전용 대상 지정 삭제 화면이다. 탈퇴 자체는 콘텐츠·R2 파일을 삭제하지 않는다. 마지막 상태 기록은 문서만 변경하므로 BE 재배포는 필요하지 않다.
