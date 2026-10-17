@@ -13,6 +13,7 @@ from band_access import (
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
+from member_profile_service import active_profile_condition
 from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, R2DeletionTask, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
@@ -260,6 +261,12 @@ def _member_or_404(member_id, scope):
                                  _not_pending_delete(Member, 'member')).one_or_none()
     if member is None:
         raise NotFoundError('Resource not found')
+    if member.linked_user_id is not None:
+        # Historical record links retain the existing roster access policy;
+        # only the active roster list excludes departed people.
+        status = db.session.query(BandMembership.status).filter_by(
+            band_id=scope.band_id, user_id=member.linked_user_id).scalar()
+        member._profile_membership_status = status if status in {'active', 'left'} else 'inactive'
     return member
 
 
@@ -608,7 +615,7 @@ def list_members(band_id):
     scope = _scope(band_id)
     _roster_visible_or_404(scope)
     limit, offset = _page_request()
-    query = Member.query.filter(Member.band_id == scope.band_id, _not_pending_delete(Member, 'member'))
+    query = Member.query.filter(Member.band_id == scope.band_id, active_profile_condition(), _not_pending_delete(Member, 'member'))
     page, pagination = _page_query(query, (Member.name.asc(), Member.id.asc()), limit, offset)
     return jsonify({'members': [serialize_member(scope, item) for item in page], 'pagination': pagination})
 

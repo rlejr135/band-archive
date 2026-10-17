@@ -275,6 +275,7 @@ def test_sqlite_stale_owner_session_cannot_close_after_independent_transfer(tmp_
     app = create_app(config, start_worker=False)
     try:
         with app.app_context():
+            db.drop_all()
             db.create_all()
             old_owner = AppUser(supabase_user_id='old-owner', email='old@example.com')
             new_owner = AppUser(supabase_user_id='new-owner', email='new@example.com',
@@ -575,6 +576,7 @@ def test_sqlite_legacy_claim_concurrent_redeemers_have_one_owner_and_one_winner(
     app = create_app(config, start_worker=False)
     try:
         with app.app_context():
+            db.drop_all()
             db.create_all()
             admin = AppUser(supabase_user_id='claim-admin', email='admin@example.com',
                             is_platform_admin=True, email_verified=True)

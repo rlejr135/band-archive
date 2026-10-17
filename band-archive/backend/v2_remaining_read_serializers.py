@@ -63,12 +63,24 @@ def _personal_playback(log, visibility):
 
 
 def serialize_member(scope, member):
+    from member_profile_service import profile_fields
+    flags = content_capabilities(scope, member)
+    own = bool(scope.is_member and scope.audience.account_active and scope.audience.email_verified
+               and member.linked_user_id == scope.audience.user_id)
+    # Roster queries contain active linked profiles, while detail reads may
+    # retain a departed member's existing record links. Match the deletion
+    # guard: only active linked profiles are protected from deletion.
+    if (member.linked_user_id is not None
+            and getattr(member, '_profile_membership_status', 'active') == 'active'):
+        flags['can_delete'] = False
+    flags['can_edit'] = own if member.linked_user_id is not None else flags['can_edit']
     return {
         'id': member.id,
         'name': member.name,
         'instrument': member.instrument,
         'created_at': _iso(member.created_at),
-        **content_capabilities(scope, member),
+        **flags,
+        **profile_fields(member, scope.audience.user_id, can_edit=own),
     }
 
 

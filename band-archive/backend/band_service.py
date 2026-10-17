@@ -16,6 +16,7 @@ from models import (
     PersonalLogMultipartUploadSession,
 )
 from sqlalchemy import and_, or_
+from member_profile_service import ensure_member_profile
 
 
 OWNER_ROLES = {'owner'}
@@ -258,6 +259,7 @@ def review_request(admin, request_id, approved, note=None):
         db.session.flush()
         item.status = 'active'
         item.band_id = band.id
+        ensure_member_profile(owner)
         audit('band_created', admin, band=band, target=item, details={'owner_user_id': owner.user_id})
         audit('membership_approved', admin, band=band, target=owner, details={'role': 'owner'})
         db.session.commit()
@@ -279,6 +281,8 @@ def join_request(user, band_id, introduction=None):
     item = BandMembership.query.filter_by(band_id=band.id, user_id=user.id).with_for_update().populate_existing().one_or_none()
     if item is not None:
         if item.status in {ACTIVE, 'pending'}:
+            if item.status == ACTIVE:
+                ensure_member_profile(item)
             db.session.commit()
             return item, False
         if item.status in {'left', 'rejected'}:
@@ -316,6 +320,8 @@ def approve_membership(actor, membership_id, approved):
     if item is None:
         raise NotFoundError('Membership not found')
     if item.status != 'pending':
+        if item.status == ACTIVE:
+            ensure_member_profile(item)
         db.session.commit()
         return item, False
     try:
@@ -326,6 +332,8 @@ def approve_membership(actor, membership_id, approved):
             item.role = 'member'
             item.left_at = None
         item.acted_by_user_id = actor.id
+        if approved:
+            ensure_member_profile(item)
         audit('membership_approved' if approved else 'membership_rejected', actor, band=band, target=item)
         db.session.commit()
     except IntegrityError as error:
@@ -412,16 +420,24 @@ def join_invite(user, raw):
     # SQLite this takes the writer lock before lookup; PostgreSQL emits FOR
     # UPDATE.  Do not move the revoked check before this lock.
     _begin_privileged_mutation()
+    candidate = BandInviteCode.query.filter_by(token_hash=_token_hash(raw)).one_or_none()
+    if candidate is None:
+        raise ValidationError('Invite code is invalid.', 404)
+    # Match approval/leave/delete lock ordering: band, invite, membership.
+    band = Band.query.filter_by(id=candidate.band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
+    if band is None:
+        raise ValidationError('Invite code is invalid.', 404)
     invite = _locked_invite_by_token_hash(_token_hash(raw)).one_or_none()
     if invite is None or invite.revoked_at is not None or invite.band.deleted_at is not None:
         raise ValidationError('Invite code is invalid.', 404)
-    item = BandMembership.query.filter_by(band_id=invite.band_id, user_id=user.id).one_or_none()
+    item = BandMembership.query.filter_by(band_id=invite.band_id, user_id=user.id).with_for_update().populate_existing().one_or_none()
     if item is None:
         item = BandMembership(band_id=invite.band_id, user_id=user.id, role='member', status=ACTIVE,
                               approved_at=now(), acted_by_user_id=user.id)
         db.session.add(item)
         try:
             db.session.flush()
+            ensure_member_profile(item)
             audit('membership_joined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
             db.session.commit()
         except IntegrityError:
@@ -437,7 +453,11 @@ def join_invite(user, raw):
         item.approved_at = now()
         item.acted_by_user_id = user.id
         item.join_introduction = None
+        ensure_member_profile(item)
         audit('membership_rejoined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
+        db.session.commit()
+    else:
+        ensure_member_profile(item)
         db.session.commit()
     return item
 
@@ -623,6 +643,7 @@ def redeem_legacy_claim(user, band_id, raw):
             membership.approved_at = timestamp
             membership.acted_by_user_id = user.id
         db.session.flush()
+        ensure_member_profile(membership)
         audit('legacy_band_claim_redeemed', user, band=band, target=claim,
               details={'purpose': _LEGACY_CLAIM_PURPOSE})
         audit('legacy_band_owner_claimed', user, band=band, target=membership,

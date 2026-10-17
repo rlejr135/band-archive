@@ -15,12 +15,17 @@ members_bp = Blueprint('members', __name__)
 
 
 def _get_member_or_404(id):
-    return legacy_get_or_404(Member, id, "Member not found")
+    member = legacy_get_or_404(Member, id, "Member not found")
+    from member_profile_service import active_profile_condition
+    if Member.query.filter(Member.id == member.id, active_profile_condition()).first() is None:
+        raise NotFoundError('Member not found')
+    return member
 
 
 @members_bp.route('/members', methods=['GET'])
 def get_members():
-    members = legacy_query(Member).all()
+    from member_profile_service import active_profile_condition
+    members = legacy_query(Member).filter(active_profile_condition()).all()
     validate_legacy_graphs(members, 'Member not found')
     legacy_read_scope(members[0].band_id if members else legacy_band_id(), roster=True)
     return jsonify([m.to_dict() for m in members])
@@ -58,6 +63,8 @@ def get_member(id):
 @members_bp.route('/members/<int:id>', methods=['PUT'])
 def update_member(id):
     member = _get_member_or_404(id)
+    if member.linked_user_id is not None:
+        raise ValidationError('Use the authenticated own profile endpoint.', 403)
 
     data = request.json
     if not data:

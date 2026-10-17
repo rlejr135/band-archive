@@ -105,6 +105,10 @@ def _platform_operator_precheck():
 
 
 def _target_preconditions(resource_type, target):
+    if resource_type == 'member':
+        from member_profile_service import profile_has_active_membership
+        if profile_has_active_membership(target):
+            raise DeletionConflict('active_member_profile', 'Active membership profiles cannot be deleted.')
     if block_for_processing(resource_type, target):
         raise DeletionConflict('content_processing', 'Media processing must finish before deletion.')
     if resource_type == 'song' and (target.media_files or target.rehearsals or target.sheet_music or target.sheet_music_object_key):
