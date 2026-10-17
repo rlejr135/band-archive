@@ -12,3 +12,27 @@
 @media (max-width: 760px){.workspace-header{padding:10px 12px;gap:8px}.workspace-actions{gap:7px}.workspace-actions .nav-btn{padding:6px 9px;font-size:.8rem}.workspace-main{padding:10px}.workspace-page{padding:18px}.workspace-stats{grid-template-columns:1fr}.workspace-grid{grid-template-columns:1fr}.workspace-detail{padding:12px 0}.workspace-guidance{align-items:flex-start;flex-direction:column}}
 .workspace-header nav{border-top:1px solid var(--border-color);border-top-color:color-mix(in srgb,var(--border-color) 55%,transparent)}
 .workspace-gallery-item{display:grid;gap:8px;min-width:0;margin:0}.workspace-gallery-item>img,.workspace-gallery-item>.workspace-gallery-missing{width:100%;aspect-ratio:1;object-fit:contain}.band-delete-action{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px}.band-delete-action>[role="alert"],.band-delete-action>[role="status"]{color:var(--accent-color);font-size:12px}
+
+.workspace-cards--suggestions{grid-template-columns:repeat(auto-fit,minmax(min(100%,22.5rem),1fr));align-items:stretch}
+.suggestion-card{min-width:0;padding:20px;gap:0}
+.suggestion-card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;min-width:0}
+.suggestion-card-title-block{min-width:0}
+.suggestion-card-title{margin:0;color:var(--text-primary);font-size:clamp(1.08rem,1rem + .5vw,1.35rem);line-height:1.32;overflow-wrap:anywhere}
+.suggestion-card .suggestion-card-artist{margin:6px 0 0;color:var(--text-secondary);font-size:.96rem;overflow-wrap:anywhere}
+.suggestion-status{flex:0 0 auto;padding:5px 9px;border:1px solid var(--border-color);border-radius:999px;background:var(--background-color);color:var(--text-secondary);font-size:.76rem;font-weight:700;line-height:1.25}
+.suggestion-card .suggestion-card-memo{margin:16px 0 0;color:var(--text-primary);line-height:1.55;overflow-wrap:anywhere}
+.suggestion-card-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;color:var(--text-secondary);font-size:.85rem}
+.suggestion-card-meta span{font-weight:700}
+.workspace-card a.suggestion-card-link{display:inline-flex;align-items:center;width:auto;max-width:100%;min-width:0;margin-top:10px;color:var(--primary-color);font-weight:650;overflow-wrap:anywhere;word-break:break-word}
+.suggestion-actions{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:12px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border-color);min-width:0}
+.suggestion-vote-actions,.suggestion-manage-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.suggestion-manage-actions{justify-content:flex-start}
+.suggestion-vote-button,.suggestion-manage-actions>.secondary-btn,.suggestion-manage-actions>.primary-btn,.suggestion-manage-actions .danger-btn{min-height:40px;max-width:100%;padding:8px 12px;font-size:.86rem;line-height:1.2;white-space:normal;overflow-wrap:anywhere}
+.suggestion-vote-button[aria-pressed="true"].suggestion-vote-button--positive{border-color:var(--success-color);background:var(--success-color);color:var(--text-on-primary)}
+.suggestion-vote-button[aria-pressed="true"].suggestion-vote-button--negative{border-color:var(--accent-color);background:var(--accent-color);color:var(--text-on-primary)}
+.suggestion-vote-button:focus-visible,.suggestion-manage-actions button:focus-visible{outline:3px solid var(--focus-ring-color);outline-offset:2px}
+.suggestion-vote-button:disabled,.suggestion-manage-actions button:disabled{cursor:not-allowed;opacity:.62;transform:none}
+.suggestion-manage-actions .band-delete-action{min-width:0}
+@media(max-width:600px){.suggestion-card{padding:16px}.suggestion-card-heading{gap:8px}.suggestion-status{max-width:40%;white-space:normal;text-align:center}.suggestion-actions{gap:10px}}
+@media(max-width:600px){.workspace-suggestions-page .workspace-page-heading{align-items:flex-start;flex-direction:column}.workspace-suggestions-page .workspace-suggestions-add{align-self:flex-start;flex:0 0 auto;white-space:nowrap}}
+@media(max-width:360px){.suggestion-card{padding:13px}.suggestion-vote-actions,.suggestion-manage-actions{gap:6px}.suggestion-vote-button,.suggestion-manage-actions>.secondary-btn,.suggestion-manage-actions>.primary-btn,.suggestion-manage-actions .danger-btn{padding:8px 9px;font-size:.8rem}}

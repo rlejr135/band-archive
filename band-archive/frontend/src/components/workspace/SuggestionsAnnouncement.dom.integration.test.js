@@ -41,7 +41,10 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
     await view.findByText('표시할 추천곡이 없습니다.');
     await user.click(view.getByRole('button', { name: '추천곡 추가' }));
     await user.type(view.getByLabelText('제목'), '새 곡'); await user.type(view.getByLabelText('아티스트'), '연주자'); await user.type(view.getByLabelText('참고 링크'), 'https://example.test/song'); await user.type(view.getByLabelText('메모'), '연습용');
-    await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('새 곡');
+    await user.click(view.getByRole('button', { name: '저장' })); await view.findByRole('heading', { name: '새 곡' });
+    const voteGroup = view.getByRole('group', { name: '추천곡 투표' }); const manageGroup = view.getByRole('group', { name: '추천곡 관리' });
+    assert.equal(voteGroup.querySelectorAll('button.secondary-btn').length, 2); assert.equal(manageGroup.querySelector('button.secondary-btn').textContent, '수정');
+    assert.equal(manageGroup.querySelector('button.danger-btn').textContent, '삭제');
     assert.deepEqual(writes[0], { method: 'POST', body: { title: '새 곡', artist: '연주자', link: 'https://example.test/song', memo: '연습용', visibility: 'MEMBERS' } });
     await user.click(view.getByRole('button', { name: '수정' }));
     const title = view.getByLabelText('제목'); await user.clear(title); await user.type(title, '수정 곡'); await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('수정 곡');
@@ -63,14 +66,20 @@ test('suggestion voting refetches authoritative viewer state, blocks double clic
   };
   try {
     const view = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member() })); await view.findByText('투표 곡');
-    const up = view.getByRole('button', { name: '추천' }); fireEvent.click(up); fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 1)); assert.deepEqual(writes[0], { method: 'PUT', body: { value: 1 } });
+    const voteGroup = view.getByRole('group', { name: '추천곡 투표' }); const manageGroup = view.getByRole('group', { name: '추천곡 관리' });
+    const up = view.getByRole('button', { name: '추천' }); const down = view.getByRole('button', { name: '아쉬워요' });
+    assert.equal(voteGroup.contains(up), true); assert.equal(voteGroup.contains(down), true); assert.equal(manageGroup.contains(up), false);
+    assert.equal(up.classList.contains('secondary-btn'), true); assert.equal(down.classList.contains('secondary-btn'), true);
+    assert.equal(up.getAttribute('aria-pressed'), 'false'); assert.equal(down.getAttribute('aria-pressed'), 'false');
+    assert.equal(view.getByRole('button', { name: '곡으로 진행' }).classList.contains('primary-btn'), true);
+    fireEvent.click(up); fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 1)); assert.deepEqual(writes[0], { method: 'PUT', body: { value: 1 } });
     await act(async () => { firstVote.resolve(response({}, 500)); }); await view.findByRole('alert'); assert.equal(up.disabled, false);
     fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 2)); await waitFor(() => assert.equal(view.getByRole('button', { name: '추천' }).getAttribute('aria-pressed'), 'true'));
     await user.click(view.getByRole('button', { name: '곡으로 진행' })); await waitFor(() => assert.deepEqual(writes[2], { method: 'POST', body: { visibility: 'MEMBERS' } })); assert.ok(reads >= 3);
     view.unmount(); canProceed = false;
     const adminWithoutDelete = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('admin') })); await adminWithoutDelete.findByText('투표 곡'); assert.equal(adminWithoutDelete.queryByRole('button', { name: '곡으로 진행' }), null); adminWithoutDelete.unmount();
     manager = false;
-    const nonManager = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('other') })); await nonManager.findByText('투표 곡'); assert.equal(nonManager.queryByRole('button', { name: '곡으로 진행' }), null); nonManager.unmount();
+    const nonManager = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('other') })); await nonManager.findByText('투표 곡'); assert.equal(nonManager.queryByRole('button', { name: '곡으로 진행' }), null); assert.ok(nonManager.queryByRole('group', { name: '추천곡 투표' })); assert.equal(nonManager.queryByRole('group', { name: '추천곡 관리' }), null); assert.equal(nonManager.queryByRole('button', { name: '수정' }), null); assert.equal(nonManager.queryByRole('button', { name: '삭제' }), null); nonManager.unmount();
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
 });
 
