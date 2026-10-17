@@ -16,6 +16,8 @@ primary_region = 'nrt'
   FLASK_CONFIG = 'config.ProductionConfig'
   CORS_ALLOWED_ORIGINS = 'https://rlejr135.github.io,https://band-archive.pages.dev'
   PG_R2_DELETION_WORKER_ENABLED = 'true'
+  CAPTCHA_SITE_KEY = '0x4AAAAAAFZDw7M1YKvmlMBU'
+  CAPTCHA_ENABLED = 'true'
 
 [mounts]
   source = 'data'

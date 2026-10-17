@@ -38,6 +38,7 @@ PHASE12_REVISION = '20261006_12'
 PHASE13_REVISION = '20261010_13'
 PHASE14_REVISION = '20261014_14'
 PHASE15_REVISION = '20261016_15'
+PHASE16_REVISION = '20261017_16'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -48,7 +49,8 @@ DATA_API_MANAGED_TABLES_PHASE13 = (
     'song_suggestion_vote', 'song_vote', 'tenant_backfill_state',
 )
 DATA_API_MANAGED_TABLES_PHASE14 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13, 'band_request_email_outbox')))
-DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
+DATA_API_MANAGED_TABLES_PHASE15 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -141,6 +143,7 @@ def phase3_metadata():
     metadata = auth_metadata()
     for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
         db.metadata.tables[table_name].to_metadata(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase4_band(metadata)
     # These partial indexes belong to revision 04.  Do not retroactively
     # require them when validating a legitimately recorded revision 03 DB.
@@ -160,6 +163,7 @@ def phase3_hardened_metadata():
     metadata = auth_metadata()
     for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
         db.metadata.tables[table_name].to_metadata(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase4_band(metadata)
     return metadata
 
@@ -178,6 +182,16 @@ def _remove_future_r2_deletion_task(metadata):
     return metadata
 
 
+def _remove_future_policy_acceptance(metadata):
+    """Keep all immutable snapshots before revision 16 structurally exact."""
+    table = metadata.tables.get('band_membership')
+    if table is not None and table.c.get('join_introduction') is not None:
+        table._columns.remove(table.c.join_introduction)
+    if 'policy_acceptance_receipt' in metadata.tables:
+        metadata.remove(metadata.tables['policy_acceptance_receipt'])
+    return metadata
+
+
 def phase4_metadata():
     """Exact revision-05 snapshot before Phase 6 contracts tenant reads."""
     metadata = MetaData()
@@ -185,6 +199,7 @@ def phase4_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -224,6 +239,7 @@ def phase6_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -238,6 +254,7 @@ def phase7_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -251,6 +268,7 @@ def phase8_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -263,6 +281,7 @@ def phase9_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase10_direct_expiry_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -276,6 +295,7 @@ def phase10_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -288,6 +308,7 @@ def phase11_metadata():
         table.to_metadata(metadata)
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
+    _remove_future_policy_acceptance(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
@@ -318,6 +339,15 @@ def phase15_metadata():
     """Exact revision-15 structural snapshot with the private deletion queue."""
     metadata = phase14_metadata()
     db.metadata.tables['r2_deletion_task'].to_metadata(metadata)
+    return metadata
+
+
+def phase16_metadata():
+    """Exact revision-16 snapshot with join introductions and receipts."""
+    metadata = phase15_metadata()
+    membership = metadata.tables['band_membership']
+    membership.append_column(db.metadata.tables['band_membership'].c.join_introduction._copy())
+    db.metadata.tables['policy_acceptance_receipt'].to_metadata(metadata)
     return metadata
 
 
@@ -694,7 +724,14 @@ def _expected_check_constraints(table, dialect=None):
     for constraint in table.constraints:
         if constraint.__class__.__name__ != 'CheckConstraint':
             continue
-        canonical = _canonical_check_constraint(
+        if table.name == 'policy_acceptance_receipt' and constraint.name in {
+            'ck_policy_receipt_terms_accepted', 'ck_policy_receipt_age_assertion',
+        }:
+            column = ('terms_accepted' if constraint.name == 'ck_policy_receipt_terms_accepted'
+                      else 'age_14_plus')
+            canonical = _canonical_policy_boolean_check(constraint.sqltext, column)
+        else:
+            canonical = _canonical_check_constraint(
             constraint.sqltext, dialect,
             allow_or=(table.name, constraint.name) in {
                 ('direct_upload_session', 'ck_direct_upload_session_target'),
@@ -704,11 +741,14 @@ def _expected_check_constraints(table, dialect=None):
             allow_not_equal=(table.name, constraint.name) in {
                 ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
                 ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
+                ('policy_acceptance_receipt', 'ck_policy_receipt_terms_version'),
+                ('policy_acceptance_receipt', 'ck_policy_receipt_privacy_version'),
             },
             allow_greater_equal=(table.name, constraint.name) ==
             ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
-        )
-        if getattr(dialect, 'name', None) == 'postgresql':
+            )
+        if (getattr(dialect, 'name', None) == 'postgresql'
+                and not (isinstance(canonical, tuple) and canonical[:1] == ('policy_boolean_true',))):
             canonical = _normalize_postgres_check_for_table(canonical, table)
         if getattr(dialect, 'name', None) == 'postgresql' and canonical is None:
             raise MigrationBootstrapError(
@@ -731,7 +771,14 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             raise MigrationBootstrapError(
                 f'Dialect returned an unreadable CHECK constraint for {table_name}; refusing to stamp.'
             )
-        canonical = _canonical_check_constraint(
+        if table_name == 'policy_acceptance_receipt' and constraint.get('name') in {
+            'ck_policy_receipt_terms_accepted', 'ck_policy_receipt_age_assertion',
+        }:
+            column = ('terms_accepted' if constraint['name'] == 'ck_policy_receipt_terms_accepted'
+                      else 'age_14_plus')
+            canonical = _canonical_policy_boolean_check(constraint['sqltext'], column)
+        else:
+            canonical = _canonical_check_constraint(
             constraint['sqltext'], dialect,
             allow_or=(table_name, constraint.get('name')) in {
                 ('direct_upload_session', 'ck_direct_upload_session_target'),
@@ -741,14 +788,27 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             allow_not_equal=(table_name, constraint.get('name')) in {
                 ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
                 ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
+                ('policy_acceptance_receipt', 'ck_policy_receipt_terms_version'),
+                ('policy_acceptance_receipt', 'ck_policy_receipt_privacy_version'),
             },
             allow_greater_equal=(table_name, constraint.get('name')) ==
             ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
-        )
-        if getattr(dialect, 'name', None) == 'postgresql' and table is not None:
+            )
+        if (getattr(dialect, 'name', None) == 'postgresql' and table is not None
+                and not (isinstance(canonical, tuple) and canonical[:1] == ('policy_boolean_true',))):
             canonical = _normalize_postgres_check_for_table(canonical, table)
         reflected.append((constraint.get('name'), canonical))
     return Counter(reflected)
+
+
+def _canonical_policy_boolean_check(value, column):
+    """Recognize only the reviewed boolean-true receipt checks."""
+    if value is None:
+        return None
+    normalized = re.sub(r'[\s"()]', '', str(value)).casefold()
+    if normalized in {f'{column}istrue', f'{column}=true'}:
+        return ('policy_boolean_true', column)
+    return None
 
 
 _POSTGRES_CHECK_CAST = re.compile(
@@ -1605,6 +1665,8 @@ def metadata_for_recorded_revision(revision):
         return phase14_metadata()
     if revision == PHASE15_REVISION:
         return phase15_metadata()
+    if revision == PHASE16_REVISION:
+        return phase16_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

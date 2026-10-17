@@ -146,6 +146,8 @@ def membership_dict(membership, audience='member'):
             'approved_at': membership.approved_at.isoformat() if membership.approved_at else None,
             'left_at': membership.left_at.isoformat() if membership.left_at else None,
         })
+        if membership.status == 'pending':
+            result['introduction'] = membership.join_introduction
     return result
 
 
@@ -269,7 +271,7 @@ def review_request(admin, request_id, approved, note=None):
     return item, True
 
 
-def join_request(user, band_id):
+def join_request(user, band_id, introduction=None):
     _begin_privileged_mutation()
     band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
     if band is None:
@@ -285,10 +287,11 @@ def join_request(user, band_id):
             item.requested_at = now()
             item.approved_at = None
             item.acted_by_user_id = user.id
+            item.join_introduction = introduction
             audit('membership_rejoin_requested', user, band=band, target=item)
             db.session.commit()
             return item, True
-    item = BandMembership(band_id=band.id, user_id=user.id)
+    item = BandMembership(band_id=band.id, user_id=user.id, join_introduction=introduction)
     db.session.add(item)
     try:
         db.session.flush()
@@ -317,6 +320,7 @@ def approve_membership(actor, membership_id, approved):
         return item, False
     try:
         item.status = ACTIVE if approved else 'rejected'
+        item.join_introduction = None
         item.approved_at = now() if approved else None
         if approved:
             item.role = 'member'
@@ -432,6 +436,7 @@ def join_invite(user, raw):
         item.left_at = None
         item.approved_at = now()
         item.acted_by_user_id = user.id
+        item.join_introduction = None
         audit('membership_rejoined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
         db.session.commit()
     return item
@@ -612,6 +617,7 @@ def redeem_legacy_claim(user, band_id, raw):
         else:
             membership.role = 'owner'
             membership.status = ACTIVE
+            membership.join_introduction = None
             membership.requested_at = timestamp
             membership.left_at = None
             membership.approved_at = timestamp

@@ -44,6 +44,28 @@ class AuthBootstrapState(db.Model):
     claimed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class PolicyAcceptanceReceipt(db.Model):
+    """Server-owned receipt for the minimum new-account policy assertions."""
+    __tablename__ = 'policy_acceptance_receipt'
+
+    user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='CASCADE'),
+                        primary_key=True, autoincrement=False)
+    terms_version = db.Column(db.String(100), nullable=False)
+    privacy_version = db.Column(db.String(100), nullable=False)
+    terms_accepted = db.Column(db.Boolean, nullable=False)
+    age_14_plus = db.Column(db.Boolean, nullable=False)
+    accepted_at = db.Column(db.DateTime(timezone=True), nullable=False)
+
+    user = db.relationship('AppUser', backref=db.backref('policy_acceptance_receipt', uselist=False))
+
+    __table_args__ = (
+        db.CheckConstraint("terms_version <> ''", name='ck_policy_receipt_terms_version'),
+        db.CheckConstraint("privacy_version <> ''", name='ck_policy_receipt_privacy_version'),
+        db.CheckConstraint('terms_accepted IS TRUE', name='ck_policy_receipt_terms_accepted'),
+        db.CheckConstraint('age_14_plus IS TRUE', name='ck_policy_receipt_age_assertion'),
+    )
+
+
 # Phase 3 tables are intentionally not part of ``baseline_metadata()``.  They
 # are created only by Alembic revision 20260915_03, never by the v1
 # compatibility ``create_all`` startup path.
@@ -92,6 +114,7 @@ class BandMembership(db.Model):
     approved_at = db.Column(db.DateTime, nullable=True)
     left_at = db.Column(db.DateTime, nullable=True)
     acted_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+    join_introduction = db.Column(db.String(300), nullable=True)
 
     user = db.relationship('AppUser', foreign_keys=[user_id])
     acted_by = db.relationship('AppUser', foreign_keys=[acted_by_user_id])

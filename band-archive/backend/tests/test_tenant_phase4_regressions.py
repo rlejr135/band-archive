@@ -359,13 +359,21 @@ def test_relationship_validator_rejects_comment_scope_and_cross_band_creator(tmp
             other = Band(name='other', slug='other-creator', default_visibility='PUBLIC', storage_quota_bytes=1)
             db.session.add_all((user, other))
             db.session.commit()
-            membership = BandMembership(band_id=other.id, user_id=user.id, role='owner', status='active')
-            db.session.add(membership)
+            # This fixture deliberately stops at historical revision 05. The
+            # current ORM includes later columns, so insert only the columns
+            # that existed in that frozen schema instead of issuing an ORM
+            # insert against a table that predates join_introduction.
+            membership_id = db.session.execute(text(
+                'INSERT INTO band_membership '
+                '(band_id, user_id, role, status, requested_at, approved_at, left_at, acted_by_user_id) '
+                'VALUES (:band_id, :user_id, :role, :status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL) '
+                'RETURNING id'
+            ), {'band_id': other.id, 'user_id': user.id, 'role': 'owner', 'status': 'active'}).scalar_one()
             db.session.commit()
             db.session.execute(text('UPDATE comment SET band_id=:other WHERE id=:id'),
                                {'other': other.id, 'id': comment.id})
             db.session.execute(text('UPDATE song SET created_by_membership_id=:membership WHERE id=:id'),
-                               {'membership': membership.id, 'id': song.id})
+                               {'membership': membership_id, 'id': song.id})
             db.session.commit()
             with pytest.raises(TenantBackfillError, match='crosses tenant scope'):
                 _validate_relationships(db.session.connection(), song.band_id)

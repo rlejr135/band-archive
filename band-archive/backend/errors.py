@@ -2,10 +2,11 @@ from flask import jsonify
 
 
 class ValidationError(Exception):
-    def __init__(self, message, status_code=400):
+    def __init__(self, message, status_code=400, code=None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.code = code
 
 
 class NotFoundError(Exception):
@@ -20,7 +21,10 @@ def register_error_handlers(app):
 
     @app.errorhandler(ValidationError)
     def handle_validation_error(e):
-        return jsonify({"error": e.message}), e.status_code
+        payload = {"error": e.message}
+        if e.code:
+            payload['code'] = e.code
+        return jsonify(payload), e.status_code
 
     @app.errorhandler(NotFoundError)
     def handle_not_found_error(e):

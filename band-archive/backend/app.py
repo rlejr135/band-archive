@@ -33,6 +33,7 @@ from routes.bands import bands_bp
 from routes.content_reads import content_reads_bp
 from routes.deletion_tasks import deletion_tasks_bp
 from config import DevelopmentConfig, validate_supabase_auth_config
+from policy_service import validate_policy_configuration
 from startup_guard import assert_postgres_startup_ready, postgres_automation_allowed
 
 load_dotenv()
@@ -373,6 +374,7 @@ def create_app(config_class=None, start_worker=None):
         config_class = getattr(module, class_name)
     app = Flask(__name__)
     app.config.from_object(config_class)
+    validate_policy_configuration(app.config)
     from place_search import PlaceSearchGuard
     app.extensions['place_search_guard'] = PlaceSearchGuard.from_config(app.config)
     # Dedicated rollout telemetry logger: configuring its level/propagation is
@@ -429,6 +431,45 @@ def create_app(config_class=None, start_worker=None):
             return None
         return jsonify(error='tenant_schema_unavailable',
                        message='Phase 4 database migration is required.'), 503
+
+    @app.before_request
+    def _require_new_account_policy_receipt():
+        if (not app.config.get('POLICY_ACCEPTANCE_REQUIRED')
+                or not request.path.startswith('/api/v2/')
+                or request.method in {'GET', 'HEAD', 'OPTIONS'}):
+            return None
+        from policy_service import policy_acceptance_enabled, receipt_required
+        if not policy_acceptance_enabled():
+            return None
+        if not app.config.get('BAND_API_SCHEMA_READY', False):
+            return jsonify({'error': 'policy_schema_unavailable'}), 503
+        # Only these existing-session operations can finish a capability that
+        # was issued before the account policy gate. New upload initiation is
+        # deliberately not exempt.
+        exempt_endpoints = {
+            'uploads.v2_complete_direct_upload',
+            'uploads.v2_complete_direct_gallery_upload',
+            'uploads.v2_presign_multipart_part',
+            'uploads.v2_acknowledge_multipart_part',
+            'uploads.v2_complete_multipart_upload',
+            'uploads.v2_abort_multipart_upload',
+            'auth.policy_acceptance',
+        }
+        if request.endpoint in exempt_endpoints:
+            return None
+        from auth_service import current_app_user
+        user = current_app_user(required=True)
+        if receipt_required(user):
+            response = jsonify({
+                'error': 'policy_acceptance_required',
+                'code': 'policy_acceptance_required',
+                'message': 'Accept the current terms and privacy notice before making changes.',
+            })
+            response.status_code = 403
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['Vary'] = 'Authorization'
+            return response
+        return None
 
     @app.after_request
     def _log_legacy_v1_usage(response):

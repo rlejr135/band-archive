@@ -166,6 +166,24 @@ class Config:
     SUPABASE_JWT_LEEWAY_SECONDS = _env_int('SUPABASE_JWT_LEEWAY_SECONDS', 30, minimum=0)
     BOOTSTRAP_PLATFORM_ADMIN_EMAIL = os.getenv('BOOTSTRAP_PLATFORM_ADMIN_EMAIL', '')
 
+    # Public product identity has one server-side source. The temporary
+    # product name and contact are approved values; policy facts stay unset
+    # until their legal/provider details are approved.
+    SERVICE_NAME = os.getenv('SERVICE_NAME', 'Band Archive')
+    CONTACT_EMAIL = os.getenv('CONTACT_EMAIL', 'rlejr135@gmail.com')
+    SENDER_EMAIL = os.getenv('SENDER_EMAIL', '')
+    OPERATOR_NAME = os.getenv('OPERATOR_NAME', '황기덕')
+    POLICY_TERMS_VERSION = os.getenv('POLICY_TERMS_VERSION', '')
+    POLICY_PRIVACY_VERSION = os.getenv('POLICY_PRIVACY_VERSION', '')
+    POLICY_TERMS_URL = os.getenv('POLICY_TERMS_URL', '')
+    POLICY_PRIVACY_URL = os.getenv('POLICY_PRIVACY_URL', '')
+    POLICY_RETENTION_NOTICE = os.getenv('POLICY_RETENTION_NOTICE', '')
+    POLICY_PROVIDERS_NOTICE = os.getenv('POLICY_PROVIDERS_NOTICE', '')
+    POLICY_NEW_ACCOUNT_CUTOFF = os.getenv('POLICY_NEW_ACCOUNT_CUTOFF', '')
+    POLICY_ACCEPTANCE_REQUIRED = _env_flag('POLICY_ACCEPTANCE_REQUIRED')
+    CAPTCHA_ENABLED = _env_flag('CAPTCHA_ENABLED')
+    CAPTCHA_SITE_KEY = os.getenv('CAPTCHA_SITE_KEY', '')
+
 
 class DevelopmentConfig(Config):
     DEBUG = True

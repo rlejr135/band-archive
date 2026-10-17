@@ -147,11 +147,15 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            assert migration_head_revision() == '20261016_15'
+            assert migration_head_revision() == '20261017_16'
             assert _version(app) == migration_head_revision()
             with db.engine.connect() as connection:
                 assert 'band_request_email_outbox' in inspect(connection).get_table_names()
                 assert 'r2_deletion_task' in inspect(connection).get_table_names()
+                assert 'policy_acceptance_receipt' in inspect(connection).get_table_names()
+                # The receipt PK is an AppUser FK, not a generated ID; on
+                # PostgreSQL this must not acquire an implicit serial sequence.
+                assert db.metadata.tables['policy_acceptance_receipt'].c.user_id.autoincrement is False
                 assert schema_differences(connection) == []
                 assert schema_contract_differences(connection) == []
 

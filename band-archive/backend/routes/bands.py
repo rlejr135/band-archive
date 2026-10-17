@@ -1,5 +1,7 @@
 """Phase 3 API: private membership management plus public band discovery."""
 
+import json
+
 from flask import Blueprint, after_this_request, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
@@ -165,7 +167,36 @@ def reject_creation_request(request_id):
 @bands_bp.post('/bands/<int:band_id>/join-requests')
 @require_auth
 def request_join(band_id):
-    item, created = join_request(current_app_user(), band_id)
+    if request.content_length is not None and request.content_length > 4096:
+        return jsonify({'error': 'request_too_large'}), 413
+    raw_body = request.stream.read(4097)
+    if len(raw_body) > 4096:
+        return jsonify({'error': 'request_too_large'}), 413
+    if not raw_body:
+        body = {}
+    else:
+        try:
+            body = json.loads(raw_body)
+        except (TypeError, ValueError):
+            raise ValidationError('A valid JSON object is required.')
+    if not isinstance(body, dict):
+        raise ValidationError('A JSON object is required.')
+    if set(body) - {'introduction'}:
+        raise ValidationError('Only introduction is accepted.')
+    introduction = None
+    if 'introduction' in body:
+        raw_introduction = body['introduction']
+        if not isinstance(raw_introduction, str):
+            raise ValidationError('introduction must be text.')
+        introduction = raw_introduction.strip() or None
+        if introduction is not None and len(introduction) > 300:
+            raise ValidationError('introduction must be at most 300 characters.')
+        if introduction is not None and any(
+            (ord(char) < 32 and char not in '\t\r\n') or 0x7f <= ord(char) <= 0x9f
+            for char in introduction
+        ):
+            raise ValidationError('introduction contains unsupported control characters.')
+    item, created = join_request(current_app_user(), band_id, introduction=introduction)
     return jsonify({'membership': membership_dict(item), 'created': created}), 201 if created else 200
 
 
