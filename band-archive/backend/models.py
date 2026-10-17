@@ -724,7 +724,16 @@ class Member(db.Model):
     linked_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True, index=True)
     name = db.Column(db.String(100), nullable=False)
     instrument = db.Column(db.String(100), nullable=False)
+    biography = db.Column(db.Text, nullable=False, default='', server_default=text("''"))
+    positions_json = db.Column(db.Text, nullable=False, default='[]', server_default='[]')
+    custom_position = db.Column(db.String(50), nullable=False, default='', server_default=text("''"))
+    profile_revision = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('band_id', 'linked_user_id', name='uq_member_band_linked_user'),
+        db.CheckConstraint('profile_revision >= 0', name='ck_member_profile_revision'),
+    )
 
     def to_dict(self):
         return {
@@ -1061,6 +1070,19 @@ def _parent_band(connection, table, record_id):
 
 def _assign_legacy_scope(mapper, connection, target):
     """Central dual-write guard for legacy v1 ORM writers after backfill."""
+    if isinstance(target, Member):
+        profile_membership_id = getattr(target, '_trusted_profile_membership_id', None)
+        if profile_membership_id is not None:
+            membership = connection.execute(text(
+                'SELECT bm.band_id, bm.user_id, bm.status, au.status, au.email_verified '
+                'FROM band_membership AS bm JOIN app_user AS au ON au.id = bm.user_id '
+                'WHERE bm.id = :id'
+            ), {'id': profile_membership_id}).one_or_none()
+            if (membership is None or membership[2] != 'active' or membership[3] != 'active'
+                    or not membership[4] or target.band_id != membership[0]
+                    or target.linked_user_id != membership[1]):
+                raise TenantScopeUnavailable('Linked profile requires its active verified membership.')
+            return
     # Authenticated v2 writers explicitly bind the active membership that
     # owns the operation.  Permit that narrower contract before resolving the
     # immutable legacy-import tenant, while retaining a database-side check

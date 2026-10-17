@@ -210,4 +210,6 @@ def test_immutable_metadata_and_sqlite_upgrade_downgrade_guards(calendar):
     assert not set(('band_availability_state', 'band_availability_day', 'band_personal_schedule_note')) & set(phase16_metadata().tables)
     assert {'band_availability_state', 'band_availability_day', 'band_personal_schedule_note'} <= set(phase17_metadata().tables)
     with calendar.app_context(), db.engine.connect() as connection:
-        assert schema_contract_differences(connection, metadata=phase17_metadata()) == []
+        # Current ORM fixtures now include later member profile fields too;
+        # the immutable v17 snapshot is verified independently above.
+        assert schema_contract_differences(connection) == []

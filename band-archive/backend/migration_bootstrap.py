@@ -40,6 +40,7 @@ PHASE14_REVISION = '20261014_14'
 PHASE15_REVISION = '20261016_15'
 PHASE16_REVISION = '20261017_16'
 PHASE17_REVISION = '20261017_17'
+PHASE18_REVISION = '20261017_18'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -129,6 +130,7 @@ def baseline_metadata():
                     table.foreign_keys.discard(foreign_key)
                     column.foreign_keys.discard(foreign_key)
                 table._columns.remove(column)
+    _remove_future_member_profile(metadata)
     _restore_pre_phase7_content_writes(metadata)
     return metadata
 
@@ -187,6 +189,7 @@ def _remove_future_r2_deletion_task(metadata):
 
 def _remove_future_policy_acceptance(metadata):
     """Keep all immutable snapshots before revision 16 structurally exact."""
+    _remove_future_member_profile(metadata)
     table = metadata.tables.get('band_membership')
     if table is not None and table.c.get('join_introduction') is not None:
         table._columns.remove(table.c.join_introduction)
@@ -195,6 +198,18 @@ def _remove_future_policy_acceptance(metadata):
     for name in AVAILABILITY_TABLES:
         if name in metadata.tables:
             metadata.remove(metadata.tables[name])
+    return metadata
+
+
+def _remove_future_member_profile(metadata):
+    table = metadata.tables.get('member')
+    if table is not None:
+        for constraint in list(table.constraints):
+            if constraint.name in {'uq_member_band_linked_user', 'ck_member_profile_revision'}:
+                table.constraints.remove(constraint)
+        for name in ('biography', 'positions_json', 'custom_position', 'profile_revision'):
+            if name in table.c:
+                table._columns.remove(table.c[name])
     return metadata
 
 
@@ -761,6 +776,7 @@ def _expected_check_constraints(table, dialect=None):
             allow_greater_equal=(table.name, constraint.name) in {
                 ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
                 ('band_availability_state', 'ck_availability_state_generation'),
+                ('member', 'ck_member_profile_revision'),
             },
             )
         if (getattr(dialect, 'name', None) == 'postgresql'
@@ -810,6 +826,7 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             allow_greater_equal=(table_name, constraint.get('name')) in {
                 ('r2_deletion_task', 'ck_r2_deletion_task_attempt_count'),
                 ('band_availability_state', 'ck_availability_state_generation'),
+                ('member', 'ck_member_profile_revision'),
             },
             )
         if (getattr(dialect, 'name', None) == 'postgresql' and table is not None
@@ -1687,6 +1704,8 @@ def metadata_for_recorded_revision(revision):
         return phase16_metadata()
     if revision == PHASE17_REVISION:
         return phase17_metadata()
+    if revision == PHASE18_REVISION:
+        return db.metadata
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

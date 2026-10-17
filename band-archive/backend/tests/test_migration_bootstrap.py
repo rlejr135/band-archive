@@ -147,7 +147,7 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            assert migration_head_revision() == '20261017_17'
+            assert migration_head_revision() == '20261017_18'
             assert _version(app) == migration_head_revision()
             with db.engine.connect() as connection:
                 assert 'band_request_email_outbox' in inspect(connection).get_table_names()
@@ -187,6 +187,56 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
                 assert connection.execute(text(
                     'SELECT count(*) FROM band_request_email_outbox'
                 )).scalar_one() == 1
+    finally:
+        _dispose(app)
+
+
+def test_member_profile_revision_18_preserves_v17_member_and_log_rows(tmp_path):
+    database_path = tmp_path / 'member-profile-v17-data.db'
+    upgraded = _upgrade_through_read_scope_contract(database_path)
+    assert upgraded.exit_code == 0, upgraded.output
+    app = _migration_app(database_path)
+    try:
+        with app.app_context():
+            with db.engine.begin() as connection:
+                connection.execute(text(
+                    "INSERT INTO band (name, slug, created_at, updated_at) "
+                    "VALUES ('Profile preservation', 'profile-preservation', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ))
+                band_id = connection.execute(text(
+                    "SELECT id FROM band WHERE slug='profile-preservation'"
+                )).scalar_one()
+            downgrade(revision='20261017_17', directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.begin() as connection:
+                connection.execute(text(
+                    "INSERT INTO member (band_id, linked_user_id, name, instrument) "
+                    "VALUES (:band_id, NULL, 'Legacy one', 'legacy bass'), "
+                    "(:band_id, NULL, 'Legacy two', 'custom instrument')"
+                ), {'band_id': band_id})
+                member_id = connection.execute(text(
+                    "SELECT id FROM member WHERE band_id=:band_id AND name='Legacy one'"
+                ), {'band_id': band_id}).scalar_one()
+                connection.execute(text(
+                    "INSERT INTO personal_log (band_id, member_id, title, filename, file_type, "
+                    "transcoding_status, processing_attempts, created_at) "
+                    "VALUES (:band_id, :member_id, 'Old log', 'old.wav', 'audio', "
+                    "'not_required', 0, CURRENT_TIMESTAMP)"
+                ), {'band_id': band_id, 'member_id': member_id})
+            upgrade(directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.connect() as connection:
+                rows = connection.execute(text(
+                    "SELECT id, name, instrument, linked_user_id, biography, positions_json, "
+                    "custom_position, profile_revision FROM member WHERE band_id=:band_id ORDER BY name"
+                ), {'band_id': band_id}).all()
+                assert [(row.name, row.instrument, row.linked_user_id, row.biography,
+                         row.positions_json, row.custom_position, row.profile_revision) for row in rows] == [
+                    ('Legacy one', 'legacy bass', None, '', '[]', '', 0),
+                    ('Legacy two', 'custom instrument', None, '', '[]', '', 0),
+                ]
+                assert connection.execute(text(
+                    "SELECT member_id, title FROM personal_log WHERE band_id=:band_id"
+                ), {'band_id': band_id}).all() == [(member_id, 'Old log')]
+                assert schema_contract_differences(connection) == []
     finally:
         _dispose(app)
 
