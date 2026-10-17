@@ -2,6 +2,8 @@ import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { BandProvider } from './context/BandContext.jsx';
 import { UploadProvider } from './context/UploadContext.jsx';
+import { ServicePolicyProvider, useServicePolicy } from './context/ServicePolicyContext.jsx';
+import { PolicyPage, PolicyLinks } from './components/auth/PolicyPages.jsx';
 import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages.jsx';
 import { BandsPage } from './components/bands/BandsPage.jsx';
 import { BandCreationRequestsAdminRoute } from './components/bands/BandCreationRequestsAdmin.jsx';
@@ -13,13 +15,15 @@ import './components/bands/BandsPage.css';
 import './components/home/WelcomeLanding.css';
 
 const WelcomeLanding = ({ authRoute = false }) => {
+  const { config: serviceConfig } = useServicePolicy();
+  const serviceName = serviceConfig?.service?.name || '밴드 아카이브';
   const { user, loading } = useAuth();
   if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
   if (user && !authRoute) return <Navigate to="/bands" replace />;
 
   return <main className="welcome-page">
     <header className="welcome-header">
-      <Link className="welcome-brand" to="/" aria-label="모두의 Band Archive 홈"><span className="welcome-brand-mark">B</span><span>모두의 Band Archive <small>YOUR MUSIC, TOGETHER</small></span></Link>
+      <Link className="welcome-brand" to="/" aria-label={`${serviceName} 홈`}><span className="welcome-brand-mark">B</span><span>{serviceName} <small>YOUR MUSIC, TOGETHER</small></span></Link>
       <a className="welcome-header-link" href="#login">로그인</a>
     </header>
     <section className="welcome-hero">
@@ -46,7 +50,7 @@ const WelcomeLanding = ({ authRoute = false }) => {
       <div><p className="welcome-eyebrow">WELCOME BACK</p><h2 id="welcome-login-title">아카이브로 돌아오기</h2><p>로그인하면 내 밴드 목록에서 작업할 공간을 선택할 수 있어요.</p></div>
       <LoginPage embedded />
     </section>
-    <footer className="welcome-footer"><span>모두의 Band Archive</span><span>밴드의 시간을 함께 기록합니다.</span></footer>
+    <footer className="welcome-footer"><span>{serviceName}</span><PolicyLinks /><span>밴드의 시간을 함께 기록합니다.</span></footer>
   </main>;
 };
 
@@ -72,6 +76,8 @@ export const AppRoutes = () => <Routes>
   <Route path="/" element={<RootRoute />} />
   <Route path="/login" element={<WelcomeLanding authRoute />} />
   <Route path="/signup" element={<SignupPage />} />
+  <Route path="/privacy" element={<PolicyPage kind="privacy" />} />
+  <Route path="/terms" element={<PolicyPage kind="terms" />} />
   <Route path="/verify-email" element={<VerifyEmailPage />} />
   <Route path="/forgot-password" element={<ForgotPasswordPage />} />
   <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -95,7 +101,7 @@ export const AppRoutes = () => <Routes>
 </Routes>;
 
 function App() {
-  return <AuthProvider><BandProvider><UploadProvider><AppRoutes /></UploadProvider></BandProvider></AuthProvider>;
+  return <ServicePolicyProvider><AuthProvider><BandProvider><UploadProvider><AppRoutes /></UploadProvider></BandProvider></AuthProvider></ServicePolicyProvider>;
 }
 
 export default App;

@@ -11,6 +11,7 @@ import BandSwitcher from './BandSwitcher.jsx';
 import AuthStatus from '../layout/AuthStatus.jsx';
 import './BandsPage.css';
 import { usePlatformAdmin } from './usePlatformAdmin.js';
+import { useServicePolicy } from '../../context/ServicePolicyContext.jsx';
 
 const profileName = (user) => {
   const metadata = user?.user_metadata || {};
@@ -145,6 +146,7 @@ const BandMembershipCard = ({ band, userId, selected, onOpen, onLeave }) => {
 };
 
 export const BandsPage = () => {
+  const { config: serviceConfig } = useServicePolicy();
   const { user } = useAuth();
   const { activeBands, pendingMemberships, selectedBand, selectBand, loading, error, reload } = useBands();
   const navigate = useNavigate();
@@ -160,7 +162,7 @@ export const BandsPage = () => {
 
   return <div className="bands-shell">
     <header className="bands-header">
-      <Link to="/bands" className="bands-brand">모두의 Band Archive</Link>
+      <Link to="/bands" className="bands-brand">{serviceConfig?.service?.name || '밴드 아카이브'}</Link>
       <div className="bands-header-actions"><BandSwitcher accountMode /><AuthStatus /></div>
     </header>
     <main className="account-hub" aria-labelledby="account-hub-title">

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getSupabaseClient, getSupabaseConfigError } from '../services/supabase.js';
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -27,14 +27,19 @@ export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(() => !configError);
   const [authEvent, setAuthEvent] = useState(null);
+  const [authGeneration, setAuthGeneration] = useState(0);
+  const authIdentity = useRef(null);
 
   useEffect(() => {
     const supabase = getSupabaseClient();
     if (!supabase) return undefined;
     let active = true;
+    let eventVersion = 0;
     const loadSession = async () => {
+      const version = eventVersion;
       const { data } = await supabase.auth.getSession();
-      if (active) {
+      if (active && version === eventVersion) {
+        authIdentity.current = data.session?.user?.id ?? null;
         setSession(data.session ?? null);
         setLoading(false);
       }
@@ -42,7 +47,11 @@ export const AuthProvider = ({ children }) => {
     loadSession();
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return;
+      eventVersion += 1;
       setAuthEvent(event);
+      const nextIdentity = nextSession?.user?.id ?? null;
+      if (event === 'SIGNED_OUT' || nextIdentity !== authIdentity.current) setAuthGeneration((value) => value + 1);
+      authIdentity.current = nextIdentity;
       setSession(nextSession ?? null);
       if (event === 'PASSWORD_RECOVERY' && nextSession) setRecoveryMarker(true);
       if (event === 'SIGNED_OUT') setRecoveryMarker(false);
@@ -80,12 +89,13 @@ export const AuthProvider = ({ children }) => {
     loading,
     configError,
     authEvent,
+    authGeneration,
     hasRecoverySession: Boolean(session && hasRecoveryMarker()),
     getAccessToken,
     refreshSession,
     signOut,
     clearRecoverySession: () => setRecoveryMarker(false),
-  }), [authEvent, configError, getAccessToken, loading, refreshSession, session, signOut]);
+  }), [authEvent, authGeneration, configError, getAccessToken, loading, refreshSession, session, signOut]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
