@@ -78,8 +78,13 @@ def test_rehearsal_direct_upload_starts_video_lifecycle(client, monkeypatch):
     assert started == [response.get_json()['id']]
 
 
-def test_m4a_extraction_uses_aac_copy_and_only_uploads_audio(monkeypatch):
+def test_m4a_extraction_uses_aac_copy_and_only_uploads_audio(monkeypatch, tmp_path):
     calls = []
+    # Deliberately include resolution-like digits in the temp path. They are
+    # incidental path text, not ffmpeg video-resolution options.
+    temp_parent = tmp_path / 'tmp-720-480'
+    temp_parent.mkdir()
+    monkeypatch.setattr('media_processing.tempfile.tempdir', str(temp_parent))
 
     def fake_run(args, **kwargs):
         calls.append(args)
@@ -97,7 +102,12 @@ def test_m4a_extraction_uses_aac_copy_and_only_uploads_audio(monkeypatch):
     assert uploaded == [('media/clip_audio.m4a', 'audio/mp4')]
     ffmpeg_call = next(call for call in calls if call[0] == 'ffmpeg')
     assert ['-c:a', 'copy'] == ffmpeg_call[ffmpeg_call.index('-c:a'):ffmpeg_call.index('-c:a') + 2]
-    assert not any('720' in value or '480' in value for call in calls for value in call)
+    assert '-vn' in ffmpeg_call
+    assert ffmpeg_call[ffmpeg_call.index('-map') + 1] == '0:a:0'
+    assert any(str(temp_parent) in value and '720' in value and '480' in value for value in ffmpeg_call)
+    video_transform_flags = {'-vf', '-filter:v', '-filter_complex:v', '-s', '-s:v'}
+    assert not video_transform_flags.intersection(ffmpeg_call)
+    assert not any(value.startswith(('scale=', 'crop=')) for value in ffmpeg_call)
 
 
 def test_timeout_marks_video_failed_with_safe_error(app, monkeypatch):
