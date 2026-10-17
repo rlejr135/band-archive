@@ -18,7 +18,7 @@ from media_processing import create_media, save_media_and_start
 from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
 from models import (
     Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media,
-    MediaVote, Member, MultipartUploadSession, PersonalLog,
+    MediaVote, MultipartUploadSession, PersonalLog,
     PersonalLogMultipartUploadSession, Rehearsal, Song, SongSuggestion, SongVote,
 )
 from tenant_backfill import TenantBackfillError, _canonical_key, apply, plan, _validate_relationships
@@ -123,11 +123,11 @@ def test_revision_five_fails_closed_until_legacy_scope_is_backfilled(tmp_path):
         client = runtime.test_client()
         read = client.get('/songs')
         assert read.status_code == 503
-        assert read.get_json()['error'] == 'tenant_scope_unavailable'
+        assert read.get_json()['error'] == 'tenant_schema_unavailable'
         for endpoint, payload in _V1_WRITES:
             response = client.post(endpoint, json=payload)
             assert response.status_code == 503
-            assert response.get_json()['error'] == 'tenant_backfill_required'
+            assert response.get_json()['error'] == 'tenant_schema_unavailable'
         with runtime.app_context():
             assert db.session.execute(text('SELECT count(*) FROM song')).scalar_one() == 0
             assert db.session.execute(text('SELECT count(*) FROM band')).scalar_one() == 0
@@ -234,6 +234,17 @@ def _backfilled_runtime(path):
     return create_app(_runtime_config(path), start_worker=False)
 
 
+def _insert_legacy_member_core():
+    """Insert only v05 columns; Member's current ORM mapping is newer."""
+    legacy_band_id = db.session.execute(text(
+        'SELECT id FROM band WHERE is_legacy_import = 1'
+    )).scalar_one()
+    return db.session.execute(text(
+        'INSERT INTO member (band_id, name, instrument) '
+        "VALUES (:band_id, 'member', 'bass') RETURNING id"
+    ), {'band_id': legacy_band_id}).scalar_one()
+
+
 def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path):
     runtime = _backfilled_runtime(tmp_path / 'writer-families.db')
     try:
@@ -244,14 +255,14 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
 
             song = Song(title='song', artist='artist')
             rehearsal = Rehearsal(title='rehearsal', date=date(2026, 1, 1))
-            member = Member(name='member', instrument='bass')
-            db.session.add_all((song, rehearsal, member))
+            db.session.add_all((song, rehearsal))
             db.session.commit()
+            member_id = _insert_legacy_member_core()
             rehearsal.songs.append(song)
             db.session.commit()
 
             media = Media(song_id=song.id, rehearsal_id=rehearsal.id, filename='clip.mp4', file_type='video')
-            log = PersonalLog(member_id=member.id, title='log', filename='log.mp4', file_type='video')
+            log = PersonalLog(member_id=member_id, title='log', filename='log.mp4', file_type='video')
             gallery = GalleryImage(filename='gallery.png')
             announcement = Announcement(content='notice')
             suggestion = SongSuggestion(title='suggestion', artist='artist', link='https://example.test')
@@ -272,7 +283,7 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
             )
             log_session = PersonalLogMultipartUploadSession(
                 r2_upload_id='log-upload', object_key='personal_logs/log.mp4', original_filename='log.mp4',
-                title='log', content_type='video/mp4', declared_bytes=1, member_id=member.id,
+                title='log', content_type='video/mp4', declared_bytes=1, member_id=member_id,
             )
             db.session.add_all((reply, song_vote, media_vote, media_session, log_session))
             db.session.commit()
@@ -282,9 +293,11 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
             background_media = create_media(song_id=song.id, filename='worker.mp4', file_type='video')
             save_media_and_start(runtime, background_media)
 
-            scoped = (song, rehearsal, member, media, log, gallery, announcement, suggestion,
+            scoped = (song, rehearsal, media, log, gallery, announcement, suggestion,
                       root, reply, song_vote, media_vote, media_session, log_session, background_media)
             assert all(item.band_id == legacy_band_id for item in scoped)
+            assert db.session.execute(text('SELECT band_id FROM member WHERE id=:id'),
+                                      {'id': member_id}).scalar_one() == legacy_band_id
             visible = (song, rehearsal, media, log, gallery, announcement, suggestion, background_media)
             assert all(item.visibility == 'PUBLIC' for item in visible)
             assert db.session.execute(text('SELECT count(*) FROM rehearsal_songs')).scalar_one() == 1
@@ -310,12 +323,12 @@ def test_relationship_validator_rejects_cross_band_targets(tmp_path, label, stat
         with runtime.app_context():
             song = Song(title='song', artist='artist')
             rehearsal = Rehearsal(title='rehearsal', date=date(2026, 1, 1))
-            member = Member(name='member', instrument='bass')
-            db.session.add_all((song, rehearsal, member))
+            db.session.add_all((song, rehearsal))
             db.session.commit()
+            member_id = _insert_legacy_member_core()
             rehearsal.songs.append(song)
             media = Media(song_id=song.id, rehearsal_id=rehearsal.id, filename='clip.mp4')
-            log = PersonalLog(member_id=member.id, title='log', filename='log.mp4', file_type='video')
+            log = PersonalLog(member_id=member_id, title='log', filename='log.mp4', file_type='video')
             db.session.add_all((media, log))
             db.session.commit()
             vote = SongVote(song_id=song.id, voter_hash='song-voter', value=1)

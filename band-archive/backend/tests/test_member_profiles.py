@@ -111,6 +111,12 @@ def test_roster_privacy_active_delete_protection_and_legacy_bypass(profiles):
         db.session.get(Band, 1).is_legacy_import = True
         db.session.add(TenantBackfillState(key='phase4_tenant_scope', status='validated'))
         db.session.commit()
+        legacy_member = Member(name='Legacy created', instrument='Guitar')
+        db.session.add(legacy_member)
+        db.session.flush()
+        assert legacy_member.band_id == 1
+        db.session.delete(legacy_member)
+        db.session.commit()
     legacy_write = c.put('/members/2', json={'name': 'hacked'})
     assert legacy_write.status_code == 403
     with profiles.app_context():

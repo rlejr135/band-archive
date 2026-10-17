@@ -7,7 +7,7 @@ from alembic.operations import Operations
 from flask_migrate import downgrade, upgrade
 from sqlalchemy import inspect, text
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects import postgresql, sqlite
 from click.testing import CliRunner
 import pytest
 
@@ -26,6 +26,7 @@ from migration_bootstrap import (
     _canonical_postgres_check_constraint,
     _constraints_are_equivalent,
     _defaults_are_equivalent,
+    _metadata_default,
     _reflected_indexes,
     _reflected_check_constraints,
     _audit_trigger_differences,
@@ -580,6 +581,22 @@ def test_postgres_default_normalization_is_limited_to_the_column_contract():
     assert not _defaults_are_equivalent('active', "'active'::integer", table.c.status, 'audit_event', dialect)
     assert not _defaults_are_equivalent('active', 'current_user', table.c.status, 'audit_event', dialect)
     assert _defaults_are_equivalent('21474836480', '21474836480::bigint', table.c.quota, 'audit_event', dialect)
+
+
+def test_member_positions_default_requires_a_valid_empty_json_array_literal():
+    metadata = sa.MetaData()
+    member = sa.Table(
+        'member', metadata,
+        sa.Column('positions_json', sa.Text, nullable=False, server_default='[]'),
+    )
+    column = member.c.positions_json
+    assert _metadata_default(column) == '[]'
+    assert _defaults_are_equivalent('[]', "'[]'", column, 'member', sqlite.dialect())
+    assert _defaults_are_equivalent('[]', "'[ ]'", column, 'member', sqlite.dialect())
+    for invalid in ("''", "' '", 'NULL', None):
+        assert not _defaults_are_equivalent('[]', invalid, column, 'member', sqlite.dialect())
+    assert _defaults_are_equivalent('[]', "'[]'::text", column, 'member', postgresql.dialect())
+    assert not _defaults_are_equivalent('[]', "''::text", column, 'member', postgresql.dialect())
 
 
 def test_postgres_serial_default_does_not_apply_to_composite_pk_auto_columns():

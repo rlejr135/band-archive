@@ -9,6 +9,7 @@ startup.
 
 from collections import Counter
 from pathlib import Path
+import json
 import re
 
 from alembic import command
@@ -497,6 +498,10 @@ def _normalize_sql(value):
 def _metadata_default(column):
     if column.server_default is None:
         return None
+    if column.table.name == 'member' and column.name == 'positions_json':
+        # Preserve JSON brackets; _normalize_sql removes square brackets from
+        # identifiers in other schema expressions.
+        return str(column.server_default.arg).strip()
     return _normalize_sql(column.server_default.arg)
 
 
@@ -647,6 +652,10 @@ def _postgres_owned_sequence_default(value, table_name, column, connection=None,
 def _defaults_are_equivalent(expected_default, actual_default, column, table_name, dialect,
                              connection=None, sequence_resolver=None):
     """Compare defaults with PostgreSQL reflection-only normalization."""
+    if table_name == 'member' and column.name == 'positions_json':
+        expected_json = _member_positions_default(expected_default, column, dialect, reflected=False)
+        actual_json = _member_positions_default(actual_default, column, dialect, reflected=True)
+        return expected_json is not None and expected_json == actual_json
     if dialect.name != 'postgresql':
         return _normalize_default(actual_default) == _normalize_default(expected_default)
     if expected_default is None:
@@ -662,6 +671,32 @@ def _defaults_are_equivalent(expected_default, actual_default, column, table_nam
         actual_boolean = _postgres_boolean_default(actual_value)
         return expected_boolean is not None and expected_boolean == actual_boolean
     return _normalize_default(expected_value) == _normalize_default(actual_value)
+
+
+def _member_positions_default(value, column, dialect, *, reflected):
+    """Parse only the JSON array literal used by member.positions_json."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    # SQLAlchemy's string server_default shorthand stores the JSON text without
+    # SQL quoting in metadata; database reflection returns a quoted SQL literal.
+    if not reflected and raw == '[]':
+        return ()
+    if dialect.name == 'postgresql':
+        raw = _postgres_default_cast(raw, column, reflected=reflected)
+        if raw is None:
+            return None
+    raw = _strip_sql_parentheses(str(raw).strip())
+    if len(raw) < 2 or raw[0] not in "'\"" or raw[-1] != raw[0]:
+        return None
+    literal = raw[1:-1]
+    if raw[0] == "'":
+        literal = literal.replace("''", "'")
+    try:
+        decoded = json.loads(literal)
+    except (TypeError, ValueError):
+        return None
+    return tuple(decoded) if isinstance(decoded, list) else None
 
 
 def _expected_foreign_keys(table):

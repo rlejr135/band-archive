@@ -25,6 +25,9 @@ def remaining_graph(access_app, signer):
         private = Band.query.filter_by(slug='band-a').one()
         author = BandMembership.query.filter_by(band_id=public.id, role='owner').one()
         foreign_author = BandMembership.query.filter_by(band_id=private.id, role='owner').one()
+        author.user.email_verified = True
+        foreign_author.user.email_verified = True
+        db.session.flush()
         member = Member(band_id=public.id, linked_user_id=author.user_id,
                         name='Public musician', instrument='Bass')
         foreign_member = Member(band_id=private.id, linked_user_id=foreign_author.user_id,
