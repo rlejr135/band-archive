@@ -61,6 +61,11 @@ export const InviteCodeEntry = ({ onJoined }) => {
 
 
 export const DiscoverBandsPage = () => {
+  const { user, authGeneration = 0 } = useAuth();
+  return <DiscoverBandsContent key={`${user?.id || 'visitor'}:${authGeneration}`} />;
+};
+
+const DiscoverBandsContent = () => {
   const { user } = useAuth();
   const { activeBands, pendingMemberships, bandsLoaded, reload: reloadMemberships } = useBands();
   const api = useApi();
@@ -69,6 +74,12 @@ export const DiscoverBandsPage = () => {
   const [page, setPage] = useState(0);
   const [state, setState] = useState({ loading: true, bands: [], pagination: { has_more: false, total: 0 } });
   const [joining, setJoining] = useState(new Set());
+  const [requestBand, setRequestBand] = useState(null);
+  const [introduction, setIntroduction] = useState('');
+  const joinGuard = useRef(new Set());
+  const joinController = useRef(null);
+  const current = useRef(true);
+  useEffect(() => { current.current = true; return () => { current.current = false; joinController.current?.abort(); }; }, []);
   const [error, setError] = useState('');
   const pageSize = 20;
 
@@ -92,16 +103,25 @@ export const DiscoverBandsPage = () => {
     pending: new Set((pendingMemberships || []).map((membership) => Number(membership.band?.id))),
   }), [activeBands, pendingMemberships]);
 
-  const join = async (band) => {
+  const openJoin = (band) => {
     if (!user) { navigate(`/login?returnTo=${encodeURIComponent('/bands/discover')}`); return; }
+    setRequestBand(band); setIntroduction(''); setError('');
+  };
+  const join = async (event) => {
+    event.preventDefault();
+    const band = requestBand;
+    if (!band || !user || Array.from(introduction.trim()).length > 300) return;
     const bandId = Number(band.id);
-    if (joining.has(bandId) || own.pending.has(bandId) || own.active.has(bandId)) return;
+    if (joinGuard.current.has(bandId) || own.pending.has(bandId) || own.active.has(bandId)) return;
+    joinGuard.current.add(bandId);
+    const controller = new AbortController(); joinController.current = controller;
     setJoining((previous) => new Set(previous).add(bandId)); setError('');
     try {
-      const result = await api.requestJson(`/api/v2/bands/${bandId}/join-requests`, requestOptions('POST', {}));
-      if (result?.created || result?.membership) await reloadMemberships();
-    } catch { setError(genericFailure); }
-    finally { setJoining((previous) => { const next = new Set(previous); next.delete(bandId); return next; }); }
+      const result = await api.requestJson(`/api/v2/bands/${bandId}/join-requests`, requestOptions('POST', { introduction: introduction.trim() }, controller.signal));
+      if (!current.current) return;
+      if (result?.created || result?.membership) { setRequestBand(null); setIntroduction(''); await reloadMemberships(); }
+    } catch { if (current.current) setError(genericFailure); }
+    finally { if (joinController.current === controller) joinController.current = null; joinGuard.current.delete(bandId); if (current.current) setJoining((previous) => { const next = new Set(previous); next.delete(bandId); return next; }); }
   };
 
   const submitSearch = (event) => { event.preventDefault(); setPage(0); setQuery(event.currentTarget.elements.search.value.trim()); };
@@ -109,10 +129,11 @@ export const DiscoverBandsPage = () => {
     <Link to="/bands">← 내 밴드</Link><h2 id="discover-bands-title">공개 밴드 찾기</h2>
     <form onSubmit={submitSearch} className="bands-form"><label>밴드 검색<input name="search" aria-label="밴드 검색" defaultValue={query} /></label><button type="submit" className="secondary-btn">검색</button></form>
     {error && <p role="alert" className="auth-error">{error}</p>}
+    {requestBand && <section className="bands-panel" aria-labelledby="join-introduction-title"><h3 id="join-introduction-title">{requestBand.name} 가입 요청</h3><form className="bands-form" onSubmit={join} aria-busy={joining.has(Number(requestBand.id))}><label htmlFor="join-introduction">간단한 자기소개 (선택)<textarea id="join-introduction" value={introduction} onChange={(event) => setIntroduction(event.target.value)} disabled={joining.has(Number(requestBand.id))} aria-describedby="join-introduction-help" /></label><p id="join-introduction-help" className="bands-help">밴드 관리자에게 전할 소개를 300자 이내로 적어 주세요. 전화번호·주소 등 민감한 정보는 적지 마세요. 가입 심사에만 사용하며 승인·거절 시 삭제합니다. {Array.from(introduction.trim()).length} / 300자</p><div className="band-actions"><button className="primary-btn" type="submit" disabled={joining.has(Number(requestBand.id)) || Array.from(introduction.trim()).length > 300}>{joining.has(Number(requestBand.id)) ? '요청 중…' : '가입 요청 보내기'}</button><button className="secondary-btn" type="button" disabled={joining.has(Number(requestBand.id))} onClick={() => { setRequestBand(null); setIntroduction(''); }}>취소</button></div></form></section>}
     {state.loading ? <p aria-live="polite">공개 밴드를 불러오는 중입니다…</p> : <>
       {state.bands.length === 0 ? <p className="bands-help">조건에 맞는 공개 밴드가 없습니다.</p> : <ul className="band-list">{state.bands.map((band) => {
         const id = Number(band.id); const active = own.active.has(id); const pending = own.pending.has(id);
-        return <li key={id}><div><strong>{band.name}</strong><p className="bands-help">{band.description || '공개된 밴드 공간입니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>공개 공간 보기</button>{active ? <button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>작업 공간 열기</button> : <button type="button" className="secondary-btn" disabled={(Boolean(user) && !bandsLoaded) || pending || joining.has(id)} onClick={() => join(band)}>{pending ? '승인 대기 중' : joining.has(id) ? '요청 중…' : user && !bandsLoaded ? '멤버십 확인 중…' : user ? '가입 요청' : '로그인 후 가입 요청'}</button>}</div></li>;
+        return <li key={id}><div><strong>{band.name}</strong><p className="bands-help">{band.description || '공개된 밴드 공간입니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>공개 공간 보기</button>{active ? <button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>작업 공간 열기</button> : <button type="button" className="secondary-btn" disabled={(Boolean(user) && !bandsLoaded) || pending || joining.size > 0} onClick={() => openJoin(band)}>{pending ? '승인 대기 중' : joining.has(id) ? '요청 중…' : user && !bandsLoaded ? '멤버십 확인 중…' : user ? '가입 요청' : '로그인 후 가입 요청'}</button>}</div></li>;
       })}</ul>}
       <nav className="bands-pagination" aria-label="공개 밴드 페이지"><button type="button" className="secondary-btn" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>이전</button><span>{state.pagination.total}개 중 {page + 1}페이지</span><button type="button" className="secondary-btn" disabled={!state.pagination.has_more} onClick={() => setPage((value) => value + 1)}>다음</button></nav>
     </>}
@@ -415,7 +436,7 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     <section className="bands-panel" aria-labelledby="manage-profile-title"><h3 id="manage-profile-title">밴드 소개</h3>{profileEditing ? <form className="bands-form" onSubmit={saveProfile}><label htmlFor="band-profile-description">소개<textarea id="band-profile-description" maxLength={2000} value={profileDraft} onChange={(event) => setProfileDraft(event.target.value)} disabled={profileBusy} /></label><p className="bands-help">{profileDraft.length} / 2,000자</p>{profileError && <p className="auth-error" role="alert">{profileError}</p>}<div className="band-actions"><button type="submit" className="primary-btn" disabled={profileBusy}>{profileBusy ? '저장 중…' : '소개 저장'}</button><button type="button" className="secondary-btn" disabled={profileBusy} onClick={() => { setProfileDraft(state.band.description || ''); setProfileEditing(false); setProfileError(''); }}>취소</button></div></form> : <><p>{state.band.description || '소개가 없습니다.'}</p>{profileError && <p className="auth-error" role="alert">{profileError}</p>}{state.band.permissions?.can_edit_band_profile === true && <button type="button" className="secondary-btn" onClick={() => { setProfileDraft(state.band.description || ''); setProfileError(''); setProfileEditing(true); }}>소개 수정</button>}</>}</section>
     <section className="bands-panel" aria-labelledby="manage-announcement-title"><h3 id="manage-announcement-title">밴드 공지</h3><AnnouncementEditor announcement={state.announcement} band={state.band} api={api} workspaceKey={identity} onSaved={announcementSaved} onForbidden={onForbidden} /></section>
     <section className="bands-panel" aria-labelledby="manage-gallery-picker-title"><h3 id="manage-gallery-picker-title">대표 사진</h3>{galleryPickerOpen ? <FeaturedGalleryManager band={state.band} api={api} workspaceKey={identity} onForbidden={onForbidden} /> : <button type="button" className="secondary-btn" onClick={() => setGalleryPickerOpen(true)}>갤러리에서 선택</button>}</section>
-    <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><span>{item.user?.display_name || '새 멤버'}</span><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
+    <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><div><strong>{item.user?.display_name || item.user?.email || '새 멤버'}</strong><p className="bands-help">요청 시각: <time>{formatInviteCreatedAt(item.requested_at)}</time></p><p className="membership-introduction">{typeof item.introduction === 'string' && item.introduction.trim() ? item.introduction : '작성한 자기소개가 없습니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
     <section className="bands-panel" aria-labelledby="invite-title"><h3 id="invite-title">초대 코드</h3><button type="button" className="secondary-btn" onClick={createInvite}>새 초대 코드 만들기</button>{rawInvite?.identity === identity && <div className="invite-once" role="status"><strong>지금 한 번만 표시되는 코드</strong><code>{rawInvite.code}</code><p>안전한 방법으로 전달한 뒤 이 화면을 벗어나면 다시 확인할 수 없습니다.</p></div>}<ul className="band-list">{state.invites.map((invite) => <li key={invite.id}><span>{invite.revoked_at ? '취소됨' : '사용 가능'} · <time>{formatInviteCreatedAt(invite.created_at)}</time></span>{!invite.revoked_at && <button type="button" className="secondary-btn" onClick={() => revoke(invite)}>취소</button>}</li>)}</ul></section>
     {isOwner && <section className="bands-panel" aria-labelledby="roles-title"><h3 id="roles-title">멤버 역할</h3><ul className="band-list">{active.map((item) => <li key={item.id}><span>{item.user?.display_name || '멤버'} · {item.role}</span>{item.role !== 'owner' && <select aria-label={`${item.user?.display_name || '멤버'} 역할`} value={item.role} onChange={(event) => { const operation = sessionRef.current; api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value }, operation.controller.signal)).then(() => isCurrent(operation) && refresh(operation)).catch(() => isCurrent(operation) && setError(genericFailure)); }}><option value="member">member</option><option value="admin">admin</option></select>}</li>)}</ul></section>}
   </main>;

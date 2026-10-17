@@ -37,7 +37,7 @@ test('visitor discover preserves a safe login return and join becomes pending on
   globalThis.fetch = async (url, request = {}) => { calls.push([String(url), request]); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
   try { const visitor = render(createElement(App, { entry: '/bands/discover', authValue: account(null), discover: true })); await visitor.findByText('Public'); await userEvent.click(visitor.getByRole('button', { name: '로그인 후 가입 요청' })); await visitor.findByText('login:?returnTo=%2Fbands%2Fdiscover'); assert.ok(calls.every(([url]) => !url.includes('invite'))); visitor.unmount();
     let joined = 0; let membershipReads = 0; globalThis.fetch = async (url) => { if (String(url).endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (String(url).includes('join-requests')) { joined += 1; return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
-    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); await waitFor(() => assert.equal(joined, 1)); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
+    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); assert.equal(joined, 0); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
   } finally { globalThis.fetch = previous; }
 });
 
@@ -45,6 +45,64 @@ test('invite code stays in a POST body, clears the input, and has a generic inva
   await load(); const previous = globalThis.fetch; const writes = [];
   globalThis.fetch = async (url, options = {}) => { writes.push([String(url), options]); return response({}, 404); };
   try { const view = render(createElement(auth.AuthContext.Provider, { value: account() }, createElement(onboarding.InviteCodeEntry))); const input = view.getByLabelText('초대 코드'); await userEvent.type(input, 'secret-capability'); await userEvent.click(view.getByRole('button', { name: '가입' })); await view.findByText('초대 코드를 사용할 수 없습니다.'); assert.equal(input.value, ''); assert.equal(writes.length, 1); assert.ok(writes[0][0].endsWith('/api/v2/invite-codes/join')); assert.equal(writes[0][0].includes('secret-capability'), false); assert.deepEqual(JSON.parse(writes[0][1].body), { code: 'secret-capability' }); } finally { globalThis.fetch = previous; }
+});
+
+test('join introduction is optional plain text, bounded to 300 code points, trimmed and single-flight', async () => {
+  await load(); const previous = globalThis.fetch; const pending = deferred(); const writes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
+    if (String(url).includes('join-requests')) { writes.push(JSON.parse(options.body)); return pending.promise; }
+    return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } });
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
+    await view.findByRole('button', { name: '가입 요청' }); await userEvent.click(view.getByRole('button', { name: '가입 요청' }));
+    const input = view.getByLabelText('간단한 자기소개 (선택)');
+    fireEvent.change(input, { target: { value: 'a'.repeat(301) } });
+    // Use the native input event path for controlled textareas in jsdom.
+    await userEvent.type(input, ' 기타와 보컬을 해요. ');
+    const send = view.getByRole('button', { name: '가입 요청 보내기' });
+    assert.equal(send.disabled, true); await user.clear(input); await userEvent.type(input, ' 기타와 보컬을 해요. ');
+    await userEvent.click(send); fireEvent.submit(input.closest('form')); assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0], { introduction: '기타와 보컬을 해요.' });
+    await act(async () => pending.resolve(response({ membership: { id: 1 }, created: true }, 201)));
+    await waitFor(() => assert.equal(view.queryByLabelText('간단한 자기소개 (선택)'), null));
+  } finally { globalThis.fetch = previous; }
+});
+
+test('join account switch clears draft and ignores the previous account response', async () => {
+  await load(); const previous = globalThis.fetch; const pending = deferred(); let writes = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
+    if (String(url).includes('join-requests')) { writes += 1; return pending.promise; }
+    return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } });
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('a') }));
+    await view.findByRole('button', { name: '가입 요청' }); await userEvent.click(view.getByRole('button', { name: '가입 요청' }));
+    await userEvent.type(view.getByLabelText('간단한 자기소개 (선택)'), 'private draft'); await userEvent.click(view.getByRole('button', { name: '가입 요청 보내기' }));
+    view.rerender(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('b') }));
+    assert.equal(view.queryByDisplayValue('private draft'), null);
+    await act(async () => pending.resolve(response({}, 400)));
+    await view.findByRole('button', { name: '가입 요청' }); assert.equal(view.queryByRole('alert'), null); assert.equal(writes, 1);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('manager sees pending introduction as text and KST timestamp, never active introduction', async () => {
+  await load(); const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes('/by-slug/a')) return response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (path.endsWith('/memberships')) return response({ memberships: [{ id: 1, status: 'pending', user: { display_name: 'Applicant' }, requested_at: '2026-10-17T00:30:00Z', introduction: '<img src=x onerror=alert(1)>\n기타 연주' }, { id: 2, status: 'active', role: 'member', user: { display_name: 'Member' }, introduction: 'must-not-display' }] });
+    if (path.endsWith('/announcement')) return response({ announcement: null });
+    return response({ invite_codes: [] });
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('Applicant');
+    assert.ok(view.getByText('2026-10-17 09:30 KST'));
+    const text = view.container.querySelector('.membership-introduction'); assert.equal(text.textContent, '<img src=x onerror=alert(1)>\n기타 연주');
+    assert.equal(text.querySelector('img'), null); assert.equal(view.queryByText('must-not-display'), null);
+  } finally { globalThis.fetch = previous; }
 });
 
 test('creation form has one in-flight submit and reports its status', async () => {
