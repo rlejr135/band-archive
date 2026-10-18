@@ -62,6 +62,26 @@ def _ensure_browser_roles(url):
 def test_owned_postgres_18_to_19_upgrade_preserves_rows_and_hardens_logo_table(private_pg17):
     _upgrade_to_18(private_pg17)
     _ensure_browser_roles(private_pg17)
+    engine = create_engine(private_pg17)
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE ROLE logo_unrelated_creator NOLOGIN')
+        connection.exec_driver_sql('GRANT logo_unrelated_creator TO postgres')
+        connection.exec_driver_sql(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE logo_unrelated_creator IN SCHEMA public '
+            'GRANT SELECT ON TABLES TO anon, authenticated'
+        )
+        connection.exec_driver_sql(
+            'ALTER DEFAULT PRIVILEGES FOR ROLE logo_unrelated_creator IN SCHEMA public '
+            'GRANT USAGE ON SEQUENCES TO anon, authenticated'
+        )
+        unrelated_defaults_before = connection.execute(text("""
+            SELECT d.defaclnamespace::regnamespace::text,d.defaclobjtype,d.defaclacl::text
+            FROM pg_default_acl d JOIN pg_roles r ON r.oid=d.defaclrole
+            WHERE r.rolname='logo_unrelated_creator' ORDER BY d.defaclnamespace,d.defaclobjtype
+        """)).all()
+        assert connection.execute(text('SELECT current_user')).scalar_one() == 'postgres'
+        assert unrelated_defaults_before
+    engine.dispose()
     app = create_migration_app(private_pg17)
     try:
         with app.app_context():
@@ -109,6 +129,21 @@ def test_owned_postgres_18_to_19_upgrade_preserves_rows_and_hardens_logo_table(p
                 SELECT has_table_privilege('anon','public.band_logo','SELECT')
                     OR has_table_privilege('authenticated','public.band_logo','SELECT')
             """)).scalar_one() is False
+            assert db.session.execute(text("""
+                SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='public.band_logo'::regclass
+            """)).scalar_one() == 'postgres'
+            for role in ('anon', 'authenticated'):
+                for privilege in ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+                                  'REFERENCES', 'TRIGGER', 'MAINTAIN'):
+                    assert db.session.execute(text(
+                        'SELECT has_table_privilege(:role,\'public.band_logo\',:privilege)'
+                    ), {'role': role, 'privilege': privilege}).scalar_one() is False
+            after_defaults = db.session.execute(text("""
+                SELECT d.defaclnamespace::regnamespace::text,d.defaclobjtype,d.defaclacl::text
+                FROM pg_default_acl d JOIN pg_roles r ON r.oid=d.defaclrole
+                WHERE r.rolname='logo_unrelated_creator' ORDER BY d.defaclnamespace,d.defaclobjtype
+            """)).all()
+            assert after_defaults == unrelated_defaults_before
             db.session.rollback()
     finally:
         with check_app.app_context():
@@ -169,6 +204,14 @@ def test_owned_postgres_18_to_19_migration_refuses_security_drift_before_ddl(pri
     mutate('GRANT SELECT ON TABLE public.band TO logo_test_inherited')
     rejected('browser role retains application table privileges', capsys)
     mutate('REVOKE SELECT ON TABLE public.band FROM logo_test_inherited')
+    mutate('REVOKE logo_test_inherited FROM anon')
+
+    mutate('GRANT logo_test_inherited TO anon')
+    mutate('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public '
+           'GRANT SELECT ON TABLES TO logo_test_inherited')
+    rejected('Unsafe default table/sequence privileges', capsys)
+    mutate('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public '
+           'REVOKE SELECT ON TABLES FROM logo_test_inherited')
     mutate('REVOKE logo_test_inherited FROM anon')
 
     sequence = get_sequence()

@@ -92,7 +92,8 @@ def _assert_private(bind, tables):
         raise RuntimeError('PUBLIC or an effective browser role retains application sequence privileges.')
     if bind.execute(sa.text("""
         SELECT count(*) FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-        WHERE d.defaclnamespace IN (0,'public'::regnamespace)
+        WHERE d.defaclrole=current_user::regrole
+          AND d.defaclnamespace IN (0,'public'::regnamespace)
           AND d.defaclobjtype IN ('r','S') AND (a.grantee=0 OR a.grantee IN (
               SELECT oid FROM pg_roles WHERE rolname=ANY(:roles)) OR CASE WHEN a.grantee=0 THEN false ELSE EXISTS (
                   SELECT 1 FROM pg_roles client
