@@ -57,6 +57,10 @@ QUARANTINED_TABLES = frozenset({
 })
 MUST_BE_EMPTY_TABLES = frozenset({
     "band_creation_request", "band_invite_code", "song_suggestion_vote", "direct_upload_session",
+    # Refresh replaces the legacy gallery rows.  Until the rehearsal workflow
+    # has an explicit logo-preservation contract, accepting a selected logo
+    # could cascade-delete that selection when its image is refreshed.
+    "band_logo",
 })
 MANAGED_TABLES = PROTECTED_TABLES | REFRESHED_TABLES | QUARANTINED_TABLES | MUST_BE_EMPTY_TABLES
 

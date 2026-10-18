@@ -100,6 +100,30 @@ def test_profile_proves_claimed_identity_and_rejects_one_extra_audit(tmp_path):
         engine.dispose()
 
 
+def test_profile_rejects_selected_logo_before_refresh_can_cascade_delete_it(tmp_path):
+    engine = _claimed_target(tmp_path / 'target-with-logo.sqlite')
+    try:
+        with engine.connect() as connection:
+            profile = _profile(connection)
+            band_id = connection.execute(text(
+                "SELECT id FROM band WHERE is_legacy_import=1"
+            )).scalar_one()
+        with engine.begin() as connection:
+            image_id = connection.execute(text(
+                "INSERT INTO gallery_image (band_id,visibility,filename,is_featured,created_at) "
+                "VALUES (:band,'PUBLIC','claimed-logo.jpg',0,CURRENT_TIMESTAMP) RETURNING id"
+            ), {'band': band_id}).scalar_one()
+            connection.execute(text(
+                "INSERT INTO band_logo (band_id,gallery_image_id) VALUES (:band,:image)"
+            ), {'band': band_id, 'image': image_id})
+        with engine.connect() as connection, pytest.raises(RehearsalError, match='unsupported new content'):
+            _assert_profile(connection, profile)
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM band_logo")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
 def test_reviewed_profile_rejects_missing_provenance(tmp_path):
     profile = {'version': PROFILE_VERSION, 'target_writes_frozen': True}
     path = tmp_path / 'profile.json'
