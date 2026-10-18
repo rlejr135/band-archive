@@ -5,7 +5,8 @@ import json
 from flask import Blueprint, after_this_request, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
-from band_access import current_audience, optional_auth, read_scope_for_slug
+from band_access import (BandReadScope, MembershipAudience, current_audience, optional_auth,
+                         read_scope_for_slug)
 from band_service import (
     ACTIVE, MANAGER_ROLES, approve_membership, band_dict, close_band, create_invite,
     create_request, creation_request_dict, invite_dict, join_invite, join_request,
@@ -14,7 +15,7 @@ from band_service import (
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import Band, BandCreationRequest, BandInviteCode, BandMembership
+from models import Band, BandCreationRequest, BandInviteCode, BandLogo, BandMembership, GalleryImage
 from routes.search import search_places_for_member
 
 
@@ -35,7 +36,7 @@ def require_band_schema():
             'message': 'Band API requires the isolated Alembic migration before startup.',
         })
         response.status_code = 503
-        if request.endpoint == 'bands.get_band_introduction':
+        if request.endpoint in {'bands.get_band_introduction', 'bands.get_band_logo_management'}:
             response.headers['Cache-Control'] = 'private, no-store'
             response.vary.add('Authorization')
         return response
@@ -119,8 +120,134 @@ def get_band_by_slug(band_slug):
     # Only the active membership embedded in the central scope is eligible
     # for serialization. Pending/rejected/left rows must remain nonmember
     # audiences even when this public route is authenticated.
-    return jsonify({'band': band_dict(db.session.get(Band, scope.band_id), include_roster=True,
-                                      membership=scope.membership)})
+    band = db.session.get(Band, scope.band_id)
+    response_band = band_dict(band, include_roster=True, membership=scope.membership)
+    response_band['logo'] = _logo_for_scope(scope)
+    response_band['permissions']['can_manage_logo'] = bool(
+        scope.audience.account_active and scope.audience.email_verified and (
+            scope.membership and scope.membership.role == 'owner'
+            or scope.audience.is_platform_admin
+        )
+    )
+    return jsonify({'band': response_band})
+
+
+def _logo_for_scope(scope, *, preserve_selection=False):
+    from routes.content_reads import _gallery_query
+    from v2_content_serializers import scope_with_band_visibility
+    from v2_remaining_read_serializers import serialize_gallery_image
+
+    selected = db.session.get(BandLogo, scope.band_id)
+    if selected is None:
+        return None
+    visible_scope = scope_with_band_visibility(scope, db.session.get(Band, scope.band_id))
+    image = _gallery_query(visible_scope).filter(
+        GalleryImage.id == selected.gallery_image_id,
+        GalleryImage.band_id == scope.band_id,
+    ).one_or_none()
+    if image is None:
+        return None
+    try:
+        serialized = serialize_gallery_image(visible_scope, image)
+    except Exception:
+        return {'gallery_image_id': image.id, 'url': None} if preserve_selection else None
+    return {'gallery_image_id': image.id, 'url': serialized.get('url')}
+
+
+def _logo_for_management_scope(scope):
+    """Resolve a selected photo only inside the explicit logo-management capability."""
+    from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
+    from v2_content_serializers import scope_with_band_visibility
+    from v2_remaining_read_serializers import serialize_gallery_image
+
+    selected = db.session.get(BandLogo, scope.band_id)
+    if selected is None:
+        return None
+    image = GalleryImage.query.filter(
+        GalleryImage.id == selected.gallery_image_id,
+        GalleryImage.band_id == scope.band_id,
+        _creator_is_scoped_sql(GalleryImage, scope),
+        _not_pending_delete(GalleryImage, 'gallery'),
+    ).one_or_none()
+    if image is None:
+        return None
+    visible_scope = scope_with_band_visibility(scope, db.session.get(Band, scope.band_id))
+    try:
+        serialized = serialize_gallery_image(visible_scope, image)
+        return {'gallery_image_id': image.id, 'url': serialized.get('url')}
+    except Exception:
+        return {'gallery_image_id': image.id, 'url': None}
+
+
+def _logo_management_access(band, audience):
+    if not audience.authenticated:
+        raise NotFoundError('Resource not found')
+    user = current_app_user(required=True)
+    eligible_actor = bool(user.status == ACTIVE and user.email_verified is True)
+    eligible_admin = bool(eligible_actor and user.is_platform_admin is True)
+    membership = BandMembership.query.filter_by(
+        band_id=band.id, user_id=user.id, status=ACTIVE,
+    ).one_or_none()
+    if not eligible_actor or not (eligible_admin or (membership and membership.role == 'owner')):
+        raise NotFoundError('Resource not found')
+    member_audience = MembershipAudience(
+        id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
+        user_subject=user.supabase_user_id, user_display_name=user.display_name, user_email=user.email,
+    ) if membership else None
+    scope = BandReadScope(
+        band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
+    )
+    from v2_content_serializers import scope_with_band_visibility
+    return user, scope_with_band_visibility(scope, band)
+
+
+@bands_bp.get('/bands/by-slug/<string:band_slug>/logo-management')
+@optional_auth
+def get_band_logo_management(band_slug):
+    from routes.content_reads import _gallery_query
+    from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
+    from v2_remaining_read_serializers import serialize_gallery_image
+
+    band = Band.query.filter_by(slug=band_slug).filter(Band.deleted_at.is_(None)).one_or_none()
+    if band is None:
+        raise NotFoundError('Resource not found')
+    _, scope = _logo_management_access(band, current_audience())
+    try:
+        limit = int(request.args.get('limit', 20))
+        offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        raise ValidationError('limit and offset must be integers.')
+    if not 1 <= limit <= 100 or not 0 <= offset <= 100_000:
+        raise ValidationError('limit must be 1-100 and offset must be between 0 and 100000.')
+    if scope.is_member:
+        query = _gallery_query(scope).filter(GalleryImage.band_id == band.id)
+    else:
+        # A verified platform admin reaches this route only after the narrow
+        # logo capability check above. Keep the temporary nonmember exception
+        # tenant-bound, pending-delete-safe, and private-URL TTL-limited; no
+        # other private-resource route accepts this scope.
+        query = GalleryImage.query.filter(
+            GalleryImage.band_id == band.id,
+            GalleryImage.visibility.in_(('PUBLIC', 'MEMBERS')),
+            _creator_is_scoped_sql(GalleryImage, scope),
+            _not_pending_delete(GalleryImage, 'gallery'),
+        )
+    total = query.count()
+    rows = query.order_by(GalleryImage.created_at.desc(), GalleryImage.id.desc()).offset(offset).limit(limit).all()
+    gallery = []
+    for image in rows:
+        try:
+            serialized = serialize_gallery_image(scope, image)
+            gallery.append({'id': image.id, 'url': serialized.get('url'),
+                            'is_featured': bool(image.is_featured)})
+        except Exception:
+            gallery.append({'id': image.id, 'url': None, 'is_featured': bool(image.is_featured)})
+    logo = (_logo_for_scope(scope, preserve_selection=True) if scope.is_member
+            else _logo_for_management_scope(scope))
+    return jsonify({'band': {'id': band.id, 'name': band.name, 'slug': band.slug},
+                    'permissions': {'can_manage_logo': True}, 'logo': logo, 'gallery': gallery,
+                    'pagination': {'limit': limit, 'offset': offset, 'total': total,
+                                   'has_more': offset + len(rows) < total}})
 
 
 @bands_bp.get('/bands/by-slug/<string:band_slug>/introduction')
