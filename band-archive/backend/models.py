@@ -1,7 +1,7 @@
 
 from datetime import datetime, timedelta, timezone
 import uuid
-from sqlalchemy import event, select, text
+from sqlalchemy import ForeignKeyConstraint, event, select, text
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 
@@ -946,6 +946,7 @@ class GalleryImage(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     __table_args__ = (
         db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_gallery_image_visibility'),
+        db.Index('uq_gallery_image_band_id', 'band_id', 'id', unique=True),
         db.Index('uq_gallery_image_featured_band', 'band_id', unique=True,
                  sqlite_where=db.text('is_featured IS TRUE'), postgresql_where=db.text('is_featured IS TRUE')),
         db.Index('ix_gallery_image_band_visibility_created_id', 'band_id', 'visibility', 'created_at', 'id'),
@@ -972,6 +973,22 @@ class GalleryImage(db.Model):
             ),
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class BandLogo(db.Model):
+    """One optional same-band gallery selection for the workspace logo."""
+    __tablename__ = 'band_logo'
+
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'),
+                        primary_key=True, autoincrement=False)
+    gallery_image_id = db.Column(db.Integer, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['band_id', 'gallery_image_id'], ['gallery_image.band_id', 'gallery_image.id'],
+            ondelete='CASCADE', name='fk_band_logo_gallery_image_same_band',
+        ),
+    )
 
 
 class Comment(db.Model):

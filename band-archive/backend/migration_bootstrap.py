@@ -17,7 +17,8 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from flask import current_app
-from sqlalchemy import Boolean, CheckConstraint, Integer, BigInteger, SmallInteger, MetaData, inspect, text
+from sqlalchemy import (Boolean, CheckConstraint, Index, Integer, BigInteger, SmallInteger, MetaData,
+                        UniqueConstraint, inspect, text)
 from sqlalchemy.dialects import postgresql
 
 from extensions import db
@@ -42,6 +43,7 @@ PHASE15_REVISION = '20261016_15'
 PHASE16_REVISION = '20261017_16'
 PHASE17_REVISION = '20261017_17'
 PHASE18_REVISION = '20261017_18'
+PHASE19_REVISION = '20261018_19'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -55,7 +57,7 @@ DATA_API_MANAGED_TABLES_PHASE14 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13
 DATA_API_MANAGED_TABLES_PHASE15 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
 DATA_API_MANAGED_TABLES_PHASE16 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
 AVAILABILITY_TABLES = ('band_availability_day', 'band_availability_state', 'band_personal_schedule_note')
-DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES)))
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES, 'band_logo')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -132,6 +134,7 @@ def baseline_metadata():
                     column.foreign_keys.discard(foreign_key)
                 table._columns.remove(column)
     _remove_future_member_profile(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase7_content_writes(metadata)
     return metadata
 
@@ -150,6 +153,7 @@ def phase3_metadata():
     for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
         db.metadata.tables[table_name].to_metadata(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase4_band(metadata)
     # These partial indexes belong to revision 04.  Do not retroactively
     # require them when validating a legitimately recorded revision 03 DB.
@@ -170,6 +174,7 @@ def phase3_hardened_metadata():
     for table_name in ('band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event'):
         db.metadata.tables[table_name].to_metadata(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase4_band(metadata)
     return metadata
 
@@ -214,6 +219,18 @@ def _remove_future_member_profile(metadata):
     return metadata
 
 
+def _remove_future_band_logo(metadata):
+    """Prune revision-19 logo structures from every earlier metadata view."""
+    if 'band_logo' in metadata.tables:
+        metadata.remove(metadata.tables['band_logo'])
+    gallery = metadata.tables.get('gallery_image')
+    if gallery is not None:
+        for index in list(gallery.indexes):
+            if index.name == 'uq_gallery_image_band_id':
+                gallery.indexes.remove(index)
+    return metadata
+
+
 def phase4_metadata():
     """Exact revision-05 snapshot before Phase 6 contracts tenant reads."""
     metadata = MetaData()
@@ -222,6 +239,7 @@ def phase4_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -262,6 +280,7 @@ def phase6_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase7_content_writes(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
@@ -277,6 +296,7 @@ def phase7_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase8_suggestion_votes(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -291,6 +311,7 @@ def phase8_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase9_direct_upload_sessions(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -304,6 +325,7 @@ def phase9_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase10_direct_expiry_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
@@ -318,6 +340,7 @@ def phase10_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase11_direct_gallery_state(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
@@ -331,6 +354,7 @@ def phase11_metadata():
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
+    _remove_future_band_logo(metadata)
     _restore_pre_phase12_legacy_claim_state(metadata)
     return metadata
 
@@ -378,6 +402,27 @@ def phase17_metadata():
     metadata = phase16_metadata()
     for name in AVAILABILITY_TABLES:
         db.metadata.tables[name].to_metadata(metadata)
+    return metadata
+
+
+def phase18_metadata():
+    """Exact revision-18 member-profile snapshot, before logo selections."""
+    metadata = phase17_metadata()
+    member = metadata.tables['member']
+    current_member = db.metadata.tables['member']
+    for name in ('biography', 'positions_json', 'custom_position', 'profile_revision'):
+        member.append_column(current_member.c[name]._copy())
+    member.append_constraint(UniqueConstraint('band_id', 'linked_user_id', name='uq_member_band_linked_user'))
+    member.append_constraint(CheckConstraint('profile_revision >= 0', name='ck_member_profile_revision'))
+    return metadata
+
+
+def phase19_metadata():
+    """Revision-19 snapshot with same-band logo selections."""
+    metadata = phase18_metadata()
+    Index('uq_gallery_image_band_id', metadata.tables['gallery_image'].c.band_id,
+          metadata.tables['gallery_image'].c.id, unique=True)
+    db.metadata.tables['band_logo'].to_metadata(metadata)
     return metadata
 
 
@@ -1740,7 +1785,9 @@ def metadata_for_recorded_revision(revision):
     if revision == PHASE17_REVISION:
         return phase17_metadata()
     if revision == PHASE18_REVISION:
-        return db.metadata
+        return phase18_metadata()
+    if revision == PHASE19_REVISION:
+        return phase19_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(
