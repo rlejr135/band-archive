@@ -6,6 +6,7 @@ import { ServicePolicyProvider, useServicePolicy } from './context/ServicePolicy
 import { PolicyPage, PolicyLinks } from './components/auth/PolicyPages.jsx';
 import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages.jsx';
 import { BandsPage } from './components/bands/BandsPage.jsx';
+import { BandIntroductionRoute } from './components/bands/BandIntroduction.jsx';
 import { BandCreationRequestsAdminRoute } from './components/bands/BandCreationRequestsAdmin.jsx';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
 import RequireAuth from './components/layout/RequireAuth.jsx';
@@ -83,6 +84,7 @@ export const AppRoutes = () => <Routes>
   <Route path="/reset-password" element={<ResetPasswordPage />} />
   <Route path="/band/:bandSlug/*" element={<BandAliasRedirect />} />
   <Route path="/bands" element={<RequireAuth><BandsPage /></RequireAuth>} />
+  <Route path="/bands/:bandSlug/about" element={<BandIntroductionRoute />} />
   <Route path="/bands/discover" element={<RequireAuth><DiscoverBandsPage /></RequireAuth>} />
   <Route path="/bands/request" element={<RequireAuth><BandCreationRequestPage /></RequireAuth>} />
   <Route path="/platform/band-requests" element={<RequireAuth><BandCreationRequestsAdminRoute /></RequireAuth>} />

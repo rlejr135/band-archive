@@ -1,0 +1,20 @@
+.band-introduction-page { width: min(100% - 32px, 900px); margin: 36px auto; color: var(--color-text); }
+.band-introduction-page > .bands-return-link { margin-bottom: 20px; }
+.band-introduction-card { overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-sm); }
+.band-introduction-photo { position: relative; display: grid; min-height: 220px; max-height: 390px; place-items: center; overflow: hidden; background: var(--color-surface-raised); }
+.band-introduction-photo img { display: block; width: 100%; max-height: 390px; object-fit: cover; }
+.band-introduction-photo-fallback { display: grid; width: 100%; min-height: 220px; place-items: center; color: var(--color-text-muted); font-size: 64px; }
+.band-introduction-photo-status { position: absolute; right: 12px; bottom: 12px; padding: 7px 10px; border-radius: var(--radius-default); color: var(--color-text); background: var(--color-surface); font-size: 12px; }
+.band-introduction-copy { display: grid; gap: 16px; padding: clamp(20px, 5vw, 42px); }
+.band-introduction-eyebrow { margin: 0; color: var(--color-accent); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+.band-introduction-copy h1 { margin: 0; overflow-wrap: anywhere; color: var(--color-text); font-size: clamp(28px, 5vw, 42px); }
+.band-introduction-song-count { margin: -8px 0 2px; color: var(--color-text-muted); }
+.band-introduction-song-count strong { color: var(--color-accent); font-size: 20px; }
+.band-introduction-copy section { padding-top: 15px; border-top: 1px solid var(--color-border); }
+.band-introduction-copy h2 { margin: 0 0 9px; color: var(--color-text); font-size: 15px; }
+.band-introduction-description,.band-introduction-announcement { margin: 0; color: var(--color-text-muted); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.band-introduction-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; padding: 17px 20px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
+.band-introduction-actions p { flex: 1 1 230px; margin: 0; color: var(--color-text-muted); }
+.band-introduction-actions a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 9px 14px; text-decoration: none; }
+.band-introduction-page [role="alert"] { margin: 16px 0; color: var(--color-danger); }
+@media (max-width: 520px) { .band-introduction-page { width: min(100% - 24px, 900px); margin: 20px auto; } .band-introduction-photo,.band-introduction-photo-fallback { min-height: 170px; } .band-introduction-actions { align-items: stretch; } .band-introduction-actions a { width: 100%; } }
