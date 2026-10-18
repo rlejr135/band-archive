@@ -251,6 +251,23 @@ test('management return control is a keyboard-focusable canonical RouterLink', a
   finally { globalThis.fetch = previous; }
 });
 
+test('owner management page links to the isolated logo management route only with server permission', async () => {
+  await load(); const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes('/by-slug/logo-owner')) return response({ band: { id: 81, slug: 'logo-owner', name: '로고 밴드', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_manage_logo: true } } });
+    if (path.endsWith('/memberships')) return response({ memberships: [] });
+    if (path.endsWith('/invite-codes')) return response({ invite_codes: [] });
+    if (path.endsWith('/announcement')) return response({ announcement: null });
+    throw new Error(`unexpected ${path}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/logo-owner/manage', manage: true }));
+    const link = await view.findByRole('link', { name: '로고 관리' });
+    assert.equal(link.getAttribute('href'), '/bands/logo-owner/manage/logo');
+  } finally { globalThis.fetch = previous; }
+});
+
 test('owner profile editor requires explicit permission and saves only the trimmed-contract field twice', async () => {
   await load(); const previous = globalThis.fetch; const writes = []; let reloads = 0;
   let profileDescription = '처음 소개';

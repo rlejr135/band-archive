@@ -104,6 +104,30 @@ test('member logs paginate, play a signed URL, and refresh it once after media f
   try { const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} }; const view = render(createElement(ReadOnlyApp, { entry: '/bands/log-band/members/7', authValue: member })); await view.findByText('첫 영상'); await userEvent.click(view.getByText('첫 영상')); const video = await waitFor(() => { const item = view.container.querySelector('video'); assert.ok(item); return item; }); fireEvent.error(video); fireEvent.error(video); await waitFor(() => assert.equal(logReads, 2)); await userEvent.click(view.getByRole('button', { name: '기록 더 불러오기' })); await view.findByText('다음 영상'); view.unmount(); } finally { globalThis.fetch = previousFetch; }
 });
 
+test('workspace header uses the current band logo, refreshes one failed URL, then shows a neutral fallback', async () => {
+  await load(); const previousFetch = globalThis.fetch; let bandReads = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/by-slug/header-logo')) {
+      bandReads += 1;
+      return response({ band: { id: 350, slug: 'header-logo', name: '브랜드 밴드', logo: { gallery_image_id: 70, url: bandReads === 1 ? 'https://media.example.test/logo.jpg' : 'https://media.example.test/logo-refreshed.jpg' }, permissions: {}, membership: { status: 'active', role: 'member' } } });
+    }
+    throw new Error(`unexpected ${String(url)}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/header-logo', authValue: { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token' }, bandValue: { activeBands: [] } }));
+    const image = await view.findByRole('img', { name: '브랜드 밴드 로고' });
+    assert.equal(image.getAttribute('src'), 'https://media.example.test/logo.jpg');
+    await act(async () => image.dispatchEvent(new dom.window.Event('error')));
+    await waitFor(() => assert.equal(bandReads, 2));
+    const refreshed = await view.findByRole('img', { name: '브랜드 밴드 로고' });
+    assert.equal(refreshed.getAttribute('src'), 'https://media.example.test/logo-refreshed.jpg');
+    await act(async () => refreshed.dispatchEvent(new dom.window.Event('error')));
+    await view.findByText('♫');
+    assert.equal(bandReads, 2);
+    assert.equal(view.container.querySelector('.workspace-brand-mark') != null, true);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('gallery and suggestions retain paged safe reads, featured image refresh, and read-only controls', async () => {
   await load(); const previousFetch = globalThis.fetch; let galleryReads = 0; let featuredReads = 0;
   globalThis.fetch = async (url) => { if (url.includes('/by-slug/read-band')) return response({ band: { id: 303, slug: 'read-band', name: '읽기 밴드', permissions: { can_view_roster: false }, membership: null } }); if (url.includes('/gallery/featured')) { featuredReads += 1; return response({ gallery: { id: 80, url: `https://media.invalid/featured-${featuredReads}.jpg` } }); } if (url.includes('/gallery?')) { if (url.includes('offset=20')) return response({ gallery: [{ id: 82, url: 'https://media.invalid/two.jpg' }], pagination: { has_more: false } }); galleryReads += 1; return response({ gallery: [{ id: 81, url: 'https://media.invalid/one.jpg' }], pagination: { has_more: true, next_offset: 20 } }); } if (url.includes('/suggestions?')) return response({ suggestions: [{ id: 91, title: '읽기 추천곡', artist: '밴드', vote_score: 4, status: 'pending', memo: '연습용' }], pagination: { has_more: false } }); return response({}); };

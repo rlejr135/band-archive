@@ -53,7 +53,7 @@ test('anonymous browser routes are gated before discover or workspace data can m
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url) => { calls.push(String(url)); throw new Error('private route should not fetch'); };
   try {
-    for (const path of ['/bands/discover', '/bands/quiet-lantern/songs']) {
+    for (const path of ['/bands/discover', '/bands/quiet-lantern/songs', '/bands/quiet-lantern/manage/logo']) {
       const view = renderRoutes(path, account());
       await view.findByRole('heading', { name: '로그인' });
       await waitFor(() => assert.match(view.getByTestId('route').textContent, /^\/login\?/));

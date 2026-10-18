@@ -8,6 +8,7 @@ import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswo
 import { BandsPage } from './components/bands/BandsPage.jsx';
 import { BandIntroductionRoute } from './components/bands/BandIntroduction.jsx';
 import { BandCreationRequestsAdminRoute } from './components/bands/BandCreationRequestsAdmin.jsx';
+import { BandLogoManagementRoute } from './components/bands/BandLogoManagement.jsx';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
 import RequireAuth from './components/layout/RequireAuth.jsx';
 import { AvailabilityWorkspace, BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
@@ -88,6 +89,7 @@ export const AppRoutes = () => <Routes>
   <Route path="/bands/discover" element={<RequireAuth><DiscoverBandsPage /></RequireAuth>} />
   <Route path="/bands/request" element={<RequireAuth><BandCreationRequestPage /></RequireAuth>} />
   <Route path="/platform/band-requests" element={<RequireAuth><BandCreationRequestsAdminRoute /></RequireAuth>} />
+  <Route path="/bands/:bandSlug/manage/logo" element={<RequireAuth><BandLogoManagementRoute /></RequireAuth>} />
   <Route path="/bands/:bandSlug/manage" element={<RequireAuth><BandManageRoute /></RequireAuth>} />
   <Route path="/bands/:bandSlug" element={<RequireAuth><BandWorkspaceRoute /></RequireAuth>}>
     <Route index element={<BandDashboard />} />

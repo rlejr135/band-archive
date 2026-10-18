@@ -19,7 +19,6 @@ import FileUpload from '../common/FileUpload.jsx';
 import { UploadContext } from '../../context/UploadContext.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
 import { strictPositiveId } from './bandDashboardState.js';
-import logo from '../../assets/logo.png';
 import './BandWorkspace.css';
 
 // This file intentionally starts request state from effects: each state reset
@@ -62,11 +61,18 @@ export const BandWorkspace = () => {
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ loading: true, error: '', band: null });
   const requestGate = useRef(createWorkspaceRequestGate());
+  const currentBandRequest = useRef({ routeKey: '', version: null });
+  const logoRefreshes = useRef(new Set());
+  const logoRefreshController = useRef(null);
+  const [failedLogoKey, setFailedLogoKey] = useState('');
   const routeKey = workspaceIdentityKey(bandSlug, user?.id);
 
   useEffect(() => {
     const controller = new AbortController();
     const version = requestGate.current.begin(routeKey);
+    currentBandRequest.current = { routeKey, version };
+    logoRefreshes.current.clear();
+    setFailedLogoKey('');
     setState({ loading: true, error: '', band: null });
     api.requestJson(bandWorkspacePaths.bandBySlug(bandSlug), requestOptions(controller.signal))
       .then((response) => {
@@ -78,18 +84,53 @@ export const BandWorkspace = () => {
           setState({ loading: false, error: '밴드를 찾을 수 없거나 볼 권한이 없습니다.', band: null });
         }
       });
-    return () => controller.abort();
+    return () => { controller.abort(); logoRefreshController.current?.abort(); logoRefreshController.current = null; };
   }, [api, bandSlug, routeKey]);
+
+  const refreshLogo = async () => {
+    const logoImage = state.band?.logo;
+    const imageId = logoImage?.gallery_image_id;
+    const refreshKey = `${routeKey}:${imageId ?? 'missing'}`;
+    const failedKey = `${refreshKey}:${logoImage?.url || ''}`;
+    if (!logoImage || imageId == null || !logoImage.url) return;
+    if (logoRefreshes.current.has(refreshKey)) { setFailedLogoKey(failedKey); return; }
+    logoRefreshes.current.add(refreshKey);
+    const controller = new AbortController();
+    logoRefreshController.current?.abort();
+    logoRefreshController.current = controller;
+    const activeRequest = currentBandRequest.current;
+    try {
+      const response = await api.requestJson(bandWorkspacePaths.bandBySlug(bandSlug), requestOptions(controller.signal));
+      const refreshedBand = response?.band;
+      const stillCurrent = !controller.signal.aborted
+        && currentBandRequest.current === activeRequest
+        && requestGate.current.accepts(routeKey, activeRequest.version)
+        && refreshedBand?.slug === bandSlug
+        && String(refreshedBand?.id) === String(state.band.id);
+      if (!stillCurrent) return;
+      const refreshedLogo = refreshedBand.logo || null;
+      setState((previous) => previous.band && String(previous.band.id) === String(refreshedBand.id)
+        ? { ...previous, band: { ...previous.band, logo: refreshedLogo } }
+        : previous);
+      if (String(refreshedLogo?.gallery_image_id) === String(imageId) && refreshedLogo?.url === logoImage.url) setFailedLogoKey(failedKey);
+    } catch {
+      if (!controller.signal.aborted && currentBandRequest.current === activeRequest) setFailedLogoKey(failedKey);
+    } finally {
+      if (logoRefreshController.current === controller) logoRefreshController.current = null;
+    }
+  };
 
   if (state.loading) return <WorkspacePaintGate requestedSlug={bandSlug} />;
   if (state.error || !state.band) return <main className="band-workspace-loading" role="alert"><p>{state.error}</p><button className="secondary-btn" onClick={() => navigate('/bands')}>내 밴드로 이동</button></main>;
   if (state.band.slug !== bandSlug) return <WorkspacePaintGate requestedSlug={bandSlug} resolvedSlug={state.band.slug} />;
   const value = { band: state.band, api, workspaceKey: `${state.band.id}:${user?.id || 'visitor'}` };
+  const logoUrl = safeExternalHttpUrl(state.band.logo?.url);
+  const logoFailed = failedLogoKey === `${routeKey}:${state.band.logo?.gallery_image_id ?? 'missing'}:${state.band.logo?.url || ''}`;
   return <WorkspaceContext.Provider value={value}>
     <div className="band-workspace">
       <header className="workspace-header">
         <button className="workspace-brand" onClick={() => navigate(`/bands/${encodeURIComponent(state.band.slug)}`)}>
-          <img src={logo} alt="들뜬" /><span>{state.band.name}<small> Archive</small></span>
+          {logoUrl && !logoFailed ? <img src={logoUrl} alt={`${state.band.name} 로고`} onError={refreshLogo} /> : <span className="workspace-brand-mark" aria-hidden="true">♫</span>}<span>{state.band.name}<small> Archive</small></span>
         </button>
         <div className="workspace-actions">
           <UploadCenter />
