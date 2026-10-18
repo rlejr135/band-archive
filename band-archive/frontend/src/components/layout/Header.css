@@ -29,19 +29,7 @@
   font-weight: 400;
 }
 
-/* Update Primary Button for Dark Mode */
-.primary-btn {
-  background-color: var(--primary-color);
-  color: var(--text-on-primary); /* Dark text on yellow button */
-  font-weight: 700;
-}
-
-.primary-btn:hover {
-  background-color: var(--primary-hover);
-  box-shadow: 0 0 15px rgba(255, 211, 42, 0.4);
-}
-
-/* Update other styles for dark mode compatibility if needed */
+/* Keep shared action styling in App.css so every route uses the same tokens. */
 .song-list h2 {
     color: var(--primary-color);
 }

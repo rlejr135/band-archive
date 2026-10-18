@@ -8,6 +8,10 @@ const managementCss = await readFile(new URL('../components/bands/BandsPage.css'
 const landingCss = await readFile(new URL('../components/home/WelcomeLanding.css', import.meta.url), 'utf8');
 const accountCss = await readFile(new URL('../components/bands/BandsPage.css', import.meta.url), 'utf8');
 const dashboardCss = await readFile(new URL('../components/dashboard/BandActivityDashboard.css', import.meta.url), 'utf8');
+const availabilityCss = await readFile(new URL('../components/workspace/AvailabilityCalendar.css', import.meta.url), 'utf8');
+const appCss = await readFile(new URL('../App.css', import.meta.url), 'utf8');
+const headerCss = await readFile(new URL('../components/layout/Header.css', import.meta.url), 'utf8');
+const authCss = await readFile(new URL('../components/auth/AuthPages.css', import.meta.url), 'utf8');
 const rootBlock = css.match(/:root\s*\{([^}]*)\}/s)?.[1] || '';
 const token = (name) => rootBlock.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1];
 const linear = (channel) => { const value = channel / 255; return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4; };
@@ -73,4 +77,25 @@ test('color-mix decorations retain semantic background and border fallbacks', ()
   assert.match(accountCss, /\.account-avatar\s*\{[^}]*border:\s*1px solid var\(--color-accent\);[^}]*border-color:\s*color-mix/s);
   assert.match(accountCss, /\.account-avatar\s*\{[^}]*background:\s*var\(--color-surface-raised\);\s*background:\s*color-mix/s);
   assert.match(workspaceCss, /\.workspace-header nav\s*\{\s*border-top:\s*1px solid var\(--border-color\);\s*border-top-color:\s*color-mix/s);
+});
+
+test('shared button foundation uses theme tokens while component controls keep scoped sizing', () => {
+  assert.match(css, /:where\(button\)\s*\{[^}]*appearance:\s*none;[^}]*color:\s*var\(--color-text\);[^}]*border:\s*1px solid var\(--color-border\);[^}]*background:\s*var\(--color-surface-raised\)/s);
+  assert.match(css, /:where\(button:disabled\)\s*\{[^}]*opacity:\s*\.58;[^}]*cursor:\s*not-allowed/s);
+  assert.match(css, /\.ui-action-btn\s*\{[^}]*min-height:\s*40px;[^}]*text-decoration:\s*none/s);
+  assert.match(appCss, /\.primary-btn\s*\{[^}]*min-height:\s*40px;[^}]*color:\s*var\(--text-on-primary\)/s);
+  assert.match(appCss, /\.primary-btn:hover:not\(:disabled\)/);
+  assert.match(appCss, /\.secondary-btn:hover:not\(:disabled\)/);
+  assert.match(appCss, /\.secondary-btn\s*\{[^}]*min-height:\s*40px;[^}]*text-decoration:\s*none/s);
+  assert.doesNotMatch(headerCss, /\.primary-btn\s*\{/);
+  assert.match(availabilityCss, /\.availability-option-tabs button\s*\{/);
+  assert.match(availabilityCss, /\.availability-day\s*\{[^}]*min-height:/s);
+  assert.match(dashboardCss, /\.activity-calendar-layout \.react-calendar__navigation button/);
+});
+
+test('terms and privacy links are visibly themed touch targets on auth and landing routes', () => {
+  assert.match(authCss, /\.policy-links a\s*\{[^}]*min-height:\s*40px;[^}]*color:\s*var\(--color-accent\)/s);
+  assert.match(landingCss, /\.welcome-footer \.policy-links\s*\{[^}]*margin:\s*0/);
+  assert.match(landingCss, /\.welcome-header-link\s*\{[^}]*min-height:\s*40px/);
+  assert.match(landingCss, /\.welcome-cta\s*\{[^}]*min-height:\s*44px/);
 });
