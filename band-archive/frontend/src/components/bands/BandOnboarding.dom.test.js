@@ -41,6 +41,17 @@ test('visitor discover preserves a safe login return and join becomes pending on
   } finally { globalThis.fetch = previous; }
 });
 
+test('discover bands uses the shared accessible return link styling', async () => {
+  await load(); const previous = globalThis.fetch;
+  globalThis.fetch = async () => response({ bands: [], pagination: { total: 0, has_more: false } });
+  try {
+    const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
+    const back = await view.findByRole('link', { name: '내 밴드' });
+    assert.equal(back.getAttribute('href'), '/bands');
+    assert.ok(back.classList.contains('bands-return-link'));
+  } finally { globalThis.fetch = previous; }
+});
+
 test('invite code stays in a POST body, clears the input, and has a generic invalid result', async () => {
   await load(); const previous = globalThis.fetch; const writes = [];
   globalThis.fetch = async (url, options = {}) => { writes.push([String(url), options]); return response({}, 404); };
