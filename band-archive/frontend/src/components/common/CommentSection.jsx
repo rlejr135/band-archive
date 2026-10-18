@@ -18,8 +18,8 @@ const TimestampControl = ({ value, onChange, playbackControllerRef, label = '재
   return <div className="comment-timestamp-control">
     <span>{label}: {displayed === null ? '연결 안 함' : `${formatCommentTimestamp(displayed)} 연결`}</span>
     <div className="comment-timestamp-actions">
-      <button type="button" onClick={attachCurrentTime} aria-label="현재 재생 위치를 댓글에 연결">현재 위치 연결</button>
-      {value !== undefined && <button type="button" onClick={() => { onChange(null); setMessage('재생 위치 연결을 지웁니다.'); }} aria-label="댓글 재생 위치 연결 지우기">연결 지우기</button>}
+      <button type="button" className="ui-action-btn" onClick={attachCurrentTime} aria-label="현재 재생 위치를 댓글에 연결">현재 위치 연결</button>
+      {value !== undefined && <button type="button" className="ui-action-btn" onClick={() => { onChange(null); setMessage('재생 위치 연결을 지웁니다.'); }} aria-label="댓글 재생 위치 연결 지우기">연결 지우기</button>}
     </div>
     {message && <span className="comment-timestamp-status" role="status">{message}</span>}
   </div>;

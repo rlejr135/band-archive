@@ -60,7 +60,8 @@
   border: 1px solid var(--primary-color);
   border-radius: 14px;
   padding: 3px 8px;
-  background: rgba(255, 211, 42, 0.12);
+  background: rgba(209, 237, 123, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   color: var(--primary-color);
   font-size: .76rem;
   cursor: pointer;
@@ -69,7 +70,7 @@
 .comment-timestamp-badge:disabled { opacity: .55; cursor: not-allowed; }
 .comment-timestamp-control { display: grid; gap: 6px; color: var(--text-secondary); font-size: .82rem; }
 .comment-timestamp-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.comment-timestamp-actions button { min-height: 36px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-primary); }
+.comment-timestamp-actions .ui-action-btn { min-height: 40px; padding: 8px 12px; }
 .comment-timestamp-status { margin: 0; color: var(--text-secondary); font-size: .8rem; }
 
 .comment-content {
@@ -100,7 +101,8 @@
 
 .comment-action-btn:hover {
   color: var(--primary-color);
-  background: rgba(255, 211, 42, 0.1);
+  background: rgba(209, 237, 123, 0.1);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 .comment-action-delete:hover {
@@ -165,8 +167,8 @@
 .comment-btn-save {
   align-self: flex-end;
   padding: 6px 16px;
-  background: var(--secondary-color);
-  color: white;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 0.85rem;
@@ -177,7 +179,7 @@
 
 .comment-submit-btn:hover:not(:disabled),
 .comment-btn-save:hover:not(:disabled) {
-  background: var(--primary-color);
+  background: var(--color-accent-hover);
   color: var(--text-on-primary);
 }
 
@@ -205,8 +207,8 @@
 
 .comment-btn-delete {
   padding: 6px 16px;
-  background: var(--accent-color);
-  color: white;
+  background: var(--color-danger);
+  color: var(--color-on-accent);
   border: none;
   border-radius: 6px;
   font-size: 0.85rem;
@@ -216,7 +218,7 @@
 }
 
 .comment-btn-delete:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--color-danger-hover);
 }
 
 .comment-edit-actions {

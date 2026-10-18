@@ -32,11 +32,12 @@
 }
 
 .location-search button {
+  min-height: 40px;
   padding: 8px 14px;
   border: none;
   border-radius: 8px;
-  background-color: var(--secondary-color);
-  color: #fff;
+  background-color: var(--color-accent);
+  color: var(--color-on-accent);
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -45,7 +46,7 @@
 }
 
 .location-search button:hover {
-  opacity: 0.85;
+  background-color: var(--color-accent-hover);
 }
 
 .location-results {
