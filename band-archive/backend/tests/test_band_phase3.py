@@ -212,10 +212,10 @@ def test_membership_permissions_cross_band_and_invite_lifecycle(band_app):
         db.session.commit()
         other_id = other.id
 
-    join = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'))
+    join = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={'name': 'Band Member'})
     assert join.status_code == 201
     membership_id = join.get_json()['membership']['id']
-    duplicate = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'))
+    duplicate = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={'name': 'Band Member'})
     assert duplicate.status_code == 200 and duplicate.get_json()['created'] is False
     assert client.patch(f'/api/v2/memberships/{membership_id}', headers=_headers('owner-id'),
                         json={'action': 'approve'}).status_code == 200
@@ -238,7 +238,7 @@ def test_transfer_then_leave_preserves_owner_invariant(band_app):
     client = band_app.test_client()
     band_id = _approve_band(client)
     assert client.post(f'/api/v2/bands/{band_id}/leave', headers=_headers('owner-id')).status_code == 409
-    joined = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id')).get_json()
+    joined = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={'name': 'Band Member'}).get_json()
     membership_id = joined['membership']['id']
     assert client.patch(f'/api/v2/memberships/{membership_id}', headers=_headers('owner-id'),
                         json={'action': 'approve'}).status_code == 200
@@ -402,7 +402,7 @@ def test_invite_redemption_uses_postgres_row_lock_contract(band_app):
 def test_only_owner_changes_admin_roles_and_invites_reset_former_admin(band_app):
     client = band_app.test_client()
     band_id = _approve_band(client)
-    joined = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id')).get_json()
+    joined = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={'name': 'Band Member'}).get_json()
     membership_id = joined['membership']['id']
     assert client.patch(f'/api/v2/memberships/{membership_id}', headers=_headers('owner-id'),
                         json={'action': 'approve'}).status_code == 200
@@ -425,7 +425,7 @@ def test_only_owner_changes_admin_roles_and_invites_reset_former_admin(band_app)
 def test_roster_serializers_do_not_expose_account_state(band_app):
     client = band_app.test_client()
     band_id = _approve_band(client)
-    joined = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id')).get_json()
+    joined = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={'name': 'Band Member'}).get_json()
     membership_id = joined['membership']['id']
     client.patch(f'/api/v2/memberships/{membership_id}', headers=_headers('owner-id'), json={'action': 'approve'})
 

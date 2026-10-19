@@ -17,6 +17,7 @@ from models import (
 )
 from sqlalchemy import and_, or_
 from member_profile_service import ensure_member_profile
+from join_name import required_join_name
 
 
 OWNER_ROLES = {'owner'}
@@ -140,6 +141,8 @@ def membership_dict(membership, audience='member'):
         'user': user,
         'role': membership.role,
     }
+    if audience == 'self' and membership.status == 'pending':
+        result['requested_name'] = membership.requested_name
     if audience == 'management':
         result.update({
             'status': membership.status,
@@ -149,6 +152,7 @@ def membership_dict(membership, audience='member'):
         })
         if membership.status == 'pending':
             result['introduction'] = membership.join_introduction
+            result['requested_name'] = membership.requested_name
     return result
 
 
@@ -273,7 +277,8 @@ def review_request(admin, request_id, approved, note=None):
     return item, True
 
 
-def join_request(user, band_id, introduction=None):
+def join_request(user, band_id, introduction=None, name=None):
+    name = required_join_name(name)
     _begin_privileged_mutation()
     band = Band.query.filter_by(id=band_id, deleted_at=None).with_for_update().populate_existing().one_or_none()
     if band is None:
@@ -283,6 +288,8 @@ def join_request(user, band_id, introduction=None):
         if item.status in {ACTIVE, 'pending'}:
             if item.status == ACTIVE:
                 ensure_member_profile(item)
+            elif item.requested_name is None:
+                item.requested_name = name
             db.session.commit()
             return item, False
         if item.status in {'left', 'rejected'}:
@@ -292,10 +299,12 @@ def join_request(user, band_id, introduction=None):
             item.approved_at = None
             item.acted_by_user_id = user.id
             item.join_introduction = introduction
+            item.requested_name = name
             audit('membership_rejoin_requested', user, band=band, target=item)
             db.session.commit()
             return item, True
-    item = BandMembership(band_id=band.id, user_id=user.id, join_introduction=introduction)
+    item = BandMembership(band_id=band.id, user_id=user.id, join_introduction=introduction,
+                          requested_name=name)
     db.session.add(item)
     try:
         db.session.flush()
@@ -334,6 +343,7 @@ def approve_membership(actor, membership_id, approved):
         item.acted_by_user_id = actor.id
         if approved:
             ensure_member_profile(item)
+        item.requested_name = None
         audit('membership_approved' if approved else 'membership_rejected', actor, band=band, target=item)
         db.session.commit()
     except IntegrityError as error:

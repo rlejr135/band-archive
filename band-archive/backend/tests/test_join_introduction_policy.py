@@ -72,11 +72,11 @@ def test_join_introduction_is_manager_pending_only_and_duplicate_preserves_first
     band_id = _create_band(client)
     intro = '  Hello, we play jazz.  '
     response = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'),
-                           json={'introduction': intro})
+                           json={'name': 'New Member', 'introduction': intro})
     assert response.status_code == 201
     membership_id = response.get_json()['membership']['id']
     duplicate = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'),
-                            json={'introduction': 'Overwrite attempt'})
+                            json={'name': 'Do not overwrite', 'introduction': 'Overwrite attempt'})
     assert duplicate.status_code == 200
     assert duplicate.get_json()['created'] is False
 
@@ -103,7 +103,7 @@ def test_join_introduction_is_manager_pending_only_and_duplicate_preserves_first
     with band_app.app_context():
         assert db.session.get(BandMembership, membership_id).join_introduction is None
     rejoin = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'),
-                         json={'introduction': 'New request'})
+                         json={'name': 'Returning Member', 'introduction': 'New request'})
     assert rejoin.status_code == 201
     manager = client.get(f'/api/v2/bands/{band_id}/memberships', headers=_headers('owner-id')).get_json()
     assert next(item for item in manager['memberships'] if item['id'] == membership_id)['introduction'] == 'New request'
@@ -119,7 +119,7 @@ def test_join_introduction_manager_audience_is_band_scoped_and_approval_clears(b
     client = band_app.test_client()
     band_a = _create_band(client)
     request_a = client.post(f'/api/v2/bands/{band_a}/join-requests', headers=_headers('member-id'),
-                            json={'introduction': 'Private request A'}).get_json()['membership']
+                            json={'name': 'Applicant A', 'introduction': 'Private request A'}).get_json()['membership']
     with band_app.app_context():
         other = AppUser.query.filter_by(supabase_user_id='other-id').one()
         membership = db.session.get(BandMembership, request_a['id'])
@@ -155,17 +155,17 @@ def test_join_introduction_manager_audience_is_band_scoped_and_approval_clears(b
 def test_join_introduction_validation_is_bounded_and_backward_compatible(band_app):
     client = band_app.test_client()
     band_id = _create_band(client)
-    assert client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={}).status_code == 201
+    assert client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'), json={'name': 'Applicant'}).status_code == 201
     other_band = Band(name='Other', slug='other-band')
     with band_app.app_context():
         db.session.add(other_band)
         db.session.commit()
         other_id = other_band.id
-    for body in ({'introduction': 12}, {'introduction': 'x' * 301}, {'unexpected': 'no'}):
+    for body in ({'name': 'Applicant', 'introduction': 12}, {'name': 'Applicant', 'introduction': 'x' * 301}, {'name': 'Applicant', 'unexpected': 'no'}):
         response = client.post(f'/api/v2/bands/{other_id}/join-requests', headers=_headers('other-id'), json=body)
         assert response.status_code == 400
     assert client.post(f'/api/v2/bands/{other_id}/join-requests', headers=_headers('other-id'),
-                       json={'introduction': 'bad\x00text'}).status_code == 400
+                       json={'name': 'Applicant', 'introduction': 'bad\x00text'}).status_code == 400
     oversized = client.post(f'/api/v2/bands/{other_id}/join-requests', headers=_headers('other-id'),
                             data=b' ' * 4097, content_type='application/json')
     assert oversized.status_code == 413
@@ -258,7 +258,7 @@ def test_policy_acceptance_rejects_mismatch_and_does_not_force_existing_users(ba
         db.session.commit()
     # The old local account remains able to use writes without being asked for
     # a receipt; the invalid band still returns its ordinary not-found status.
-    response = client.post('/api/v2/bands/999/join-requests', headers=_headers('other-id'), json={})
+    response = client.post('/api/v2/bands/999/join-requests', headers=_headers('other-id'), json={'name': 'Applicant'})
     assert response.status_code == 404
 
 

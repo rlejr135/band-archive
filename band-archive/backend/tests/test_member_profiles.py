@@ -152,7 +152,7 @@ def test_activation_retries_rejoin_and_no_name_autolink(profiles):
         _invite, raw = create_invite(actor, 1)
         leave_band(user, 1)
         assert Member.query.filter_by(linked_user_id=3).one().biography == 'Keep'
-        join_invite(user, raw); join_invite(user, raw); join_request(user, 1)
+        join_invite(user, raw); join_invite(user, raw); join_request(user, 1, name='Different submitted name')
         assert Member.query.filter_by(linked_user_id=3).count() == 1
         assert Member.query.filter_by(linked_user_id=3).one().id == profile.id
         assert Member.query.filter_by(name='Historical').one().linked_user_id is None

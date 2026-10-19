@@ -165,7 +165,7 @@ def _ordered_contention(app, engine, first_operation, second_operation):
 
 
 def _accept(ids):
-    return service.accept(ids['raw_context'], db.session.get(AppUser, ids['entrant']))
+    return service.accept(ids['raw_context'], db.session.get(AppUser, ids['entrant']), name='Concurrent Member')
 
 
 def _revoke(ids):
@@ -186,6 +186,8 @@ def _assert_membership(app, ids, *, joined):
         if joined:
             assert memberships[0].status == 'active'
             assert memberships[0].role == 'member'
+            assert memberships[0].requested_name is None
+            assert profiles[0].name == 'Concurrent Member'
             assert joined_audits[0].target_id == str(memberships[0].id)
         db.session.remove()
 

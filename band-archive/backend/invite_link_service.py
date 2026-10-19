@@ -14,6 +14,7 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, Band, BandInviteLink, BandMembership, InviteResumeContext
 from member_profile_service import ensure_member_profile
+from join_name import required_join_name
 
 _TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{43}$')
 _EMAIL_RE = re.compile(r'^[^\s@]{1,64}@[^\s@]{1,255}$')
@@ -279,7 +280,7 @@ def _viewer(actor, band_id):
             'can_open_workspace': bool(item and item.status == ACTIVE)}
 
 
-def accept(context, actor):
+def accept(context, actor, name=None):
     rate_limit('invite-accept', 20, 60, actor=actor)
     _begin_privileged_mutation()
     band, link, row, actor = _resolve_context(context, actor, allow_claim=False)
@@ -296,6 +297,7 @@ def accept(context, actor):
         db.session.commit()
         return {'joined': False, 'already_member': True, 'band': {'id': band.id, 'name': band.name, 'slug': band.slug},
                 'membership': {'status': existing.status, 'role': existing.role}}
+    name = required_join_name(name)
     if existing is None:
         existing = BandMembership(band_id=band.id, user_id=actor.id, role='member', status=ACTIVE,
                                   requested_at=now(), approved_at=now(), left_at=None,
@@ -311,7 +313,9 @@ def accept(context, actor):
         existing.acted_by_user_id = None
         existing.join_introduction = None
     row.completed_at = now()
+    existing.requested_name = name
     ensure_member_profile(existing)
+    existing.requested_name = None
     audit('membership_joined_by_invite_link', actor, band=band, target=existing)
     db.session.commit()
     return {'joined': True, 'already_member': False, 'band': {'id': band.id, 'name': band.name, 'slug': band.slug},

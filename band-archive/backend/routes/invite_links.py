@@ -26,7 +26,7 @@ def require_invite_schema():
     return response
 
 
-def _body(allowed):
+def _body(allowed, optional=()):
     if request.content_length is not None and request.content_length > 8192:
         raise ValidationError('Request body is too large.', 413)
     raw = request.stream.read(8193)
@@ -36,7 +36,8 @@ def _body(allowed):
         value = json.loads(raw)
     except (TypeError, ValueError):
         raise ValidationError('A valid JSON object is required.')
-    if not isinstance(value, dict) or set(value) != set(allowed):
+    if (not isinstance(value, dict) or not set(allowed) <= set(value)
+            or set(value) - set(allowed) - set(optional)):
         raise ValidationError('Unexpected request fields.')
     return value
 
@@ -113,9 +114,9 @@ def resume_invite():
 @invite_links_bp.post('/invite-links/accept')
 @require_auth
 def accept_invite():
-    body = _body({'context'})
+    body = _body({'context'}, optional={'name'})
     actor = current_app_user(required=True)
-    return _limited(lambda: jsonify(accept(body['context'], actor)))
+    return _limited(lambda: jsonify(accept(body['context'], actor, name=body.get('name'))))
 
 
 @invite_links_bp.get('/bands/<int:band_id>/invite-links')

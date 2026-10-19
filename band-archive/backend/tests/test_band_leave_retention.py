@@ -113,7 +113,7 @@ def test_rejoin_request_reuses_left_membership_and_resets_role(access_app, write
         membership_id = item.id
         item.status = 'left'; item.role = 'admin'; item.left_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.session.commit()
-    rejoin = write_client.post(f'/api/v2/bands/{band_id}/join-requests', headers=principals['member'])
+    rejoin = write_client.post(f'/api/v2/bands/{band_id}/join-requests', headers=principals['member'], json={'name': 'Retained Member'})
     # A rejoin request changes state, so preserve the existing API's 201
     # response while keeping the original membership row ID.
     assert rejoin.status_code == 201

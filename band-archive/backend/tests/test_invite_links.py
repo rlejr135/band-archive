@@ -290,7 +290,17 @@ def test_reusable_link_joins_two_accounts_and_completed_context_cannot_rejoin_af
                                    json={'token': token, 'email': 'outsider@example.com'}).get_json()['context']
     assert client.post('/api/v2/invite-links/resume', json={'context': outsider_context},
                        headers=outsider_headers).status_code == 200
-    joined = client.post('/api/v2/invite-links/accept', json={'context': outsider_context},
+    # A bound invitation is not sufficient to create an unnamed profile.
+    for invalid in ({'context': outsider_context}, {'context': outsider_context, 'name': '  '},
+                    {'context': outsider_context, 'name': 'bad\u200bname'}):
+        assert client.post('/api/v2/invite-links/accept', json=invalid,
+                           headers=outsider_headers).status_code == 400
+    with app.app_context():
+        outsider = AppUser.query.filter_by(email='outsider@example.com').one()
+        assert BandMembership.query.filter_by(band_id=1, user_id=outsider.id).count() == 0
+        assert InviteResumeContext.query.filter_by(context_hash=hashlib.sha256(
+            outsider_context.encode('ascii')).hexdigest()).one().completed_at is None
+    joined = client.post('/api/v2/invite-links/accept', json={'context': outsider_context, 'name': 'Invited Member'},
                          headers=outsider_headers)
     assert joined.status_code == 200
     assert joined.get_json()['joined'] is True
@@ -299,6 +309,15 @@ def test_reusable_link_joins_two_accounts_and_completed_context_cannot_rejoin_af
         member = AppUser.query.filter_by(email='outsider@example.com').one()
         assert BandMembership.query.filter_by(band_id=1, user_id=member.id, status='active').one().role == 'member'
         assert Member.query.filter_by(band_id=1, linked_user_id=member.id).count() == 1
+        assert Member.query.filter_by(band_id=1, linked_user_id=member.id).one().name == 'Invited Member'
+        assert BandMembership.query.filter_by(band_id=1, user_id=member.id).one().requested_name is None
+    # Completed retries may omit or change name but never rename the profile.
+    assert client.post('/api/v2/invite-links/accept', json={'context': outsider_context},
+                       headers=outsider_headers).status_code == 200
+    assert client.post('/api/v2/invite-links/accept', json={'context': outsider_context, 'name': 'Rename attempt'},
+                       headers=outsider_headers).status_code == 200
+    with app.app_context():
+        assert Member.query.filter_by(band_id=1, linked_user_id=member.id).one().name == 'Invited Member'
     assert client.post('/api/v2/bands/1/leave', headers=outsider_headers).status_code == 200
     replay = client.post('/api/v2/invite-links/accept', json={'context': outsider_context},
                          headers=outsider_headers)
@@ -313,7 +332,9 @@ def test_accept_reactivates_inactive_membership_as_plain_member(invite_auth, sta
     app, signer = invite_auth
     with app.app_context():
         outsider = AppUser.query.filter_by(email='outsider@example.com').one()
-        db.session.add(BandMembership(band_id=1, user_id=outsider.id, role='admin', status=status))
+        db.session.add(BandMembership(band_id=1, user_id=outsider.id, role='admin', status=status,
+                                      requested_name='Old application name'))
+        outsider_id = outsider.id
         db.session.commit()
     client = app.test_client()
     owner_headers = _auth(signer)
@@ -323,9 +344,12 @@ def test_accept_reactivates_inactive_membership_as_plain_member(invite_auth, sta
     }).get_json()['context']
     headers = _auth(signer, '77777777-7777-7777-7777-777777777777', 'outsider@example.com')
     assert client.post('/api/v2/invite-links/resume', json={'context': context}, headers=headers).status_code == 200
-    accepted = client.post('/api/v2/invite-links/accept', json={'context': context}, headers=headers)
+    accepted = client.post('/api/v2/invite-links/accept', json={'context': context, 'name': 'Returning Member'}, headers=headers)
     assert accepted.status_code == 200
     assert accepted.get_json()['membership'] == {'status': 'active', 'role': 'member'}
+    with app.app_context():
+        assert Member.query.filter_by(band_id=1, linked_user_id=outsider_id).one().name == 'Returning Member'
+        assert BandMembership.query.filter_by(band_id=1, user_id=outsider_id).one().requested_name is None
 
 
 def test_revoke_after_resume_and_expired_context_cannot_accept(invite_auth):

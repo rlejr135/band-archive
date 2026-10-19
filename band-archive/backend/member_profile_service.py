@@ -46,9 +46,11 @@ def ensure_member_profile(membership):
         return profile
     user = db.session.get(AppUser, membership.user_id)
     # An email is never a display-name fallback (including malformed imported names).
-    name = (user.display_name or '').strip() if user else ''
-    if not name or '@' in name:
-        name = '멤버'
+    name = membership.requested_name
+    if name is None:
+        name = (user.display_name or '').strip() if user else ''
+        if not name or '@' in name:
+            name = '멤버'
     profile = Member(band_id=membership.band_id, linked_user_id=membership.user_id,
                      name=name[:100], instrument='', biography='', positions_json='[]',
                      custom_position='', profile_revision=0)

@@ -86,6 +86,7 @@ def my_bands():
             'role': item.role,
             'status': item.status,
             'requested_at': item.requested_at.isoformat() if item.requested_at else None,
+            'requested_name': item.requested_name,
         } for item in pending],
     })
 
@@ -325,8 +326,8 @@ def request_join(band_id):
             raise ValidationError('A valid JSON object is required.')
     if not isinstance(body, dict):
         raise ValidationError('A JSON object is required.')
-    if set(body) - {'introduction'}:
-        raise ValidationError('Only introduction is accepted.')
+    if set(body) - {'name', 'introduction'}:
+        raise ValidationError('Only name and introduction are accepted.')
     introduction = None
     if 'introduction' in body:
         raw_introduction = body['introduction']
@@ -340,8 +341,8 @@ def request_join(band_id):
             for char in introduction
         ):
             raise ValidationError('introduction contains unsupported control characters.')
-    item, created = join_request(current_app_user(), band_id, introduction=introduction)
-    return jsonify({'membership': membership_dict(item), 'created': created}), 201 if created else 200
+    item, created = join_request(current_app_user(), band_id, introduction=introduction, name=body.get('name'))
+    return jsonify({'membership': membership_dict(item, audience='self'), 'created': created}), 201 if created else 200
 
 
 @bands_bp.patch('/memberships/<int:membership_id>')
