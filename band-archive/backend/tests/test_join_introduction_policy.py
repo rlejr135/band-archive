@@ -107,14 +107,12 @@ def test_join_introduction_is_manager_pending_only_and_duplicate_preserves_first
     assert rejoin.status_code == 201
     manager = client.get(f'/api/v2/bands/{band_id}/memberships', headers=_headers('owner-id')).get_json()
     assert next(item for item in manager['memberships'] if item['id'] == membership_id)['introduction'] == 'New request'
-    invite = client.post(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id')).get_json()
-    joined = client.post('/api/v2/invite-codes/join', headers=_headers('member-id'),
-                         json={'code': invite['code']})
-    assert joined.status_code == 200
+    retired = client.post(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id'))
+    assert retired.status_code == 410
     with band_app.app_context():
         membership = db.session.get(BandMembership, membership_id)
-        assert membership.status == 'active'
-        assert membership.join_introduction is None
+        assert membership.status == 'pending'
+        assert membership.join_introduction == 'New request'
 
 
 def test_join_introduction_manager_audience_is_band_scoped_and_approval_clears(band_app):

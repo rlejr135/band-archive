@@ -223,21 +223,14 @@ def test_membership_permissions_cross_band_and_invite_lifecycle(band_app):
     assert client.patch(f'/api/v2/memberships/{membership_id}', headers=_headers('other-id'),
                         json={'role': 'admin'}).status_code == 404
 
-    issued = client.post(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id'))
-    assert issued.status_code == 201
-    code = issued.get_json()['code']
-    invite_id = issued.get_json()['invite']['id']
+    # The former one-use invite-code HTTP API is retired, but historical
+    # invite rows remain untouched for audit/compatibility purposes.
+    assert client.post(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id')).status_code == 410
+    assert client.get(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id')).status_code == 410
     assert client.post('/api/v2/invite-codes/join', headers=_headers('other-id'),
-                       json={'code': code}).status_code == 200
-    assert client.post(f'/api/v2/bands/{band_id}/invite-codes/{invite_id}/revoke',
-                       headers=_headers('owner-id')).status_code == 200
-    assert client.post('/api/v2/invite-codes/join', headers=_headers('owner-id'),
-                       json={'code': code}).status_code == 404
+                       json={'code': 'legacy-token'}).status_code == 410
     with band_app.app_context():
-        invite = db.session.get(BandInviteCode, invite_id)
-        assert invite.token_hash != code
-        assert len(invite.token_hash) == 64
-        assert code not in str(invite.__dict__)
+        assert BandInviteCode.query.filter_by(band_id=band_id).count() == 0
         assert other_id != band_id
 
 
@@ -422,14 +415,11 @@ def test_only_owner_changes_admin_roles_and_invites_reset_former_admin(band_app)
     assert client.patch('/api/v2/memberships/1', headers=_headers('owner-id'),
                         json={'role': 'member'}).status_code == 409
     assert client.post(f'/api/v2/bands/{band_id}/leave', headers=_headers('member-id')).status_code == 200
-    issued = client.post(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id')).get_json()
-    rejoin = client.post('/api/v2/invite-codes/join', headers=_headers('member-id'),
-                         json={'code': issued['code']})
-    assert rejoin.status_code == 200
-    assert rejoin.get_json()['membership']['role'] == 'member'
+    rejoin = client.post(f'/api/v2/bands/{band_id}/invite-codes', headers=_headers('owner-id'))
+    assert rejoin.status_code == 410
     with band_app.app_context():
         item = db.session.get(BandMembership, membership_id)
-        assert (item.role, item.status, item.left_at) == ('member', 'active', None)
+        assert (item.role, item.status, item.left_at is None) == ('admin', 'left', False)
 
 
 def test_roster_serializers_do_not_expose_account_state(band_app):

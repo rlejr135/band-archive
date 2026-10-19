@@ -34,6 +34,7 @@ from routes.content_reads import content_reads_bp
 from routes.deletion_tasks import deletion_tasks_bp
 from routes.availability import availability_bp
 from routes.member_profiles import member_profiles_bp
+from routes.invite_links import invite_links_bp
 from config import DevelopmentConfig, validate_supabase_auth_config
 from policy_service import validate_policy_configuration
 from startup_guard import assert_postgres_startup_ready, postgres_automation_allowed
@@ -45,6 +46,7 @@ _SQLITE_MIGRATION_LOCK_RETRIES = 8
 _SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 750
 _BAND_SCHEMA_TABLES = {
     'band', 'band_membership', 'band_creation_request', 'band_invite_code', 'audit_event',
+    'band_invite_link', 'invite_resume_context',
 }
 _LEGACY_CLIENT_VERSION_RE = re.compile(
     r'^[vV]?[0-9]{1,5}(?:\.[0-9]{1,5}){0,3}$'
@@ -453,6 +455,8 @@ def create_app(config_class=None, start_worker=None):
             'uploads.v2_complete_multipart_upload',
             'uploads.v2_abort_multipart_upload',
             'auth.policy_acceptance',
+            'invite_links.preview_invite',
+            'invite_links.start_resume_context',
         }
         if request.endpoint in exempt_endpoints:
             return None
@@ -496,6 +500,9 @@ def create_app(config_class=None, start_worker=None):
         except Exception:
             # Observability must never alter a public request's outcome.
             pass
+        if request.path.startswith('/api/v2/invite-links/') or '/invite-links' in request.path:
+            response.headers['Cache-Control'] = 'private, no-store'
+            response.vary.add('Authorization')
         return response
 
     db.init_app(app)
@@ -523,6 +530,7 @@ def create_app(config_class=None, start_worker=None):
     app.register_blueprint(deletion_tasks_bp)
     app.register_blueprint(availability_bp)
     app.register_blueprint(member_profiles_bp)
+    app.register_blueprint(invite_links_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(suggestions_bp)
     app.register_blueprint(members_bp)
