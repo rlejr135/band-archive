@@ -2,7 +2,7 @@
 import pytest
 import sqlalchemy as sa
 
-pytest_plugins = ('tests.test_data_api_security_migration',)
+from tests.test_data_api_security_migration import private_pg17  # noqa: F401
 
 
 def test_revision19_to20_preserves_rows_and_restricts_new_data_api_tables(private_pg17):

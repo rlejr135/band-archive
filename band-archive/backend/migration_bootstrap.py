@@ -852,7 +852,17 @@ def _expected_check_constraints(table, dialect=None):
     for constraint in table.constraints:
         if constraint.__class__.__name__ != 'CheckConstraint':
             continue
-        if table.name == 'policy_acceptance_receipt' and constraint.name in {
+        if getattr(dialect, 'name', None) == 'postgresql' and (
+            table.name, constraint.name,
+        ) in {
+            ('band_invite_link', 'ck_band_invite_link_expiry'),
+            ('invite_resume_context', 'ck_invite_resume_context_expiry'),
+            ('invite_resume_context', 'ck_invite_resume_context_claim_state'),
+        }:
+            canonical = _canonical_invite_postgres_check(
+                constraint.sqltext, table.name, constraint.name,
+            )
+        elif table.name == 'policy_acceptance_receipt' and constraint.name in {
             'ck_policy_receipt_terms_accepted', 'ck_policy_receipt_age_assertion',
         }:
             column = ('terms_accepted' if constraint.name == 'ck_policy_receipt_terms_accepted'
@@ -879,7 +889,9 @@ def _expected_check_constraints(table, dialect=None):
             },
             )
         if (getattr(dialect, 'name', None) == 'postgresql'
-                and not (isinstance(canonical, tuple) and canonical[:1] == ('policy_boolean_true',))):
+                and not (isinstance(canonical, tuple) and canonical[:1] in {
+                    ('policy_boolean_true',), ('invite_check',),
+                })):
             canonical = _normalize_postgres_check_for_table(canonical, table)
         if getattr(dialect, 'name', None) == 'postgresql' and canonical is None:
             raise MigrationBootstrapError(
@@ -902,7 +914,17 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             raise MigrationBootstrapError(
                 f'Dialect returned an unreadable CHECK constraint for {table_name}; refusing to stamp.'
             )
-        if table_name == 'policy_acceptance_receipt' and constraint.get('name') in {
+        if getattr(dialect, 'name', None) == 'postgresql' and (
+            table_name, constraint.get('name'),
+        ) in {
+            ('band_invite_link', 'ck_band_invite_link_expiry'),
+            ('invite_resume_context', 'ck_invite_resume_context_expiry'),
+            ('invite_resume_context', 'ck_invite_resume_context_claim_state'),
+        }:
+            canonical = _canonical_invite_postgres_check(
+                constraint['sqltext'], table_name, constraint.get('name'),
+            )
+        elif table_name == 'policy_acceptance_receipt' and constraint.get('name') in {
             'ck_policy_receipt_terms_accepted', 'ck_policy_receipt_age_assertion',
         }:
             column = ('terms_accepted' if constraint['name'] == 'ck_policy_receipt_terms_accepted'
@@ -929,10 +951,51 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
             },
             )
         if (getattr(dialect, 'name', None) == 'postgresql' and table is not None
-                and not (isinstance(canonical, tuple) and canonical[:1] == ('policy_boolean_true',))):
+                and not (isinstance(canonical, tuple) and canonical[:1] in {
+                    ('policy_boolean_true',), ('invite_check',),
+                })):
             canonical = _normalize_postgres_check_for_table(canonical, table)
         reflected.append((constraint.get('name'), canonical))
     return Counter(reflected)
+
+
+def _canonical_invite_postgres_check(value, table_name, constraint_name):
+    """Recognize only the exact reviewed invite-link CHECK expressions.
+
+    PostgreSQL reflects timestamp-column comparisons and paired NULL tests in
+    a form outside the general literal-only CHECK grammar. Keep these narrowly
+    scoped by table and constraint name, and normalize only whitespace,
+    identifier quotes, and redundant parentheses.
+    """
+    known = {
+        ('band_invite_link', 'ck_band_invite_link_expiry'): 'expiry',
+        ('invite_resume_context', 'ck_invite_resume_context_expiry'): 'expiry',
+        ('invite_resume_context', 'ck_invite_resume_context_claim_state'): 'claim_nullity_equivalence',
+    }
+    meaning = known.get((table_name, constraint_name))
+    if meaning is None or value is None:
+        return None
+    def identifier(fragment):
+        fragment = _strip_sql_parentheses(fragment)
+        if re.fullmatch(r'"[a-z_][a-z0-9_]*"', fragment):
+            return fragment[1:-1]
+        if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', fragment):
+            return fragment.casefold()
+        return None
+
+    expression = _strip_sql_parentheses(str(value))
+    pieces = _split_postgres_top_level(expression, '>' if meaning == 'expiry' else '=')
+    if not pieces or len(pieces) != 2:
+        return None
+    if meaning == 'expiry':
+        valid = [identifier(piece) for piece in pieces] == ['expires_at', 'created_at']
+    else:
+        columns = []
+        for piece in pieces:
+            match = re.fullmatch(r'(.+?)\s+IS\s+NULL', _strip_sql_parentheses(piece), re.IGNORECASE)
+            columns.append(identifier(match.group(1)) if match else None)
+        valid = set(columns) == {'claimed_user_id', 'claimed_at'}
+    return ('invite_check', constraint_name, meaning) if valid else None
 
 
 def _canonical_policy_boolean_check(value, column):
