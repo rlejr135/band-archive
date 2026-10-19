@@ -61,6 +61,9 @@ MUST_BE_EMPTY_TABLES = frozenset({
     # has an explicit logo-preservation contract, accepting a selected logo
     # could cascade-delete that selection when its image is refreshed.
     "band_logo",
+    # Invite-link digests and resume capabilities cannot be copied, discarded,
+    # or silently invalidated by this legacy content refresh workflow.
+    "band_invite_link", "invite_resume_context",
 })
 MANAGED_TABLES = PROTECTED_TABLES | REFRESHED_TABLES | QUARANTINED_TABLES | MUST_BE_EMPTY_TABLES
 

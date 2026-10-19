@@ -148,7 +148,7 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            assert migration_head_revision() == '20261018_19'
+            assert migration_head_revision() == '20261019_20'
             assert _version(app) == migration_head_revision()
             with db.engine.connect() as connection:
                 assert 'band_request_email_outbox' in inspect(connection).get_table_names()

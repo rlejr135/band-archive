@@ -44,6 +44,7 @@ PHASE16_REVISION = '20261017_16'
 PHASE17_REVISION = '20261017_17'
 PHASE18_REVISION = '20261017_18'
 PHASE19_REVISION = '20261018_19'
+PHASE20_REVISION = '20261019_20'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -57,7 +58,8 @@ DATA_API_MANAGED_TABLES_PHASE14 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13
 DATA_API_MANAGED_TABLES_PHASE15 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
 DATA_API_MANAGED_TABLES_PHASE16 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
 AVAILABILITY_TABLES = ('band_availability_day', 'band_availability_state', 'band_personal_schedule_note')
-DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES, 'band_logo')))
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES, 'band_logo',
+                                        'band_invite_link', 'invite_resume_context')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -228,6 +230,15 @@ def _remove_future_band_logo(metadata):
         for index in list(gallery.indexes):
             if index.name == 'uq_gallery_image_band_id':
                 gallery.indexes.remove(index)
+    _remove_future_invite_links(metadata)
+    return metadata
+
+
+def _remove_future_invite_links(metadata):
+    """Keep rev1-19 snapshots exact when current invite models evolve."""
+    for name in ('invite_resume_context', 'band_invite_link'):
+        if name in metadata.tables:
+            metadata.remove(metadata.tables[name])
     return metadata
 
 
@@ -426,6 +437,14 @@ def phase19_metadata():
     return metadata
 
 
+def phase20_metadata():
+    """Revision-20 snapshot adding reusable invite links and auth return contexts."""
+    metadata = phase19_metadata()
+    for name in ('band_invite_link', 'invite_resume_context'):
+        db.metadata.tables[name].to_metadata(metadata)
+    return metadata
+
+
 def _restore_pre_phase7_content_writes(metadata):
     """Remove v07-only nullability/indexes from older immutable snapshots."""
     comment = metadata.tables.get('comment')
@@ -475,7 +494,7 @@ def _restore_pre_phase11_direct_gallery_state(metadata):
     gallery_column = table.c.get('result_gallery_image_id')
     if gallery_column is not None:
         for constraint in list(table.constraints):
-            if gallery_column in constraint.columns:
+            if constraint.columns.contains_column(gallery_column):
                 table.constraints.remove(constraint)
         table._columns.remove(gallery_column)
     for constraint in list(table.constraints):
@@ -1788,6 +1807,8 @@ def metadata_for_recorded_revision(revision):
         return phase18_metadata()
     if revision == PHASE19_REVISION:
         return phase19_metadata()
+    if revision == PHASE20_REVISION:
+        return phase20_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

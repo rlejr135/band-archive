@@ -343,6 +343,46 @@ class BandInviteCode(db.Model):
     revoked_by = db.relationship('AppUser', foreign_keys=[revoked_by_user_id])
 
 
+class BandInviteLink(db.Model):
+    """Reusable, 24-hour invitation capability; only its digest is retained."""
+    __tablename__ = 'band_invite_link'
+
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id', ondelete='CASCADE'), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    revoked_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
+    __table_args__ = (
+        db.CheckConstraint('expires_at > created_at', name='ck_band_invite_link_expiry'),
+        db.Index('ix_band_invite_link_band_created', 'band_id', 'created_at', 'id'),
+    )
+
+
+class InviteResumeContext(db.Model):
+    """Short-lived email-bound return context; never stores raw token or email."""
+    __tablename__ = 'invite_resume_context'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invite_link_id = db.Column(db.Integer, db.ForeignKey('band_invite_link.id', ondelete='CASCADE'),
+                               nullable=False, index=True)
+    context_hash = db.Column(db.String(64), nullable=False, unique=True)
+    expected_email_hmac = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    claimed_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='CASCADE'), nullable=True)
+    claimed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        db.CheckConstraint('expires_at > created_at', name='ck_invite_resume_context_expiry'),
+        db.CheckConstraint('(claimed_user_id IS NULL) = (claimed_at IS NULL)',
+                           name='ck_invite_resume_context_claim_state'),
+        db.Index('ix_invite_resume_context_link_live', 'invite_link_id', 'expires_at', 'completed_at'),
+    )
+
+
 class LegacyBandClaimToken(db.Model):
     """One-time capability for assigning the first owner of a legacy band.
 
