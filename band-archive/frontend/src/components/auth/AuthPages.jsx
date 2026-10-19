@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { normalizeEmail, safeReturnPath } from '../../services/authRedirect.js';
+import { normalizeEmail, safeAuthReturnPath } from '../../services/authRedirect.js';
 import { getSupabaseClient } from '../../services/supabase.js';
 import { createSubmissionGuard } from '../../services/authSubmission.js';
+import { createInviteResumeContext, getInviteResumeContext, hasPendingInviteToken, inviteContinuationPath, isInviteContinuationPath, clearInviteResumeContext } from '../../services/inviteLinks.js';
 import { useServicePolicy } from '../../context/ServicePolicyContext.jsx';
 import { PolicyChecks, PolicyLinks } from './PolicyPages.jsx';
 import { TurnstileChallenge } from './TurnstileChallenge.jsx';
@@ -12,7 +13,7 @@ import './AuthPages.css';
 const authFailure = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
 
 const appOrigin = () => window.location.origin;
-const returnFromSearch = (searchParams) => safeReturnPath(searchParams.get('returnTo')) || '/bands';
+const returnFromSearch = (searchParams) => safeAuthReturnPath(searchParams.get('returnTo')) || '/bands';
 
 const useAuthChallenge = () => {
   const policy = useServicePolicy();
@@ -55,27 +56,41 @@ export const LoginPage = ({ embedded = false }) => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const submission = useRef(createSubmissionGuard()).current;
+  const inviteFlowRef = useRef(null);
+  useEffect(() => () => { inviteFlowRef.current?.abort(); inviteFlowRef.current = null; }, [returnTo]);
 
   if (!loading && user) return <Navigate to={returnTo} replace />;
   const submit = async (event) => {
     event.preventDefault();
     if (configError || challenge.blocked || !submission.tryAcquire()) return;
+    inviteFlowRef.current?.abort();
+    const inviteFlow = isInviteContinuationPath(returnTo) ? new AbortController() : null;
+    inviteFlowRef.current = inviteFlow;
     setSubmitting(true);
     setError('');
     try {
+      if (isInviteContinuationPath(returnTo)) {
+        if (hasPendingInviteToken()) await createInviteResumeContext(normalizeEmail(email), { signal: inviteFlow.signal });
+        else if (!getInviteResumeContext()) throw new Error('invite_context_unavailable');
+      }
+      if (inviteFlow?.signal.aborted) return;
       const supabase = getSupabaseClient();
       const { error: signInError } = await supabase.auth.signInWithPassword({
         email: normalizeEmail(email), password, options: { captchaToken: challenge.token || undefined },
       });
+      if (inviteFlow?.signal.aborted) return;
       if (signInError?.code === 'captcha_failed') { setError('봇 방지 설정이 변경되었거나 확인이 만료되었습니다. 다시 확인한 뒤 로그인해 주세요.'); challenge.retry?.(); }
       else if (signInError) setError(authFailure);
       else navigate(returnTo, { replace: true });
     } catch {
-      setError(authFailure);
+      if (inviteFlow?.signal.aborted) return;
+      setError(isInviteContinuationPath(returnTo) && !hasPendingInviteToken() && !getInviteResumeContext()
+        ? '초대 링크가 만료되었거나 이 화면에서 초대 정보를 이어갈 수 없습니다. 원래 받은 초대 링크를 다시 열어 주세요.'
+        : authFailure);
     } finally {
       submission.release();
-      challenge.reset();
-      setSubmitting(false);
+      if (inviteFlowRef.current === inviteFlow) inviteFlowRef.current = null;
+      if (!inviteFlow?.signal.aborted) { challenge.reset(); setSubmitting(false); }
     }
   };
   return (
@@ -110,26 +125,43 @@ export const SignupPage = () => {
   const [error, setError] = useState('');
   const submission = useRef(createSubmissionGuard()).current;
   const returnTo = useMemo(() => returnFromSearch(searchParams), [searchParams]);
+  const inviteFlowRef = useRef(null);
+  useEffect(() => () => { inviteFlowRef.current?.abort(); inviteFlowRef.current = null; }, [returnTo]);
   const submit = async (event) => {
     event.preventDefault();
     if (configError || challenge.blocked || (policyRequired && (!challenge.config?.policies?.ready || !terms || !age)) || !submission.tryAcquire()) return;
+    inviteFlowRef.current?.abort();
+    const inviteFlow = isInviteContinuationPath(returnTo) ? new AbortController() : null;
+    inviteFlowRef.current = inviteFlow;
     setSubmitting(true);
     setError('');
     try {
+      let emailRedirectTo = `${appOrigin()}/verify-email`;
+      if (isInviteContinuationPath(returnTo)) {
+        let context = getInviteResumeContext();
+        if (hasPendingInviteToken()) context = await createInviteResumeContext(normalizeEmail(email), { signal: inviteFlow.signal });
+        if (!context) throw new Error('invite_context_unavailable');
+        emailRedirectTo = `${emailRedirectTo}?invite_resume=${encodeURIComponent(context)}`;
+      }
+      if (inviteFlow?.signal.aborted) return;
       const { error: signUpError } = await getSupabaseClient().auth.signUp({
         email: normalizeEmail(email),
         password,
-        options: { emailRedirectTo: `${appOrigin()}/verify-email`, captchaToken: challenge.token || undefined },
+        options: { emailRedirectTo, captchaToken: challenge.token || undefined },
       });
+      if (inviteFlow?.signal.aborted) return;
       if (signUpError?.code === 'captcha_failed') { setError('봇 방지 설정이 변경되었거나 확인이 만료되었습니다. 다시 확인한 뒤 가입해 주세요.'); challenge.retry?.(); }
-      else if (signUpError) setError(authFailure);
+      else if (signUpError) { if (isInviteContinuationPath(returnTo)) clearInviteResumeContext(); setError(authFailure); }
       else setComplete(true);
     } catch {
-      setError(authFailure);
+      if (inviteFlow?.signal.aborted) return;
+      setError(isInviteContinuationPath(returnTo) && !hasPendingInviteToken() && !getInviteResumeContext()
+        ? '초대 링크가 만료되었거나 이 화면에서 초대 정보를 이어갈 수 없습니다. 원래 받은 초대 링크를 다시 열어 주세요.'
+        : authFailure);
     } finally {
       submission.release();
-      challenge.reset();
-      setSubmitting(false);
+      if (inviteFlowRef.current === inviteFlow) inviteFlowRef.current = null;
+      if (!inviteFlow?.signal.aborted) { challenge.reset(); setSubmitting(false); }
     }
   };
   return (
@@ -155,7 +187,7 @@ export const VerifyEmailPage = () => {
   const { user, loading } = useAuth();
   return (
     <AuthFrame title="이메일 확인">
-      {loading ? <p>확인 상태를 불러오는 중입니다…</p> : user ? <p className="auth-success" role="status">이메일 확인이 완료되었습니다. 밴드를 선택해 계속하세요.</p> : <p>확인 메일의 링크를 열어 이메일 인증을 완료해 주세요.</p>}
+      {loading ? <p>확인 상태를 불러오는 중입니다…</p> : user ? <><p className="auth-success" role="status">이메일 확인이 완료되었습니다. 밴드를 선택해 계속하세요.</p>{getInviteResumeContext() && <p><Link className="primary-btn" to={inviteContinuationPath}>초대받은 밴드 확인하기</Link></p>}</> : <p>확인 메일의 링크를 열어 이메일 인증을 완료해 주세요.</p>}
       <p><Link to="/login">로그인</Link> · <Link to="/bands">밴드 선택</Link></p>
     </AuthFrame>
   );

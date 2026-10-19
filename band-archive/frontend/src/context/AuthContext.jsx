@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getSupabaseClient, getSupabaseConfigError } from '../services/supabase.js';
+import { clearInviteResumeContext, clearPendingInviteToken } from '../services/inviteLinks.js';
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const AuthContext = createContext(null);
@@ -50,6 +51,10 @@ export const AuthProvider = ({ children }) => {
       eventVersion += 1;
       setAuthEvent(event);
       const nextIdentity = nextSession?.user?.id ?? null;
+      if (event === 'SIGNED_OUT' || (authIdentity.current && nextIdentity && nextIdentity !== authIdentity.current)) {
+        clearInviteResumeContext();
+        clearPendingInviteToken();
+      }
       if (event === 'SIGNED_OUT' || nextIdentity !== authIdentity.current) setAuthGeneration((value) => value + 1);
       authIdentity.current = nextIdentity;
       setSession(nextSession ?? null);

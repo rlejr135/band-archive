@@ -37,7 +37,7 @@ test('visitor discover preserves a safe login return and join becomes pending on
   globalThis.fetch = async (url, request = {}) => { calls.push([String(url), request]); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
   try { const visitor = render(createElement(App, { entry: '/bands/discover', authValue: account(null), discover: true })); await visitor.findByText('Public'); await userEvent.click(visitor.getByRole('button', { name: '로그인 후 가입 요청' })); await visitor.findByText('login:?returnTo=%2Fbands%2Fdiscover'); assert.ok(calls.every(([url]) => !url.includes('invite'))); visitor.unmount();
     let joined = 0; let membershipReads = 0; globalThis.fetch = async (url) => { if (String(url).endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (String(url).includes('join-requests')) { joined += 1; return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
-    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); assert.equal(joined, 0); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
+    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); assert.equal(joined, 0); assert.equal(member.getByRole('button', { name: '가입 요청 보내기' }).disabled, true); await user.type(member.getByLabelText('밴드에서 사용할 이름 (필수)'), '멤버 이름'); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
   } finally { globalThis.fetch = previous; }
 });
 
@@ -52,10 +52,10 @@ test('discover bands uses the shared accessible return link styling', async () =
   } finally { globalThis.fetch = previous; }
 });
 
-test('invite code stays in a POST body, clears the input, and has a generic invalid result', async () => {
+test('account page replaces retired invite-code entry with received-link guidance and performs no write', async () => {
   await load(); const previous = globalThis.fetch; const writes = [];
-  globalThis.fetch = async (url, options = {}) => { writes.push([String(url), options]); return response({}, 404); };
-  try { const view = render(createElement(auth.AuthContext.Provider, { value: account() }, createElement(onboarding.InviteCodeEntry))); const input = view.getByLabelText('초대 코드'); await userEvent.type(input, 'secret-capability'); await userEvent.click(view.getByRole('button', { name: '가입' })); await view.findByText('초대 코드를 사용할 수 없습니다.'); assert.equal(input.value, ''); assert.equal(writes.length, 1); assert.ok(writes[0][0].endsWith('/api/v2/invite-codes/join')); assert.equal(writes[0][0].includes('secret-capability'), false); assert.deepEqual(JSON.parse(writes[0][1].body), { code: 'secret-capability' }); } finally { globalThis.fetch = previous; }
+  globalThis.fetch = async (url, options = {}) => { writes.push([String(url), options]); return response({}); };
+  try { const view = render(createElement(auth.AuthContext.Provider, { value: account() }, createElement(onboarding.InviteLinkGuidance))); await view.findByText(/밴드 관리자가 보낸 초대 링크를 열어/); assert.equal(view.queryByLabelText('초대 코드'), null); assert.equal(view.queryByRole('button'), null); assert.equal(writes.length, 0); } finally { globalThis.fetch = previous; }
 });
 
 test('join introduction is optional plain text, bounded to 300 code points, trimmed and single-flight', async () => {
@@ -68,6 +68,7 @@ test('join introduction is optional plain text, bounded to 300 code points, trim
   try {
     const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
     await view.findByRole('button', { name: '가입 요청' }); await userEvent.click(view.getByRole('button', { name: '가입 요청' }));
+    await user.type(view.getByLabelText('밴드에서 사용할 이름 (필수)'), '  요청 이름  ');
     const input = view.getByLabelText('간단한 자기소개 (선택)');
     fireEvent.change(input, { target: { value: 'a'.repeat(301) } });
     // Use the native input event path for controlled textareas in jsdom.
@@ -75,7 +76,7 @@ test('join introduction is optional plain text, bounded to 300 code points, trim
     const send = view.getByRole('button', { name: '가입 요청 보내기' });
     assert.equal(send.disabled, true); await user.clear(input); await userEvent.type(input, ' 기타와 보컬을 해요. ');
     await userEvent.click(send); fireEvent.submit(input.closest('form')); assert.equal(writes.length, 1);
-    assert.deepEqual(writes[0], { introduction: '기타와 보컬을 해요.' });
+    assert.deepEqual(writes[0], { name: '요청 이름', introduction: '기타와 보컬을 해요.' });
     await act(async () => pending.resolve(response({ membership: { id: 1 }, created: true }, 201)));
     await waitFor(() => assert.equal(view.queryByLabelText('간단한 자기소개 (선택)'), null));
   } finally { globalThis.fetch = previous; }
@@ -91,9 +92,11 @@ test('join account switch clears draft and ignores the previous account response
   try {
     const view = render(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('a') }));
     await view.findByRole('button', { name: '가입 요청' }); await userEvent.click(view.getByRole('button', { name: '가입 요청' }));
+    await user.type(view.getByLabelText('밴드에서 사용할 이름 (필수)'), 'private name');
     await userEvent.type(view.getByLabelText('간단한 자기소개 (선택)'), 'private draft'); await userEvent.click(view.getByRole('button', { name: '가입 요청 보내기' }));
     view.rerender(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('b') }));
     assert.equal(view.queryByDisplayValue('private draft'), null);
+    assert.equal(view.queryByDisplayValue('private name'), null);
     await act(async () => pending.resolve(response({}, 400)));
     await view.findByRole('button', { name: '가입 요청' }); assert.equal(view.queryByRole('alert'), null); assert.equal(writes, 1);
   } finally { globalThis.fetch = previous; }
@@ -106,7 +109,7 @@ test('manager sees pending introduction as text and KST timestamp, never active 
     if (path.includes('/by-slug/a')) return response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
     if (path.endsWith('/memberships')) return response({ memberships: [{ id: 1, status: 'pending', user: { display_name: 'Applicant' }, requested_at: '2026-10-17T00:30:00Z', introduction: '<img src=x onerror=alert(1)>\n기타 연주' }, { id: 2, status: 'active', role: 'member', user: { display_name: 'Member' }, introduction: 'must-not-display' }] });
     if (path.endsWith('/announcement')) return response({ announcement: null });
-    return response({ invite_codes: [] });
+    return response({ invite_links: [] });
   };
   try {
     const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('Applicant');
@@ -114,6 +117,40 @@ test('manager sees pending introduction as text and KST timestamp, never active 
     const text = view.container.querySelector('.membership-introduction'); assert.equal(text.textContent, '<img src=x onerror=alert(1)>\n기타 연주');
     assert.equal(text.querySelector('img'), null); assert.equal(view.queryByText('must-not-display'), null);
   } finally { globalThis.fetch = previous; }
+});
+
+test('required member name is bounded, retained after a failed request and cleared for another band', async () => {
+  await load(); const previous = globalThis.fetch; const writes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
+    if (String(url).includes('join-requests')) { writes.push(JSON.parse(options.body)); return response({}, 400); }
+    return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }, { id: 8, slug: 'other', name: 'Other' }], pagination: { total: 2, has_more: false } });
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
+    await view.findAllByRole('button', { name: '가입 요청' }); await user.click(view.getAllByRole('button', { name: '가입 요청' })[0]);
+    const name = view.getByLabelText('밴드에서 사용할 이름 (필수)'); const send = view.getByRole('button', { name: '가입 요청 보내기' });
+    assert.equal(name.required, true); assert.equal(name.maxLength, 100); assert.equal(send.disabled, true);
+    await user.type(name, '  '); assert.equal(send.disabled, true); await user.clear(name);
+    await user.type(name, 'x'.repeat(101)); assert.equal(name.value.length, 100); await user.clear(name);
+    await user.type(name, '  무대 이름  '); await user.click(send); await view.findByRole('alert');
+    assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').value, '  무대 이름  '); assert.equal(send.disabled, false);
+    assert.deepEqual(writes, [{ name: '무대 이름', introduction: '' }]);
+    await user.click(view.getAllByRole('button', { name: '가입 요청' })[1]);
+    assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').value, ''); assert.equal(view.queryByRole('alert'), null);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('manager sees the requested member name with legacy account-name fallback', async () => {
+  await load(); const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes('/by-slug/a')) return response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (path.endsWith('/memberships')) return response({ memberships: [{ id: 1, status: 'pending', requested_name: '<멤버 이름>', user: { display_name: 'Hidden account name' } }, { id: 2, status: 'pending', requested_name: null, user: { display_name: 'Legacy account name' } }] });
+    return response({ invite_links: [], announcement: null });
+  };
+  try { const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('<멤버 이름>'); assert.ok(view.getByText('Legacy account name')); assert.equal(view.queryByText('Hidden account name'), null); }
+  finally { globalThis.fetch = previous; }
 });
 
 test('creation form has one in-flight submit and reports its status', async () => {
@@ -124,7 +161,7 @@ test('creation form has one in-flight submit and reports its status', async () =
 
 test('management hides non-manager and ignores a late A membership decision after route switch', async () => {
   await load(); const previous = globalThis.fetch; const decision = deferred(); const aDetail = { band: { id: 1, slug: 'a', name: 'A', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } }; const bDetail = { band: { id: 2, slug: 'b', name: 'B', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } };
-  globalThis.fetch = async (url, options = {}) => { const value = String(url); if (value.includes('/by-slug/a')) return response(aDetail); if (value.includes('/by-slug/b')) return response(bDetail); if (value.endsWith('/announcement')) return response({ announcement: null }); if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: 'A 요청' } }] }); if (value.includes('/bands/2/memberships')) return response({ memberships: [] }); if (value.includes('/invite-codes') && options.method !== 'POST') return response({ invite_codes: [] }); if (value.includes('/memberships/12')) return decision.promise; throw new Error(`unexpected ${value}`); };
+  globalThis.fetch = async (url, options = {}) => { const value = String(url); if (value.includes('/by-slug/a')) return response(aDetail); if (value.includes('/by-slug/b')) return response(bDetail); if (value.endsWith('/announcement')) return response({ announcement: null }); if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: 'A 요청' } }] }); if (value.includes('/bands/2/memberships')) return response({ memberships: [] }); if (value.includes('/invite-links') && options.method !== 'POST') return response({ invite_links: [] }); if (value.includes('/memberships/12')) return decision.promise; throw new Error(`unexpected ${value}`); };
   try { const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('A 요청'); await userEvent.click(view.getByRole('button', { name: '승인' })); view.rerender(createElement(App, { entry: '/bands/b/manage', manage: true })); await view.findByText('B 관리'); await act(async () => decision.resolve(response({ membership: { id: 12 } }))); await new Promise((done) => setTimeout(done, 0)); assert.equal(view.queryByText('A 요청'), null); assert.equal(view.getByText('B 관리').textContent, 'B 관리'); view.unmount();
     globalThis.fetch = async (url) => String(url).includes('/by-slug/member') ? response({ band: { id: 4, slug: 'member', permissions: { can_manage_members: false, can_manage_invites: false } } }) : response({}); const platform = { ...account('platform'), user: { id: 'platform', app_metadata: { role: 'superadmin' } } }; const denied = render(createElement(App, { entry: '/bands/member/manage', manage: true, authValue: platform })); await denied.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(denied.queryByText('초대 코드'), null); assert.equal(denied.queryByText('대표 사진'), null); const myBandsLink = denied.getByRole('link', { name: '내 밴드로 이동' }); assert.equal(myBandsLink.getAttribute('href'), '/bands'); assert.ok(myBandsLink.classList.contains('bands-return-link'));
   } finally { globalThis.fetch = previous; }
@@ -140,28 +177,28 @@ test('management clears A privileged UI synchronously when the AuthContext ident
     if (value.endsWith('/announcement')) return response({ announcement: null });
     if (value.includes('/bands/1/memberships')) return response({ memberships: [{ id: 11, status: 'pending', user: { display_name: 'A 요청' } }] });
     if (value.includes('/bands/2/memberships')) return response({ memberships: [] });
-    if (value.includes('/bands/1/invite-codes') && options.method === 'POST') return response({ code: 'a-raw-invite' }, 201);
-    if (value.includes('/bands/1/invite-codes')) return response({ invite_codes: [] });
-    if (value.includes('/bands/2/invite-codes')) return response({ invite_codes: [] });
+    if (value.includes('/bands/1/invite-links') && options.method === 'POST') return response({ invite_link: { id: 91, band_id: 1, created_at: '2026-01-01T00:00:00Z', expires_at: '2099-01-02T00:00:00Z', revoked_at: null }, token: 'A'.repeat(43) }, 201);
+    if (value.includes('/bands/1/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/2/invite-links')) return response({ invite_links: [] });
     if (value.includes('/memberships/11')) return response({}, 500);
     throw new Error(`unexpected ${value}`);
   };
   try {
     const view = render(createElement(App, { entry: '/bands/club/manage', manage: true, authValue: account('a') }));
     await view.findByText('A 요청');
-    await userEvent.click(view.getByRole('button', { name: '새 초대 코드 만들기' }));
-    await view.findByText('a-raw-invite');
+    await userEvent.click(view.getByRole('button', { name: '새 초대 링크 만들기' }));
+    await view.findByDisplayValue(/invite#token=A{43}/);
     await userEvent.click(view.getByRole('button', { name: '승인' }));
     await view.findByRole('alert');
 
     // The same MemoryRouter remains mounted; changing only the provider value
     // must not leave A's privileged state painted while B is still loading.
     view.rerender(createElement(App, { entry: '/bands/club/manage', manage: true, authValue: account('b') }));
-    assert.equal(view.queryByText('a-raw-invite'), null);
+    assert.equal(view.queryByDisplayValue(/invite#token=A{43}/), null);
     assert.equal(view.queryByText('A 요청'), null);
     assert.equal(view.queryByRole('alert'), null);
     assert.equal(view.queryByRole('button', { name: '승인' }), null);
-    assert.equal(view.queryByRole('button', { name: '새 초대 코드 만들기' }), null);
+    assert.equal(view.queryByRole('button', { name: '새 초대 링크 만들기' }), null);
 
     await act(async () => bDetail.resolve(response(b)));
     await view.findByText('B 관리');
@@ -177,9 +214,9 @@ test('management ignores late A reads after an in-place AuthContext switch to B 
     if (value.includes('/by-slug/club')) { if (token === 'Bearer a') aDetailReads += 1; return response(token === 'Bearer b' ? b : a); }
     if (value.endsWith('/announcement')) return response({ announcement: null });
     if (value.includes('/bands/1/memberships')) return aMembers.promise;
-    if (value.includes('/bands/1/invite-codes')) return aInvites.promise;
+    if (value.includes('/bands/1/invite-links')) return aInvites.promise;
     if (value.includes('/bands/2/memberships')) return response({ memberships: [{ id: 22, status: 'pending', user: { display_name: 'B 요청' } }] });
-    if (value.includes('/bands/2/invite-codes')) return response({ invite_codes: [] });
+    if (value.includes('/bands/2/invite-links')) return response({ invite_links: [] });
     throw new Error(`unexpected ${value}`);
   };
   try {
@@ -210,10 +247,10 @@ test('management keeps the newest mutation refetch when superseded reads resolve
       if (membershipReads === 1) return response({ memberships: [{ id: 12, status: 'pending', user: { display_name: '기존 요청' } }] });
       followupSignals.push(options.signal); return membershipReads === 2 ? oldMembers.promise : newMembers.promise;
     }
-    if (value.includes('/bands/1/invite-codes') && options.method === 'POST') return create.promise;
-    if (value.includes('/bands/1/invite-codes')) {
+    if (value.includes('/bands/1/invite-links') && options.method === 'POST') return create.promise;
+    if (value.includes('/bands/1/invite-links')) {
       inviteReads += 1;
-      if (inviteReads === 1) return response({ invite_codes: [] });
+      if (inviteReads === 1) return response({ invite_links: [] });
       followupSignals.push(options.signal); return inviteReads === 2 ? oldInvites.promise : newInvites.promise;
     }
     if (value.includes('/memberships/12')) return approve.promise;
@@ -222,18 +259,18 @@ test('management keeps the newest mutation refetch when superseded reads resolve
   try {
     const view = render(createElement(App, { entry: '/bands/club/manage', manage: true }));
     await view.findByText('기존 요청');
-    await userEvent.click(view.getByRole('button', { name: '새 초대 코드 만들기' }));
+    await userEvent.click(view.getByRole('button', { name: '새 초대 링크 만들기' }));
     await userEvent.click(view.getByRole('button', { name: '승인' }));
 
-    await act(async () => create.resolve(response({ code: 'old-raw-code' }, 201)));
+    await act(async () => create.resolve(response({ invite_link: { id: 92, band_id: 1, created_at: '2026-01-01T00:00:00Z', expires_at: '2099-01-02T00:00:00Z', revoked_at: null }, token: 'B'.repeat(43) }, 201)));
     await waitFor(() => assert.equal(membershipReads, 2));
     await act(async () => approve.resolve(response({ membership: { id: 12 } })));
     await waitFor(() => assert.equal(membershipReads, 3));
     assert.ok(followupSignals.slice(0, 2).every((signal) => signal.aborted), 'the earlier refetch is aborted before its ignored responses resolve');
 
-    await act(async () => { newMembers.resolve(response({ memberships: [{ id: 14, status: 'pending', user: { display_name: 'New' } }] })); newInvites.resolve(response({ invite_codes: [] })); });
+    await act(async () => { newMembers.resolve(response({ memberships: [{ id: 14, status: 'pending', user: { display_name: 'New' } }] })); newInvites.resolve(response({ invite_links: [] })); });
     await view.findByText('New');
-    await act(async () => { oldMembers.resolve(response({ memberships: [{ id: 13, status: 'pending', user: { display_name: 'Old' } }] })); oldInvites.resolve(response({ invite_codes: [] })); });
+    await act(async () => { oldMembers.resolve(response({ memberships: [{ id: 13, status: 'pending', user: { display_name: 'Old' } }] })); oldInvites.resolve(response({ invite_links: [] })); });
     await new Promise((done) => setTimeout(done, 0));
     assert.equal(view.queryByText('Old'), null);
     assert.equal(view.queryByText('New')?.textContent, 'New');
@@ -244,7 +281,7 @@ test('management return control is a keyboard-focusable canonical RouterLink', a
   await load(); const previous = globalThis.fetch;
   globalThis.fetch = async (url) => { const value = String(url);
     if (value.includes('/by-slug/requested')) return response({ band: { id: 88, slug: 'canonical-band', name: '이름이 긴 밴드', permissions: { can_manage_members: true, can_manage_invites: true } } });
-    if (value.endsWith('/bands/88/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/88/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/88/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/88/memberships')) return response({ memberships: [] }); if (value.includes('/bands/88/invite-links')) return response({ invite_links: [] }); if (value.includes('/bands/88/announcement')) return response({ announcement: null });
     throw new Error(`unexpected ${value}`);
   };
   try { const view = render(createElement(App, { entry: '/bands/requested/manage', manage: true })); await view.findByText('이름이 긴 밴드 관리'); const link = view.getByRole('link', { name: '밴드 공간으로 돌아가기' }); assert.equal(link.getAttribute('href'), '/bands/canonical-band'); assert.equal(link.tabIndex, 0); assert.ok(link.classList.contains('bands-return-link')); await user.tab(); assert.equal(document.activeElement, link); }
@@ -257,7 +294,7 @@ test('owner management page links to the isolated logo management route only wit
     const path = String(url);
     if (path.includes('/by-slug/logo-owner')) return response({ band: { id: 81, slug: 'logo-owner', name: '로고 밴드', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_manage_logo: true } } });
     if (path.endsWith('/memberships')) return response({ memberships: [] });
-    if (path.endsWith('/invite-codes')) return response({ invite_codes: [] });
+    if (path.includes('/invite-links')) return response({ invite_links: [] });
     if (path.endsWith('/announcement')) return response({ announcement: null });
     throw new Error(`unexpected ${path}`);
   };
@@ -275,10 +312,10 @@ test('owner profile editor requires explicit permission and saves only the trimm
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url); const method = options.method || 'GET';
     if (value.endsWith('/by-slug/profile')) return response({ band: owner });
-    if (value.endsWith('/bands/51/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/51/invite-codes')) return response({ invite_codes: [] });
-    if (value.endsWith('/bands/51/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/51/profile') && method === 'PATCH') { const body = JSON.parse(options.body); writes.push(body); profileDescription = body.description.trim() || null; owner.description = profileDescription; return response({ band: { ...owner, description: profileDescription } }); }
+    if (value.includes('/bands/51/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/51/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/51/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/51/profile') && method === 'PATCH') { const body = JSON.parse(options.body); writes.push(body); profileDescription = body.description.trim() || null; owner.description = profileDescription; return response({ band: { ...owner, description: profileDescription } }); }
     throw new Error(`unexpected ${method} ${value}`);
   };
   try {
@@ -292,7 +329,7 @@ test('owner profile editor requires explicit permission and saves only the trimm
     owner.permissions.can_edit_band_profile = false;
     view.unmount();
     const admin = { ...owner, membership: { role: 'admin' } };
-    globalThis.fetch = async (url) => String(url).endsWith('/by-slug/profile') ? response({ band: admin }) : String(url).endsWith('/memberships') ? response({ memberships: [] }) : String(url).endsWith('/invite-codes') ? response({ invite_codes: [] }) : response({ announcement: null });
+    globalThis.fetch = async (url) => String(url).endsWith('/by-slug/profile') ? response({ band: admin }) : String(url).endsWith('/memberships') ? response({ memberships: [] }) : String(url).includes('/invite-links') ? response({ invite_links: [] }) : response({ announcement: null });
     const denied = render(createElement(App, { entry: '/bands/profile/manage', manage: true })); await denied.findByText('프로필 밴드 관리');
     assert.equal(denied.queryByRole('button', { name: '소개 수정' }), null); assert.equal(denied.queryByRole('textbox', { name: '소개' }), null);
   } finally { globalThis.fetch = previous; }
@@ -304,8 +341,8 @@ test('profile 403 closes edit and preserves admin management after detail-only p
   const afterLoss = { band: { ...initial.band, membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: false } } };
   globalThis.fetch = async (url, options = {}) => { const value = String(url); const method = options.method || 'GET';
     if (value.endsWith('/by-slug/roleloss')) { detailReads += 1; return response(detailReads > 1 ? afterLoss : initial); }
-    if (value.endsWith('/bands/61/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/61/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/61/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/61/profile') && method === 'PATCH') { profileWrite += 1; return response({}, 403); }
+    if (value.includes('/bands/61/memberships')) return response({ memberships: [] }); if (value.includes('/bands/61/invite-links')) return response({ invite_links: [] }); if (value.includes('/bands/61/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/61/profile') && method === 'PATCH') { profileWrite += 1; return response({}, 403); }
     throw new Error(`unexpected ${method} ${value}`);
   };
   try { const view = render(createElement(App, { entry: '/bands/roleloss/manage', manage: true })); await view.findByText('역할 변경 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'draft'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByText('소개를 수정할 권한이 변경되었습니다.'); assert.equal(profileWrite, 1); assert.equal(detailReads, 2); assert.ok(view.getByText('역할 변경 관리')); assert.equal(view.queryByRole('button', { name: '소개 수정' }), null); assert.ok(view.getByRole('heading', { name: '가입 요청' })); }
@@ -317,11 +354,11 @@ test('profile 404 rechecks membership and clears the management page when the ba
   const band = { band: { id: 62, slug: 'deleted', name: '삭제된 밴드', description: '기존', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } };
   globalThis.fetch = async (url, options = {}) => { const value = String(url); const method = options.method || 'GET';
     if (value.endsWith('/by-slug/deleted')) { detailReads += 1; return detailReads === 1 ? response(band) : response({}, 404); }
-    if (value.endsWith('/bands/62/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/62/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/62/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/62/profile') && method === 'PATCH') return response({}, 404);
+    if (value.includes('/bands/62/memberships')) return response({ memberships: [] }); if (value.includes('/bands/62/invite-links')) return response({ invite_links: [] }); if (value.includes('/bands/62/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/62/profile') && method === 'PATCH') return response({}, 404);
     throw new Error(`unexpected ${method} ${value}`);
   };
-  try { const view = render(createElement(App, { entry: '/bands/deleted/manage', manage: true })); await view.findByText('삭제된 밴드 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'new'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(view.queryByText('삭제된 밴드 관리'), null); assert.equal(view.queryByRole('button', { name: '새 초대 코드 만들기' }), null); assert.equal(detailReads, 2); }
+  try { const view = render(createElement(App, { entry: '/bands/deleted/manage', manage: true })); await view.findByText('삭제된 밴드 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'new'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByText('찾을 수 없는 관리 공간입니다.'); assert.equal(view.queryByText('삭제된 밴드 관리'), null); assert.equal(view.queryByRole('button', { name: '새 초대 링크 만들기' }), null); assert.equal(detailReads, 2); }
   finally { globalThis.fetch = previous; }
 });
 
@@ -329,8 +366,8 @@ test('profile save failure keeps the draft available for retry', async () => {
   await load(); const previous = globalThis.fetch; let writes = 0;
   const band = { band: { id: 63, slug: 'retry', name: '재시도 밴드', description: '', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } };
   globalThis.fetch = async (url, options = {}) => { const value = String(url); const method = options.method || 'GET';
-    if (value.endsWith('/by-slug/retry')) return response(band); if (value.endsWith('/bands/63/memberships')) return response({ memberships: [] }); if (value.endsWith('/bands/63/invite-codes')) return response({ invite_codes: [] }); if (value.endsWith('/bands/63/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/63/profile') && method === 'PATCH') { writes += 1; return response({}, 500); }
+    if (value.endsWith('/by-slug/retry')) return response(band); if (value.includes('/bands/63/memberships')) return response({ memberships: [] }); if (value.includes('/bands/63/invite-links')) return response({ invite_links: [] }); if (value.includes('/bands/63/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/63/profile') && method === 'PATCH') { writes += 1; return response({}, 500); }
     throw new Error(`unexpected ${method} ${value}`);
   };
   try { const view = render(createElement(App, { entry: '/bands/retry/manage', manage: true })); await view.findByText('재시도 밴드 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); const field = view.getByLabelText('소개'); await user.type(field, '보존할 초안'); await user.click(view.getByRole('button', { name: '소개 저장' })); await view.findByRole('alert'); assert.equal(view.getByLabelText('소개').value, '보존할 초안'); assert.equal(writes, 1); }
@@ -342,10 +379,10 @@ test('late profile save from account A cannot repaint account B after identity s
   const makeBand = (id, name) => ({ band: { id, slug: 'same', name, description: `${name} 소개`, membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } });
   globalThis.fetch = async (url, options = {}) => { const value = String(url); const token = options.headers?.Authorization;
     if (value.endsWith('/by-slug/same')) return response(token === 'Bearer b' ? makeBand(72, 'B') : makeBand(71, 'A'));
-    if (value.endsWith('/bands/71/memberships') || value.endsWith('/bands/72/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/71/invite-codes') || value.endsWith('/bands/72/invite-codes')) return response({ invite_codes: [] });
-    if (value.endsWith('/bands/71/announcement') || value.endsWith('/bands/72/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/71/profile') && options.method === 'PATCH') { writes += 1; return save.promise; }
+    if (value.includes('/bands/71/memberships') || value.includes('/bands/72/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/71/invite-links') || value.includes('/bands/72/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/71/announcement') || value.includes('/bands/72/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/71/profile') && options.method === 'PATCH') { writes += 1; return save.promise; }
     throw new Error(`unexpected ${value}`);
   };
   try { const view = render(createElement(App, { entry: '/bands/same/manage', manage: true, authValue: account('a') })); await view.findByText('A 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.clear(view.getByLabelText('소개')); await user.type(view.getByLabelText('소개'), 'A late draft'); await user.click(view.getByRole('button', { name: '소개 저장' })); await waitFor(() => assert.equal(writes, 1));
@@ -359,10 +396,10 @@ test('late profile save failure from account A cannot paint an error into accoun
   const makeBand = (id, name) => ({ band: { id, slug: 'same-failure', name, description: `${name} 소개`, membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true, can_edit_band_profile: true } } });
   globalThis.fetch = async (url, options = {}) => { const value = String(url); const token = options.headers?.Authorization;
     if (value.endsWith('/by-slug/same-failure')) return response(token === 'Bearer b' ? makeBand(82, 'B') : makeBand(81, 'A'));
-    if (value.endsWith('/bands/81/memberships') || value.endsWith('/bands/82/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/81/invite-codes') || value.endsWith('/bands/82/invite-codes')) return response({ invite_codes: [] });
-    if (value.endsWith('/bands/81/announcement') || value.endsWith('/bands/82/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/81/profile') && options.method === 'PATCH') return save.promise;
+    if (value.includes('/bands/81/memberships') || value.includes('/bands/82/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/81/invite-links') || value.includes('/bands/82/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/81/announcement') || value.includes('/bands/82/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/81/profile') && options.method === 'PATCH') return save.promise;
     throw new Error(`unexpected ${value}`);
   };
   try { const view = render(createElement(App, { entry: '/bands/same-failure/manage', manage: true, authValue: account('a') })); await view.findByText('A 관리'); await user.click(view.getByRole('button', { name: '소개 수정' })); await user.type(view.getByLabelText('소개'), 'late failure'); await user.click(view.getByRole('button', { name: '소개 저장' }));
@@ -376,17 +413,17 @@ test('manager edits announcement visibility repeatedly and pages the featured ph
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url); const method = options.method || 'GET';
     if (value.includes('/by-slug/editor-gallery')) return response({ band: { id: 43, slug: 'editor-gallery', name: '에디터 밴드', can_manage: true, default_visibility: 'MEMBERS', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
-    if (value.endsWith('/bands/43/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/43/invite-codes')) return response({ invite_codes: [] });
-    if (value.endsWith('/bands/43/announcement') && method === 'GET') return response({ announcement: null });
-    if (value.endsWith('/bands/43/announcement') && method === 'PUT') { const body = JSON.parse(options.body); announcementWrites.push(body); return response({ announcement: { id: 1, content: body.content, visibility: body.visibility, can_manage: true } }); }
-    if (value.endsWith('/bands/43/gallery/featured')) return response({ gallery: null });
+    if (value.includes('/bands/43/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/43/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/43/announcement') && method === 'GET') return response({ announcement: null });
+    if (value.includes('/bands/43/announcement') && method === 'PUT') { const body = JSON.parse(options.body); announcementWrites.push(body); return response({ announcement: { id: 1, content: body.content, visibility: body.visibility, can_manage: true } }); }
+    if (value.includes('/bands/43/gallery/featured')) return response({ gallery: null });
     if (value.includes('/bands/43/gallery?') && method === 'GET') {
       const parsed = new URL(value, 'http://localhost'); const offset = Number(parsed.searchParams.get('offset')); galleryOffsets.push(offset); galleryReads += 1;
       const startId = offset === 0 ? 1 : 21;
       return response({ gallery: Array.from({ length: offset === 0 ? 20 : 1 }, (_, index) => ({ id: startId + index, filename: `photo-${startId + index}.jpg`, url: `https://media.invalid/photo-${startId + index}.jpg${offset === 0 && startId + index === 1 && galleryReads > 1 ? '?fresh=1' : ''}`, is_featured: false })), pagination: { total: 21, has_more: offset === 0, next_offset: offset === 0 ? 20 : null } });
     }
-    if (value.endsWith('/bands/43/gallery/1/featured') && method === 'PATCH') { const body = JSON.parse(options.body); featuredWrites.push(body); return response({ gallery: { id: 1, filename: 'photo-1.jpg', url: 'https://media.invalid/photo-1.jpg', is_featured: body.is_featured } }); }
+    if (value.includes('/bands/43/gallery/1/featured') && method === 'PATCH') { const body = JSON.parse(options.body); featuredWrites.push(body); return response({ gallery: { id: 1, filename: 'photo-1.jpg', url: 'https://media.invalid/photo-1.jpg', is_featured: body.is_featured } }); }
     throw new Error(`unexpected ${method} ${value}`);
   };
   try {
@@ -426,12 +463,12 @@ test('a late featured-image refresh cannot restore a feature after it is cleared
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url); const method = options.method || 'GET';
     if (value.includes('/by-slug/featured-race')) return response({ band: { id: 44, slug: 'featured-race', name: '사진 밴드', can_manage: true, permissions: { can_manage_members: true, can_manage_invites: true } } });
-    if (value.endsWith('/bands/44/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/44/invite-codes')) return response({ invite_codes: [] });
-    if (value.endsWith('/bands/44/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/44/gallery/featured') && method === 'GET') { featureReads += 1; return featureReads === 1 ? response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old.jpg', is_featured: true } }) : lateRefresh.promise; }
-    if (value.endsWith('/bands/44/gallery?limit=20&offset=0')) return response({ gallery: [{ id: 1, filename: 'new.jpg', url: 'https://media.invalid/new.jpg', is_featured: false }], pagination: { total: 1, has_more: false } });
-    if (value.endsWith('/bands/44/gallery/99/featured') && method === 'PATCH') return response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old.jpg', is_featured: false } });
+    if (value.includes('/bands/44/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/44/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/44/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/44/gallery/featured') && method === 'GET') { featureReads += 1; return featureReads === 1 ? response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old.jpg', is_featured: true } }) : lateRefresh.promise; }
+    if (value.includes('/bands/44/gallery?limit=20&offset=0')) return response({ gallery: [{ id: 1, filename: 'new.jpg', url: 'https://media.invalid/new.jpg', is_featured: false }], pagination: { total: 1, has_more: false } });
+    if (value.includes('/bands/44/gallery/99/featured') && method === 'PATCH') return response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old.jpg', is_featured: false } });
     throw new Error(`unexpected ${method} ${value}`);
   };
   try {
@@ -453,12 +490,12 @@ test('empty featured-gallery 404 does not hide a successful gallery list', async
   globalThis.fetch = async (url, options = {}) => {
     const value = String(url);
     if (value.includes('/by-slug/no-feature')) return response({ band: { id: 45, slug: 'no-feature', name: '대표 사진 미설정', permissions: { can_manage_members: true, can_manage_invites: true } } });
-    if (value.endsWith('/bands/45/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/45/invite-codes')) return response({ invite_codes: [{ id: 12, created_at: '2026-01-01T00:30:00Z' }] });
-    if (value.endsWith('/bands/45/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/45/gallery/featured')) return response({ error: 'not found' }, 404);
-    if (value.endsWith('/bands/45/gallery?limit=20&offset=0')) return response({ gallery: [{ id: 8, filename: 'available.jpg', url: 'https://media.invalid/available.jpg' }], pagination: { total: 1, has_more: false } });
-    if (value.endsWith('/bands/45/gallery/8/featured') && options.method === 'PATCH') {
+    if (value.includes('/bands/45/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/45/invite-links')) return response({ invite_links: [{ id: 12, created_at: '2026-01-01T00:30:00Z' }] });
+    if (value.includes('/bands/45/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/45/gallery/featured')) return response({ error: 'not found' }, 404);
+    if (value.includes('/bands/45/gallery?limit=20&offset=0')) return response({ gallery: [{ id: 8, filename: 'available.jpg', url: 'https://media.invalid/available.jpg' }], pagination: { total: 1, has_more: false } });
+    if (value.includes('/bands/45/gallery/8/featured') && options.method === 'PATCH') {
       const body = JSON.parse(options.body); featuredWrites.push(body);
       return response({ gallery: { id: 8, filename: 'available.jpg', url: 'https://media.invalid/available.jpg', is_featured: body.is_featured } });
     }
@@ -482,11 +519,11 @@ test('gallery list 404 remains inaccessible while featured-only 404 is optional 
   globalThis.fetch = async (url) => {
     const value = String(url);
     if (value.includes('/by-slug/gallery-errors')) return response({ band: { id: 46, slug: 'gallery-errors', name: '갤러리 오류 밴드', permissions: { can_manage_members: true, can_manage_invites: true } } });
-    if (value.endsWith('/bands/46/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/bands/46/invite-codes')) return response({ invite_codes: [] });
-    if (value.endsWith('/bands/46/announcement')) return response({ announcement: null });
-    if (value.endsWith('/bands/46/gallery/featured')) return mode === 'list-404' ? response({ error: 'not found' }, 404) : response({ error: 'unavailable' }, 500);
-    if (value.endsWith('/bands/46/gallery?limit=20&offset=0')) return mode === 'list-404'
+    if (value.includes('/bands/46/memberships')) return response({ memberships: [] });
+    if (value.includes('/bands/46/invite-links')) return response({ invite_links: [] });
+    if (value.includes('/bands/46/announcement')) return response({ announcement: null });
+    if (value.includes('/bands/46/gallery/featured')) return mode === 'list-404' ? response({ error: 'not found' }, 404) : response({ error: 'unavailable' }, 500);
+    if (value.includes('/bands/46/gallery?limit=20&offset=0')) return mode === 'list-404'
       ? response({ error: 'not found' }, 404)
       : response({ gallery: [], pagination: { total: 0, has_more: false } });
     throw new Error(`unexpected ${value}`);
@@ -512,7 +549,7 @@ test('announcement 403 clears privileged management controls and late save canno
     const value = String(url); const method = options.method || 'GET'; const token = options.headers?.Authorization;
     if (value.includes('/by-slug/guarded')) return response({ band: { id: token === 'Bearer u2' ? 2 : 1, slug: 'guarded', name: token === 'Bearer u2' ? 'B 밴드' : 'A 밴드', can_manage: true, permissions: { can_manage_members: true, can_manage_invites: true } } });
     if (value.endsWith('/memberships')) return response({ memberships: [] });
-    if (value.endsWith('/invite-codes')) return response({ invite_codes: [] });
+    if (value.includes('/invite-links')) return response({ invite_links: [] });
     if (value.endsWith('/announcement') && method === 'GET') return response({ announcement: { id: 1, content: token === 'Bearer u2' ? 'B 공지' : 'A 공지', visibility: 'PUBLIC', can_manage: true } });
     if (value.endsWith('/announcement') && method === 'PUT') return phase === 'stale' ? oldSave.promise : response({}, 403);
     throw new Error(`unexpected ${method} ${value}`);
@@ -528,7 +565,7 @@ test('announcement 403 clears privileged management controls and late save canno
     phase = 'forbidden'; await user.click(view.getByRole('button', { name: '공지 수정' }));
     await user.clear(view.getByLabelText('공지 내용')); await user.type(view.getByLabelText('공지 내용'), '403 테스트'); await user.click(view.getByRole('button', { name: '저장' }));
     await view.findByText('찾을 수 없는 관리 공간입니다.');
-    assert.equal(view.queryByRole('button', { name: '공지 수정' }), null); assert.equal(view.queryByRole('button', { name: '새 초대 코드 만들기' }), null);
+    assert.equal(view.queryByRole('button', { name: '공지 수정' }), null); assert.equal(view.queryByRole('button', { name: '새 초대 링크 만들기' }), null);
     view.unmount();
   } finally { globalThis.fetch = previous; }
 });

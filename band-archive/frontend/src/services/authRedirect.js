@@ -23,3 +23,10 @@ export const safeReturnPath = (value, origin = globalThis.location?.origin || 'h
     return fallback;
   }
 };
+
+// Invite continuation is intentionally a single fixed local route. Keep this
+// separate from safeReturnPath so general auth redirects remain restricted.
+export const safeAuthReturnPath = (value, origin = globalThis.location?.origin || 'http://localhost') => {
+  if (value === '/invite/continue') return value;
+  return safeReturnPath(value, origin);
+};

@@ -209,27 +209,16 @@ test('admin status and private request results from an old account never appear 
   } finally { globalThis.fetch = previousFetch; }
 });
 
-test('invite join forces a fresh membership read and ignores the pre-join response', async () => {
-  await load(); const previousFetch = globalThis.fetch; const beforeJoin = deferred(); const calls = [];
-  globalThis.fetch = async (url) => {
-    const path = String(url); calls.push(path);
-    if (path.includes('/api/v2/invite-codes/join')) return response({ membership: { id: 24 } });
-    const membershipReads = calls.filter((item) => item.endsWith('/api/v2/bands')).length;
-    return membershipReads === 1 ? beforeJoin.promise : response({ bands: [{ id: 24, name: 'Joined Band', slug: 'joined-band', membership: { role: 'member' } }], pending_memberships: [] });
-  };
+test('account page no longer exposes retired invite-code submission', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url) => { calls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
   const authValue = { user: { id: 'member-join' }, getAccessToken: async () => 'member-token', refreshSession: async () => 'member-token', loading: false, signOut: async () => {} };
   try {
     const view = render(createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandProvider, null, createElement(MemoryRouter, null, createElement(page.BandsPage)))));
-    const input = await view.findByLabelText('초대 코드');
-    await userEvent.type(input, 'one-time-code');
-    await userEvent.click(view.getByRole('button', { name: '가입' }));
-    await waitFor(() => assert.ok(calls.some((path) => path.includes('/api/v2/invite-codes/join'))));
-    await view.findByText(/목록을 새로 불러옵니다/);
-    await view.findByRole('button', { name: /Joined Band/ });
-    await waitFor(() => assert.equal(calls.filter((item) => item.endsWith('/api/v2/bands')).length, 2));
-    await act(async () => beforeJoin.resolve(response({ bands: [{ id: 7, name: 'Stale Band', slug: 'stale-band', membership: { role: 'member' } }], pending_memberships: [] })));
-    assert.ok(view.getByRole('button', { name: /Joined Band/ }));
-    assert.equal(view.queryByText('Stale Band'), null);
+    await view.findByText(/초대 링크로 가입/);
+    assert.equal(view.queryByLabelText('초대 코드'), null);
+    assert.ok(view.getByText(/초대 링크를 열어 밴드 소개/));
+    assert.ok(calls.every((path) => !path.includes('invite-codes')));
   } finally { globalThis.fetch = previousFetch; }
 });
 

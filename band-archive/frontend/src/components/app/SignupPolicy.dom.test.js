@@ -11,7 +11,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http:
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Event: dom.window.Event });
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
-let vite; let pages; let policy; let auth; let gate; let challenge; let policyPages;
+let vite; let pages; let policy; let auth; let gate; let challenge; let policyPages; let inviteService; let requireAuth; let inviteRoute;
 const load = async () => {
   if (pages) return;
   vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true }, plugins: [{ name: 'auth-test-double', enforce: 'pre', transform(_code, id) {
@@ -23,6 +23,9 @@ const load = async () => {
   gate = await vite.ssrLoadModule('/src/components/auth/PolicyAcceptanceGate.jsx');
   challenge = await vite.ssrLoadModule('/src/components/auth/TurnstileChallenge.jsx');
   policyPages = await vite.ssrLoadModule('/src/components/auth/PolicyPages.jsx');
+  inviteService = await vite.ssrLoadModule('/src/services/inviteLinks.js');
+  requireAuth = await vite.ssrLoadModule('/src/components/layout/RequireAuth.jsx');
+  inviteRoute = await vite.ssrLoadModule('/src/components/bands/InviteLink.jsx');
 };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => { cleanup(); delete window.turnstile; delete globalThis.testSupabase; });
@@ -41,6 +44,111 @@ test('signup requires separate terms and age confirmations when rollout enabled 
   fireEvent.click(view.getByRole('checkbox', { name: /이용약관/ })); assert.equal(button.disabled, true);
   fireEvent.click(view.getByRole('checkbox', { name: /만 14세/ })); fireEvent.click(button);
   await view.findByRole('status'); assert.equal(writes.length, 1); assert.equal(writes[0].options.data, undefined); assert.equal(writes[0].options.emailRedirectTo, 'http://localhost/verify-email');
+});
+
+test('invite signup uses only an opaque callback context and sends the raw token only in the resume-context body', async () => {
+  await load();
+  const previousFetch = globalThis.fetch; const rawToken = 'A'.repeat(43); const resumeContext = 'E'.repeat(42) + 'A'; const writes = [];
+  dom.reconfigure({ url: `http://localhost/invite#token=${rawToken}` });
+  globalThis.location = dom.window.location; globalThis.history = dom.window.history; globalThis.sessionStorage = dom.window.sessionStorage;
+  inviteService.resetInviteUrlContextForTests(); inviteService.initializeInviteUrlContext();
+  globalThis.fetch = async (url, options = {}) => { writes.push({ url: String(url), options }); return response({ context: resumeContext, expires_at: '2099-01-01T00:00:00Z' }); };
+  globalThis.testSupabase = { auth: { signUp: async (payload) => { writes.push({ signup: payload }); return {}; } } };
+  const view = render(createElement(policy.ServicePolicyContext.Provider, { value: context(config()) },
+    createElement(auth.AuthContext.Provider, { value: account() },
+      createElement(MemoryRouter, { initialEntries: ['/signup?returnTo=%2Finvite%2Fcontinue'] }, createElement(pages.SignupPage)))));
+  try {
+    await fill(view);
+    fireEvent.click(view.getByRole('checkbox', { name: /이용약관/ })); fireEvent.click(view.getByRole('checkbox', { name: /만 14세/ }));
+    fireEvent.click(view.getByRole('button', { name: '회원가입' }));
+    await view.findByRole('status');
+    const contextCall = writes.find((item) => item.url?.endsWith('/api/v2/invite-links/resume-context'));
+    assert.ok(contextCall);
+    assert.deepEqual(JSON.parse(contextCall.options.body), { token: rawToken, email: 'person@example.test' });
+    const signup = writes.find((item) => item.signup)?.signup;
+    assert.equal(signup.options.emailRedirectTo, `http://localhost/verify-email?invite_resume=${resumeContext}`);
+    assert.equal(signup.options.emailRedirectTo.includes(rawToken), false);
+    assert.equal(signup.options.data, undefined);
+    view.unmount();
+    dom.reconfigure({ url: `http://localhost/verify-email?code=provider-code&invite_resume=${resumeContext}` });
+    globalThis.location = dom.window.location; globalThis.history = dom.window.history; globalThis.sessionStorage = dom.window.sessionStorage;
+    inviteService.initializeInviteUrlContext();
+    assert.equal(dom.window.location.search, '?code=provider-code');
+    const verified = render(createElement(auth.AuthContext.Provider, { value: account('verified') }, createElement(MemoryRouter, null, createElement(pages.VerifyEmailPage))));
+    assert.ok(verified.getByRole('link', { name: '초대받은 밴드 확인하기' }));
+    verified.unmount();
+
+    // Simulate a fresh browser/module context on the email callback: the only
+    // continuation data is the opaque callback marker, never the raw token.
+    inviteService.resetInviteUrlContextForTests(); dom.window.sessionStorage.clear();
+    dom.reconfigure({ url: `http://localhost/verify-email?code=provider-code&invite_resume=${resumeContext}` });
+    globalThis.location = dom.window.location; globalThis.history = dom.window.history; globalThis.sessionStorage = dom.window.sessionStorage;
+    inviteService.initializeInviteUrlContext();
+    assert.equal(inviteService.getInviteResumeContext(), resumeContext);
+    const previousContinuationFetch = globalThis.fetch; const continuationWrites = [];
+    globalThis.fetch = async (url, options = {}) => {
+      const path = String(url); continuationWrites.push({ path, options });
+      if (path.endsWith('/api/v2/me')) return response({ user: { policy_acceptance_required: true } });
+      if (path.endsWith('/policy-acceptance')) return response({ accepted: true });
+      if (path.endsWith('/invite-links/resume')) return response({
+        invite: { id: 17, expires_at: '2099-01-01T00:00:00Z', band: { id: 3, name: '초대 밴드', slug: 'invite-band', description: '소개' }, featured_gallery: null, stats: { total_songs: 4 }, song_count_scope: 'PUBLIC', announcement: null },
+        viewer: { membership_status: 'pending', can_open_workspace: false },
+      });
+      if (path.endsWith('/invite-links/accept')) return response({ joined: true, already_member: false, band: { id: 3, name: '초대 밴드', slug: 'invite-band' }, membership: { status: 'active', role: 'member' } });
+      throw new Error(`Unexpected continuation request: ${path}`);
+    };
+    const protectedFlow = render(createElement(policy.ServicePolicyContext.Provider, { value: context(config()) },
+      createElement(auth.AuthContext.Provider, { value: account('verified') }, createElement(MemoryRouter, { initialEntries: ['/invite/continue'] },
+        createElement(requireAuth.default, null, createElement(inviteRoute.InviteContinueRoute))))));
+    await protectedFlow.findByRole('heading', { name: '가입 확인' });
+    assert.equal(protectedFlow.queryByRole('button', { name: '초대받은 밴드에 가입' }), null);
+    assert.equal(continuationWrites.some(({ path }) => path.endsWith('/invite-links/accept')), false);
+    fireEvent.click(protectedFlow.getByRole('checkbox', { name: /이용약관/ }));
+    fireEvent.click(protectedFlow.getByRole('checkbox', { name: /만 14세/ }));
+    fireEvent.click(protectedFlow.getByRole('button', { name: '확인하고 계속하기' }));
+    await protectedFlow.findByRole('heading', { name: '초대 밴드 밴드에 가입하시겠습니까?' });
+    assert.equal(continuationWrites.some(({ path }) => path.endsWith('/invite-links/accept')), false);
+    await userEvent.type(protectedFlow.getByLabelText('밴드에서 사용할 이름 (필수)'), '가입 멤버');
+    await userEvent.click(protectedFlow.getByRole('button', { name: '초대받은 밴드에 가입' }));
+    await waitFor(() => assert.ok(continuationWrites.some(({ path }) => path.endsWith('/invite-links/accept'))));
+    const acceptRequest = continuationWrites.find(({ path }) => path.endsWith('/invite-links/accept'));
+    assert.deepEqual(JSON.parse(acceptRequest.options.body), { context: resumeContext, name: '가입 멤버' });
+    globalThis.fetch = previousContinuationFetch;
+  } finally { globalThis.fetch = previousFetch; inviteService.resetInviteUrlContextForTests(); delete globalThis.testSupabase; }
+});
+
+test('login and signup abort pending invite-context creation on unmount before calling Supabase', async () => {
+  await load(); const previousFetch = globalThis.fetch; const rawToken = 'J'.repeat(42) + 'A';
+  try {
+    for (const [Component, route, label] of [[pages.LoginPage, 'login', '로그인'], [pages.SignupPage, 'signup', '회원가입']]) {
+      inviteService.resetInviteUrlContextForTests();
+      dom.reconfigure({ url: `http://localhost/invite#token=${rawToken}` });
+      globalThis.location = dom.window.location; globalThis.history = dom.window.history; globalThis.sessionStorage = dom.window.sessionStorage;
+      inviteService.initializeInviteUrlContext();
+      let requestOptions; let resolveResponse; const pending = new Promise((resolve) => { resolveResponse = resolve; }); const supabaseCalls = [];
+      globalThis.fetch = async (_url, options) => { requestOptions = options; return pending; };
+      globalThis.testSupabase = { auth: {
+        signInWithPassword: async () => { supabaseCalls.push('login'); return {}; },
+        signUp: async () => { supabaseCalls.push('signup'); return {}; },
+      } };
+      const returnTo = encodeURIComponent('/invite/continue');
+      const view = render(createElement(policy.ServicePolicyContext.Provider, { value: context(config()) },
+        createElement(auth.AuthContext.Provider, { value: account() }, createElement(MemoryRouter, { initialEntries: [`/${route}?returnTo=${returnTo}`] }, createElement(Component)))));
+      await fill(view);
+      if (route === 'signup') {
+        fireEvent.click(view.getByRole('checkbox', { name: /이용약관/ }));
+        fireEvent.click(view.getByRole('checkbox', { name: /만 14세/ }));
+      }
+      fireEvent.click(view.getByRole('button', { name: label }));
+      await waitFor(() => assert.ok(requestOptions));
+      view.unmount();
+      assert.equal(requestOptions.signal.aborted, true);
+      await act(async () => { resolveResponse(response({ context: 'K'.repeat(42) + 'A', expires_at: '2099-01-01T00:00:00Z' }, 201)); await pending; });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.deepEqual(supabaseCalls, []);
+      assert.equal(inviteService.getInviteResumeContext(), '');
+    }
+  } finally { globalThis.fetch = previousFetch; inviteService.resetInviteUrlContextForTests(); delete globalThis.testSupabase; }
 });
 
 test('rollout off and incomplete draft preserve legacy signup without false consent', async () => {

@@ -6,6 +6,8 @@ import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { createSubmissionGuard } from '../../services/authSubmission.js';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
 import { formatInviteCreatedAt } from '../../services/bandDateTime.js';
+import { inviteManagerPath } from '../../services/inviteLinks.js';
+import { normalizedJoinName, validJoinName } from '../../services/joinName.js';
 import { AnnouncementEditor } from '../workspace/BandWorkspace.jsx';
 import './BandsPage.css';
 
@@ -24,40 +26,10 @@ const useApi = () => {
 const safeBandPath = (slug) => `/bands/${encodeURIComponent(slug)}`;
 const genericFailure = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
 
-export const InviteCodeEntry = ({ onJoined }) => {
-  const api = useApi();
-  const [code, setCode] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
-  const guard = useRef(createSubmissionGuard()).current;
-  const submit = async (event) => {
-    event.preventDefault();
-    if (!guard.tryAcquire()) return;
-    const submitted = code;
-    setBusy(true); setNotice('');
-    // Deliberately clear before the request: invite capabilities must never
-    // be retained in component state after a submission completes.
-    setCode('');
-    try {
-      await api.requestJson('/api/v2/invite-codes/join', requestOptions('POST', { code: submitted }));
-      await onJoined?.();
-      setNotice('초대 코드로 밴드에 가입했습니다. 밴드 목록을 새로 불러옵니다…');
-    } catch {
-      // Invalid, expired, and revoked are intentionally indistinguishable.
-      setNotice('초대 코드를 사용할 수 없습니다.');
-    } finally {
-      guard.release(); setBusy(false);
-    }
-  };
-  return <section className="bands-panel" aria-labelledby="invite-entry-title">
-    <h3 id="invite-entry-title">초대 코드로 가입</h3>
-    <form onSubmit={submit} className="bands-form" aria-busy={busy}>
-      <label>초대 코드<input aria-label="초대 코드" value={code} autoComplete="off" spellCheck="false" onChange={(event) => setCode(event.target.value)} /></label>
-      <button type="submit" className="secondary-btn" disabled={busy || !code.trim()}>{busy ? '가입 중…' : '가입'}</button>
-    </form>
-    {notice && <p role="status">{notice}</p>}
-  </section>;
-};
+export const InviteLinkGuidance = () => <section className="bands-panel" aria-labelledby="invite-entry-title">
+  <h3 id="invite-entry-title">초대 링크로 가입</h3>
+  <p>밴드 관리자가 보낸 초대 링크를 열어 밴드 소개를 확인한 뒤 직접 가입할 수 있습니다. 예전 초대 코드는 더 이상 사용할 수 없습니다.</p>
+</section>;
 
 
 export const DiscoverBandsPage = () => {
@@ -75,6 +47,7 @@ const DiscoverBandsContent = () => {
   const [state, setState] = useState({ loading: true, bands: [], pagination: { has_more: false, total: 0 } });
   const [joining, setJoining] = useState(new Set());
   const [requestBand, setRequestBand] = useState(null);
+  const [name, setName] = useState('');
   const [introduction, setIntroduction] = useState('');
   const joinGuard = useRef(new Set());
   const joinController = useRef(null);
@@ -105,21 +78,21 @@ const DiscoverBandsContent = () => {
 
   const openJoin = (band) => {
     if (!user) { navigate(`/login?returnTo=${encodeURIComponent('/bands/discover')}`); return; }
-    setRequestBand(band); setIntroduction(''); setError('');
+    setRequestBand(band); setName(''); setIntroduction(''); setError('');
   };
   const join = async (event) => {
     event.preventDefault();
     const band = requestBand;
-    if (!band || !user || Array.from(introduction.trim()).length > 300) return;
+    if (!band || !user || !validJoinName(name) || Array.from(introduction.trim()).length > 300) return;
     const bandId = Number(band.id);
     if (joinGuard.current.has(bandId) || own.pending.has(bandId) || own.active.has(bandId)) return;
     joinGuard.current.add(bandId);
     const controller = new AbortController(); joinController.current = controller;
     setJoining((previous) => new Set(previous).add(bandId)); setError('');
     try {
-      const result = await api.requestJson(`/api/v2/bands/${bandId}/join-requests`, requestOptions('POST', { introduction: introduction.trim() }, controller.signal));
+      const result = await api.requestJson(`/api/v2/bands/${bandId}/join-requests`, requestOptions('POST', { name: normalizedJoinName(name), introduction: introduction.trim() }, controller.signal));
       if (!current.current) return;
-      if (result?.created || result?.membership) { setRequestBand(null); setIntroduction(''); await reloadMemberships(); }
+      if (result?.created || result?.membership) { setRequestBand(null); setName(''); setIntroduction(''); await reloadMemberships(); }
     } catch { if (current.current) setError(genericFailure); }
     finally { if (joinController.current === controller) joinController.current = null; joinGuard.current.delete(bandId); if (current.current) setJoining((previous) => { const next = new Set(previous); next.delete(bandId); return next; }); }
   };
@@ -129,7 +102,10 @@ const DiscoverBandsContent = () => {
     <Link className="bands-return-link discover-bands-return-link" to="/bands"><span aria-hidden="true">←</span> 내 밴드</Link><h2 id="discover-bands-title">공개 밴드 찾기</h2>
     <form onSubmit={submitSearch} className="bands-form"><label>밴드 검색<input name="search" aria-label="밴드 검색" defaultValue={query} /></label><button type="submit" className="secondary-btn">검색</button></form>
     {error && <p role="alert" className="auth-error">{error}</p>}
-    {requestBand && <section className="bands-panel" aria-labelledby="join-introduction-title"><h3 id="join-introduction-title">{requestBand.name} 가입 요청</h3><form className="bands-form" onSubmit={join} aria-busy={joining.has(Number(requestBand.id))}><label htmlFor="join-introduction">간단한 자기소개 (선택)<textarea id="join-introduction" value={introduction} onChange={(event) => setIntroduction(event.target.value)} disabled={joining.has(Number(requestBand.id))} aria-describedby="join-introduction-help" /></label><p id="join-introduction-help" className="bands-help">밴드 관리자에게 전할 소개를 300자 이내로 적어 주세요. 전화번호·주소 등 민감한 정보는 적지 마세요. 가입 심사에만 사용하며 승인·거절 시 삭제합니다. {Array.from(introduction.trim()).length} / 300자</p><div className="band-actions"><button className="primary-btn" type="submit" disabled={joining.has(Number(requestBand.id)) || Array.from(introduction.trim()).length > 300}>{joining.has(Number(requestBand.id)) ? '요청 중…' : '가입 요청 보내기'}</button><button className="secondary-btn" type="button" disabled={joining.has(Number(requestBand.id))} onClick={() => { setRequestBand(null); setIntroduction(''); }}>취소</button></div></form></section>}
+    {requestBand && <section className="bands-panel" aria-labelledby="join-introduction-title"><h3 id="join-introduction-title">{requestBand.name} 가입 요청</h3><form className="bands-form" onSubmit={join} aria-busy={joining.has(Number(requestBand.id))}>
+      <label htmlFor="join-name">밴드에서 사용할 이름 (필수)<input id="join-name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={100} autoComplete="name" disabled={joining.has(Number(requestBand.id))} aria-describedby="join-name-help" /></label>
+      <p id="join-name-help" className="bands-help">승인 후 멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요. 기존에 연결된 멤버 프로필이 있다면 이름은 유지됩니다.</p>
+      <label htmlFor="join-introduction">간단한 자기소개 (선택)<textarea id="join-introduction" value={introduction} onChange={(event) => setIntroduction(event.target.value)} disabled={joining.has(Number(requestBand.id))} aria-describedby="join-introduction-help" /></label><p id="join-introduction-help" className="bands-help">밴드 관리자에게 전할 소개를 300자 이내로 적어 주세요. 전화번호·주소 등 민감한 정보는 적지 마세요. 가입 심사에만 사용하며 승인·거절 시 삭제합니다. {Array.from(introduction.trim()).length} / 300자</p><div className="band-actions"><button className="primary-btn" type="submit" disabled={joining.has(Number(requestBand.id)) || !validJoinName(name) || Array.from(introduction.trim()).length > 300}>{joining.has(Number(requestBand.id)) ? '요청 중…' : '가입 요청 보내기'}</button><button className="secondary-btn" type="button" disabled={joining.has(Number(requestBand.id))} onClick={() => { setRequestBand(null); setName(''); setIntroduction(''); }}>취소</button></div></form></section>}
     {state.loading ? <p aria-live="polite">공개 밴드를 불러오는 중입니다…</p> : <>
       {state.bands.length === 0 ? <p className="bands-help">조건에 맞는 공개 밴드가 없습니다.</p> : <ul className="band-list">{state.bands.map((band) => {
         const id = Number(band.id); const active = own.active.has(id); const pending = own.pending.has(id);
@@ -300,8 +276,9 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
   const { reload: reloadBands } = useBands();
   const { bandSlug } = useParams(); const api = useApi();
   const identity = suppliedIdentity || `${user?.id || 'visitor'}:${bandSlug || ''}`;
-  const [state, setState] = useState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], announcement: null });
+  const [state, setState] = useState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], invitePagination: null, announcement: null });
   const [error, setError] = useState(''); const [rawInvite, setRawInvite] = useState(null);
+  const [inviteBusy, setInviteBusy] = useState(false); const [revokingInviteId, setRevokingInviteId] = useState(null); const [loadingMoreInvites, setLoadingMoreInvites] = useState(false);
   const [galleryPickerOpen, setGalleryPickerOpen] = useState(false);
   const [profileEditing, setProfileEditing] = useState(false);
   const [profileDraft, setProfileDraft] = useState('');
@@ -314,16 +291,20 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
   // first refetch without cancelling the mutation that requested it.
   const sessionRef = useRef({ identity: null, generation: 0, controller: null });
   const loadRef = useRef({ identity: null, sessionGeneration: 0, sequence: 0, controller: null });
+  const invitePageRef = useRef({ identity: null, sequence: 0, controller: null });
   const isCurrent = useCallback((operation) => sessionRef.current.identity === operation.identity && sessionRef.current.generation === operation.generation && !operation.controller.signal.aborted, []);
   const isCurrentLoad = useCallback((request) => isCurrent(request.session) && loadRef.current.identity === request.identity && loadRef.current.sessionGeneration === request.session.generation && loadRef.current.sequence === request.sequence && !request.controller.signal.aborted, [isCurrent]);
   const onForbidden = useCallback(() => {
     if (sessionRef.current.identity !== identity) return;
     sessionRef.current.controller?.abort(); loadRef.current.controller?.abort();
-    setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [], announcement: null });
+    setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [], invitePagination: null, announcement: null });
     setError(''); setRawInvite(null);
   }, [identity]);
   const load = useCallback(async (operation, { preserveRawInvite = false } = {}) => {
     if (!isCurrent(operation)) return;
+    invitePageRef.current.controller?.abort();
+    invitePageRef.current = { identity: operation.identity, sequence: invitePageRef.current.sequence + 1, controller: null };
+    setLoadingMoreInvites(false);
     loadRef.current.controller?.abort();
     const request = {
       identity: operation.identity,
@@ -332,7 +313,7 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
       controller: new AbortController(),
     };
     loadRef.current = { identity: request.identity, sessionGeneration: operation.generation, sequence: request.sequence, controller: request.controller };
-    setState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], announcement: null }); setError('');
+    setState({ loading: true, inaccessible: false, band: null, memberships: [], invites: [], invitePagination: null, announcement: null }); setError('');
     if (!preserveRawInvite) setRawInvite(null);
     try {
       const detail = await api.requestJson(`/api/v2/bands/by-slug/${encodeURIComponent(bandSlug)}`, { signal: request.controller.signal });
@@ -340,13 +321,13 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
       if (!band?.permissions?.can_manage_members || !band?.permissions?.can_manage_invites) throw new Error('inaccessible');
       const [members, invites, announcement] = await Promise.all([
         api.requestJson(`/api/v2/bands/${Number(band.id)}/memberships`, { signal: request.controller.signal }),
-        api.requestJson(`/api/v2/bands/${Number(band.id)}/invite-codes`, { signal: request.controller.signal }),
+        api.requestJson(`${inviteManagerPath(band.id)}?limit=20&offset=0`, { signal: request.controller.signal }),
         api.requestJson(bandWorkspacePaths.announcement(band.id), { signal: request.controller.signal }),
       ]);
       if (!isCurrentLoad(request)) return;
-      setState({ loading: false, inaccessible: false, band, memberships: Array.isArray(members?.memberships) ? members.memberships : [], invites: Array.isArray(invites?.invite_codes) ? invites.invite_codes : [], announcement: announcement?.announcement ?? null });
+      setState({ loading: false, inaccessible: false, band, memberships: Array.isArray(members?.memberships) ? members.memberships : [], invites: Array.isArray(invites?.invite_links) ? invites.invite_links : [], invitePagination: invites?.pagination ?? { limit: 20, offset: 0, has_more: false }, announcement: announcement?.announcement ?? null });
     } catch {
-      if (isCurrentLoad(request)) setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [], announcement: null });
+      if (isCurrentLoad(request)) setState({ loading: false, inaccessible: true, band: null, memberships: [], invites: [], invitePagination: null, announcement: null });
     }
   }, [api, bandSlug, isCurrent, isCurrentLoad]);
   useEffect(() => {
@@ -355,7 +336,7 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     const operation = { identity, generation: sessionRef.current.generation + 1, controller: new AbortController() };
     sessionRef.current = operation;
     load(operation);
-    return () => { operation.controller.abort(); if (loadRef.current.sessionGeneration === operation.generation) loadRef.current.controller?.abort(); };
+    return () => { operation.controller.abort(); invitePageRef.current.controller?.abort(); if (loadRef.current.sessionGeneration === operation.generation) loadRef.current.controller?.abort(); };
   }, [identity, load]);
   useEffect(() => () => profileRequestRef.current?.abort(), [identity]);
   const refresh = async (operation, preserveRawInvite = false) => {
@@ -373,10 +354,56 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     try { await api.requestJson(`/api/v2/memberships/${Number(membership.id)}`, requestOptions('PATCH', { action: approve ? 'approve' : 'reject' }, operation.controller.signal)); if (isCurrent(operation)) await refresh(operation); } catch { if (isCurrent(operation)) setError(genericFailure); }
   };
   const createInvite = async () => {
+    if (inviteBusy) return;
+    setInviteBusy(true);
     const operation = sessionRef.current; setRawInvite(null);
-    try { const data = await api.requestJson(`/api/v2/bands/${Number(state.band.id)}/invite-codes`, requestOptions('POST', {}, operation.controller.signal)); if (isCurrent(operation)) { setRawInvite(typeof data?.code === 'string' ? { identity: operation.identity, code: data.code } : null); await refresh(operation, true); } } catch { if (isCurrent(operation)) setError(genericFailure); }
+    try {
+      const data = await api.requestJson(inviteManagerPath(state.band.id), requestOptions('POST', {}, operation.controller.signal));
+      const created = data?.invite_link;
+      if (isCurrent(operation) && typeof data?.token === 'string' && Number.isInteger(created?.id)) {
+        const url = new URL('/invite', window.location.origin); url.hash = new URLSearchParams({ token: data.token }).toString();
+        setRawInvite({ identity: operation.identity, url: url.toString(), invite: created });
+        await refresh(operation, true);
+      } else if (isCurrent(operation)) setError('초대 링크를 만들지 못했습니다. 다시 시도해 주세요.');
+    } catch { if (isCurrent(operation)) setError(genericFailure); }
+    finally { if (isCurrent(operation)) setInviteBusy(false); }
   };
-  const revoke = async (invite) => { if (!window.confirm('이 초대 코드를 취소할까요?')) return; await mutate(`/api/v2/bands/${Number(state.band.id)}/invite-codes/${Number(invite.id)}/revoke`, {}); };
+  const revoke = async (invite) => {
+    if (inviteBusy || !window.confirm('이 초대 링크를 폐기할까요?')) return;
+    setInviteBusy(true); setRevokingInviteId(invite.id);
+    try { await mutate(inviteManagerPath(state.band.id, `/${Number(invite.id)}/revoke`), {}); }
+    finally { setInviteBusy(false); setRevokingInviteId(null); }
+  };
+  const loadMoreInvites = async () => {
+    const operation = sessionRef.current; const currentBandId = state.band?.id;
+    if (loadingMoreInvites || !state.invitePagination?.has_more || !isCurrent(operation) || !currentBandId) return;
+    const controller = new AbortController();
+    const sequence = invitePageRef.current.sequence + 1;
+    invitePageRef.current.controller?.abort();
+    invitePageRef.current = { identity: operation.identity, sequence, controller };
+    const abortPage = () => controller.abort();
+    operation.controller.signal.addEventListener('abort', abortPage, { once: true });
+    setLoadingMoreInvites(true);
+    try {
+      const offset = state.invites.length;
+      const page = await api.requestJson(`${inviteManagerPath(currentBandId)}?limit=20&offset=${offset}`, { signal: controller.signal });
+      if (!isCurrent(operation) || controller.signal.aborted || invitePageRef.current.sequence !== sequence || state.band?.id !== currentBandId || !Array.isArray(page?.invite_links)) return;
+      setState((previous) => previous.band?.id === currentBandId ? {
+        ...previous,
+        invites: [...previous.invites, ...page.invite_links.filter((item) => !previous.invites.some((existing) => existing.id === item.id))],
+        invitePagination: page.pagination ?? { limit: 20, offset, has_more: false },
+      } : previous);
+    } catch { if (isCurrent(operation) && !controller.signal.aborted) setError(genericFailure); }
+    finally {
+      operation.controller.signal.removeEventListener('abort', abortPage);
+      if (invitePageRef.current.sequence === sequence) { invitePageRef.current.controller = null; setLoadingMoreInvites(false); }
+    }
+  };
+  const copyInvite = async () => {
+    if (rawInvite?.identity !== identity || !rawInvite.url) return;
+    try { await navigator.clipboard.writeText(rawInvite.url); setError(''); }
+    catch { setError('복사하지 못했습니다. 링크를 직접 선택해 복사해 주세요.'); }
+  };
   const announcementSaved = (announcement) => {
     if (sessionRef.current.identity !== identity || sessionRef.current.controller?.signal.aborted) return;
     setState((previous) => previous.band?.id === state.band?.id ? { ...previous, announcement } : previous);
@@ -436,8 +463,8 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     <section className="bands-panel" aria-labelledby="manage-profile-title"><h3 id="manage-profile-title">밴드 소개</h3>{profileEditing ? <form className="bands-form" onSubmit={saveProfile}><label htmlFor="band-profile-description">소개<textarea id="band-profile-description" maxLength={2000} value={profileDraft} onChange={(event) => setProfileDraft(event.target.value)} disabled={profileBusy} /></label><p className="bands-help">{profileDraft.length} / 2,000자</p>{profileError && <p className="auth-error" role="alert">{profileError}</p>}<div className="band-actions"><button type="submit" className="primary-btn" disabled={profileBusy}>{profileBusy ? '저장 중…' : '소개 저장'}</button><button type="button" className="secondary-btn" disabled={profileBusy} onClick={() => { setProfileDraft(state.band.description || ''); setProfileEditing(false); setProfileError(''); }}>취소</button></div></form> : <><p>{state.band.description || '소개가 없습니다.'}</p>{profileError && <p className="auth-error" role="alert">{profileError}</p>}{state.band.permissions?.can_edit_band_profile === true && <button type="button" className="secondary-btn" onClick={() => { setProfileDraft(state.band.description || ''); setProfileError(''); setProfileEditing(true); }}>소개 수정</button>}</>}</section>
     <section className="bands-panel" aria-labelledby="manage-announcement-title"><h3 id="manage-announcement-title">밴드 공지</h3><AnnouncementEditor announcement={state.announcement} band={state.band} api={api} workspaceKey={identity} onSaved={announcementSaved} onForbidden={onForbidden} /></section>
     <section className="bands-panel" aria-labelledby="manage-gallery-picker-title"><h3 id="manage-gallery-picker-title">대표 사진</h3>{galleryPickerOpen ? <FeaturedGalleryManager band={state.band} api={api} workspaceKey={identity} onForbidden={onForbidden} /> : <button type="button" className="secondary-btn" onClick={() => setGalleryPickerOpen(true)}>갤러리에서 선택</button>}</section>
-    <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><div><strong>{item.user?.display_name || item.user?.email || '새 멤버'}</strong><p className="bands-help">요청 시각: <time>{formatInviteCreatedAt(item.requested_at)}</time></p><p className="membership-introduction">{typeof item.introduction === 'string' && item.introduction.trim() ? item.introduction : '작성한 자기소개가 없습니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
-    <section className="bands-panel" aria-labelledby="invite-title"><h3 id="invite-title">초대 코드</h3><button type="button" className="secondary-btn" onClick={createInvite}>새 초대 코드 만들기</button>{rawInvite?.identity === identity && <div className="invite-once" role="status"><strong>지금 한 번만 표시되는 코드</strong><code>{rawInvite.code}</code><p>안전한 방법으로 전달한 뒤 이 화면을 벗어나면 다시 확인할 수 없습니다.</p></div>}<ul className="band-list">{state.invites.map((invite) => <li key={invite.id}><span>{invite.revoked_at ? '취소됨' : '사용 가능'} · <time>{formatInviteCreatedAt(invite.created_at)}</time></span>{!invite.revoked_at && <button type="button" className="secondary-btn" onClick={() => revoke(invite)}>취소</button>}</li>)}</ul></section>
+    <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><div><strong>{item.requested_name || item.user?.display_name || item.user?.email || '새 멤버'}</strong><p className="bands-help">요청 시각: <time>{formatInviteCreatedAt(item.requested_at)}</time></p><p className="membership-introduction">{typeof item.introduction === 'string' && item.introduction.trim() ? item.introduction : '작성한 자기소개가 없습니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
+    <section className="bands-panel" aria-labelledby="invite-title"><h3 id="invite-title">초대 링크</h3><p className="bands-help">각 링크는 발급 후 24시간 동안 여러 사람이 사용할 수 있으며 언제든 폐기할 수 있습니다. 원문은 발급 직후에만 표시됩니다.</p><button type="button" className="secondary-btn" onClick={createInvite} disabled={inviteBusy}>{inviteBusy ? '처리 중…' : '새 초대 링크 만들기'}</button>{rawInvite?.identity === identity && <div className="invite-once" role="status"><strong>지금 한 번만 표시되는 초대 링크</strong><label htmlFor="invite-link-once">초대 링크</label><input id="invite-link-once" readOnly value={rawInvite.url} onFocus={(event) => event.target.select()} /><button type="button" className="secondary-btn" onClick={copyInvite}>링크 복사</button><p>안전한 방법으로 전달하세요. 이 화면을 벗어나면 다시 확인할 수 없습니다.</p></div>}<ul className="band-list">{state.invites.map((invite) => { const expired = invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now(); return <li key={invite.id}><span>{invite.revoked_at ? '폐기됨' : expired ? '만료됨' : '사용 가능'} · 발급 <time>{formatInviteCreatedAt(invite.created_at)}</time>{invite.expires_at && <> · 만료 <time>{formatInviteCreatedAt(invite.expires_at)}</time></>}</span>{!invite.revoked_at && !expired && <button type="button" className="secondary-btn" disabled={inviteBusy} onClick={() => revoke(invite)}>{revokingInviteId === invite.id ? '폐기 중…' : '폐기'}</button>}</li>; })}</ul>{state.invitePagination?.has_more && <button type="button" className="secondary-btn" onClick={loadMoreInvites} disabled={loadingMoreInvites}>{loadingMoreInvites ? '불러오는 중…' : '이전 초대 링크 더 보기'}</button>}</section>
     {isOwner && <section className="bands-panel" aria-labelledby="roles-title"><h3 id="roles-title">멤버 역할</h3><ul className="band-list">{active.map((item) => <li key={item.id}><span>{item.user?.display_name || '멤버'} · {item.role}</span>{item.role !== 'owner' && <select aria-label={`${item.user?.display_name || '멤버'} 역할`} value={item.role} onChange={(event) => { const operation = sessionRef.current; api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value }, operation.controller.signal)).then(() => isCurrent(operation) && refresh(operation)).catch(() => isCurrent(operation) && setError(genericFailure)); }}><option value="member">member</option><option value="admin">admin</option></select>}</li>)}</ul></section>}
   </main>;
 };

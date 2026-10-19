@@ -7,6 +7,7 @@ import { PolicyPage, PolicyLinks } from './components/auth/PolicyPages.jsx';
 import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages.jsx';
 import { BandsPage } from './components/bands/BandsPage.jsx';
 import { BandIntroductionRoute } from './components/bands/BandIntroduction.jsx';
+import { InviteLinkRoute, InviteContinueRoute } from './components/bands/InviteLink.jsx';
 import { BandCreationRequestsAdminRoute } from './components/bands/BandCreationRequestsAdmin.jsx';
 import { BandLogoManagementRoute } from './components/bands/BandLogoManagement.jsx';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
@@ -81,6 +82,8 @@ export const AppRoutes = () => <Routes>
   <Route path="/privacy" element={<PolicyPage kind="privacy" />} />
   <Route path="/terms" element={<PolicyPage kind="terms" />} />
   <Route path="/verify-email" element={<VerifyEmailPage />} />
+  <Route path="/invite" element={<InviteLinkRoute />} />
+  <Route path="/invite/continue" element={<RequireAuth><InviteContinueRoute /></RequireAuth>} />
   <Route path="/forgot-password" element={<ForgotPasswordPage />} />
   <Route path="/reset-password" element={<ResetPasswordPage />} />
   <Route path="/band/:bandSlug/*" element={<BandAliasRedirect />} />

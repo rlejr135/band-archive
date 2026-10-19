@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeEmail, safeReturnPath } from './authRedirect.js';
+import { normalizeEmail, safeAuthReturnPath, safeReturnPath } from './authRedirect.js';
 
 test('normalizes email input without altering the password', () => {
   assert.equal(normalizeEmail('  Musician@Example.COM  '), 'musician@example.com');
@@ -20,4 +20,12 @@ test('accepts only same-origin internal return paths', () => {
 
 test('authenticated login fallback cannot navigate back to an auth route', () => {
   assert.equal(safeReturnPath('/login'), '/bands');
+});
+
+test('invite continuation is the only additional exact auth return path', () => {
+  assert.equal(safeAuthReturnPath('/invite/continue'), '/invite/continue');
+  for (const value of ['/invite', '/invite/continue/extra', '/invite/continue?next=/bands', '//evil.test/invite/continue']) {
+    assert.equal(safeAuthReturnPath(value), '/bands');
+  }
+  assert.equal(safeReturnPath('/invite/continue'), '/bands');
 });
