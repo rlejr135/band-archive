@@ -45,6 +45,7 @@ PHASE17_REVISION = '20261017_17'
 PHASE18_REVISION = '20261017_18'
 PHASE19_REVISION = '20261018_19'
 PHASE20_REVISION = '20261019_20'
+PHASE21_REVISION = '20261020_21'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -201,6 +202,8 @@ def _remove_future_policy_acceptance(metadata):
     table = metadata.tables.get('band_membership')
     if table is not None and table.c.get('join_introduction') is not None:
         table._columns.remove(table.c.join_introduction)
+    if table is not None and table.c.get('requested_name') is not None:
+        table._columns.remove(table.c.requested_name)
     if 'policy_acceptance_receipt' in metadata.tables:
         metadata.remove(metadata.tables['policy_acceptance_receipt'])
     for name in AVAILABILITY_TABLES:
@@ -442,6 +445,14 @@ def phase20_metadata():
     metadata = phase19_metadata()
     for name in ('band_invite_link', 'invite_resume_context'):
         db.metadata.tables[name].to_metadata(metadata)
+    return metadata
+
+
+def phase21_metadata():
+    """Band-local pending application names, without rewriting old snapshots."""
+    metadata = phase20_metadata()
+    metadata.tables['band_membership'].append_column(
+        db.metadata.tables['band_membership'].c.requested_name._copy())
     return metadata
 
 
@@ -1872,6 +1883,8 @@ def metadata_for_recorded_revision(revision):
         return phase19_metadata()
     if revision == PHASE20_REVISION:
         return phase20_metadata()
+    if revision == PHASE21_REVISION:
+        return phase21_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

@@ -115,6 +115,7 @@ class BandMembership(db.Model):
     left_at = db.Column(db.DateTime, nullable=True)
     acted_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
     join_introduction = db.Column(db.String(300), nullable=True)
+    requested_name = db.Column(db.String(100), nullable=True)
 
     user = db.relationship('AppUser', foreign_keys=[user_id])
     acted_by = db.relationship('AppUser', foreign_keys=[acted_by_user_id])
