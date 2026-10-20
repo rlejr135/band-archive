@@ -9,6 +9,8 @@ import { formatInviteCreatedAt } from '../../services/bandDateTime.js';
 import { inviteManagerPath } from '../../services/inviteLinks.js';
 import { normalizedJoinName, validJoinName } from '../../services/joinName.js';
 import { AnnouncementEditor } from '../workspace/BandWorkspace.jsx';
+import { MemberRemovalButton } from './MemberRemoval.jsx';
+import { membershipName } from '../../services/memberManagement.js';
 import './BandsPage.css';
 
 const requestOptions = (method, body, signal) => ({
@@ -132,10 +134,10 @@ export const BandCreationRequestPage = () => {
 };
 
 export const BandManageRoute = () => {
-  const { user } = useAuth();
+  const { user, authGeneration = 0 } = useAuth();
   const { membershipRevisions = {} } = useBands();
   const { bandSlug } = useParams();
-  const identity = `${user?.id || 'visitor'}:${bandSlug || ''}:${membershipRevisions[bandSlug] || 0}`;
+  const identity = `${user?.id || 'visitor'}:${authGeneration}:${bandSlug || ''}:${membershipRevisions[bandSlug] || 0}`;
   // A key is intentional: it removes privileged roster/invite/raw-code state
   // synchronously before a different account or band can paint.
   return <BandManagePage key={identity} identity={identity} />;
@@ -465,6 +467,17 @@ export const BandManagePage = ({ identity: suppliedIdentity }) => {
     <section className="bands-panel" aria-labelledby="manage-gallery-picker-title"><h3 id="manage-gallery-picker-title">대표 사진</h3>{galleryPickerOpen ? <FeaturedGalleryManager band={state.band} api={api} workspaceKey={identity} onForbidden={onForbidden} /> : <button type="button" className="secondary-btn" onClick={() => setGalleryPickerOpen(true)}>갤러리에서 선택</button>}</section>
     <section className="bands-panel" aria-labelledby="pending-title"><h3 id="pending-title">가입 요청</h3>{pending.length === 0 ? <p className="bands-help">대기 중인 요청이 없습니다.</p> : <ul className="band-list">{pending.map((item) => <li key={item.id}><div><strong>{item.requested_name || item.user?.display_name || item.user?.email || '새 멤버'}</strong><p className="bands-help">요청 시각: <time>{formatInviteCreatedAt(item.requested_at)}</time></p><p className="membership-introduction">{typeof item.introduction === 'string' && item.introduction.trim() ? item.introduction : '작성한 자기소개가 없습니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => decide(item, true)}>승인</button><button type="button" className="secondary-btn" onClick={() => decide(item, false)}>거절</button></div></li>)}</ul>}</section>
     <section className="bands-panel" aria-labelledby="invite-title"><h3 id="invite-title">초대 링크</h3><p className="bands-help">각 링크는 발급 후 24시간 동안 여러 사람이 사용할 수 있으며 언제든 폐기할 수 있습니다. 원문은 발급 직후에만 표시됩니다.</p><button type="button" className="secondary-btn" onClick={createInvite} disabled={inviteBusy}>{inviteBusy ? '처리 중…' : '새 초대 링크 만들기'}</button>{rawInvite?.identity === identity && <div className="invite-once" role="status"><strong>지금 한 번만 표시되는 초대 링크</strong><label htmlFor="invite-link-once">초대 링크</label><input id="invite-link-once" readOnly value={rawInvite.url} onFocus={(event) => event.target.select()} /><button type="button" className="secondary-btn" onClick={copyInvite}>링크 복사</button><p>안전한 방법으로 전달하세요. 이 화면을 벗어나면 다시 확인할 수 없습니다.</p></div>}<ul className="band-list">{state.invites.map((invite) => { const expired = invite.expires_at && new Date(invite.expires_at).getTime() <= Date.now(); return <li key={invite.id}><span>{invite.revoked_at ? '폐기됨' : expired ? '만료됨' : '사용 가능'} · 발급 <time>{formatInviteCreatedAt(invite.created_at)}</time>{invite.expires_at && <> · 만료 <time>{formatInviteCreatedAt(invite.expires_at)}</time></>}</span>{!invite.revoked_at && !expired && <button type="button" className="secondary-btn" disabled={inviteBusy} onClick={() => revoke(invite)}>{revokingInviteId === invite.id ? '폐기 중…' : '폐기'}</button>}</li>; })}</ul>{state.invitePagination?.has_more && <button type="button" className="secondary-btn" onClick={loadMoreInvites} disabled={loadingMoreInvites}>{loadingMoreInvites ? '불러오는 중…' : '이전 초대 링크 더 보기'}</button>}</section>
-    {isOwner && <section className="bands-panel" aria-labelledby="roles-title"><h3 id="roles-title">멤버 역할</h3><ul className="band-list">{active.map((item) => <li key={item.id}><span>{item.user?.display_name || '멤버'} · {item.role}</span>{item.role !== 'owner' && <select aria-label={`${item.user?.display_name || '멤버'} 역할`} value={item.role} onChange={(event) => { const operation = sessionRef.current; api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value }, operation.controller.signal)).then(() => isCurrent(operation) && refresh(operation)).catch(() => isCurrent(operation) && setError(genericFailure)); }}><option value="member">member</option><option value="admin">admin</option></select>}</li>)}</ul></section>}
+    {isOwner && <section className="bands-panel" aria-labelledby="roles-title">
+      <h3 id="roles-title">멤버 역할</h3>
+      <p className="bands-help">추방 시 밴드 접근 권한만 해제합니다. 작성한 콘텐츠와 멤버 프로필은 보존되며, 추후 다시 가입할 수 있습니다.</p>
+      <button type="button" className="secondary-btn" onClick={() => refresh(sessionRef.current)}>명단 새로고침</button>
+      <ul className="band-list">{active.map((item) => <li key={item.id}>
+        <span>{membershipName(item)} · {item.role}</span>
+        <div className="band-actions">
+          {item.role !== 'owner' && <select aria-label={`${membershipName(item)} 역할`} value={item.role} onChange={(event) => { const operation = sessionRef.current; api.requestJson(`/api/v2/memberships/${Number(item.id)}`, requestOptions('PATCH', { role: event.target.value }, operation.controller.signal)).then(() => isCurrent(operation) && refresh(operation)).catch(() => isCurrent(operation) && setError(genericFailure)); }}><option value="member">member</option><option value="admin">admin</option></select>}
+          <MemberRemovalButton api={api} band={state.band} membership={item} onRemoved={() => { const operation = sessionRef.current; if (!isCurrent(operation)) return; setState((previous) => ({ ...previous, memberships: previous.memberships.filter((entry) => entry.id !== item.id) })); }} />
+        </div>
+      </li>)}</ul>
+    </section>}
   </main>;
 };

@@ -32,6 +32,29 @@ const App = ({ entry, authValue = account(), manage = false, discover = false, c
     : createElement(bands.BandContext.Provider, { value: bandContextValue }, createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), routes)));
 };
 
+test('owner roster shows only server-authorized removal and updates locally without a fragile refetch', async () => {
+  await load(); const previousFetch = globalThis.fetch; const previousConfirm = window.confirm; window.confirm = () => true; const writes = []; let rosterReads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    if (options.method === 'POST') { writes.push([path, JSON.parse(options.body)]); return response({ changed: true, membership: { id: 2, band_id: 1, status: 'left' } }); }
+    if (path.includes('/by-slug/a')) return response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (path.endsWith('/memberships')) { rosterReads += 1; return response({ memberships: [{ id: 1, band_id: 1, status: 'active', role: 'owner', member_name: 'Owner', can_remove_from_band: false }, { id: 2, band_id: 1, status: 'active', role: 'member', member_name: '밴드 이름', user: { display_name: '계정 이름' }, can_remove_from_band: true }] }); }
+    return response({ invite_links: [], announcement: null });
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByRole('button', { name: '밴드 이름 추방' }); assert.equal(view.queryByRole('button', { name: 'Owner 추방' }), null);
+    fireEvent.click(view.getByRole('button', { name: '밴드 이름 추방' })); await waitFor(() => assert.equal(view.queryByText('밴드 이름 · member'), null)); assert.deepEqual(writes.map(([path, body]) => [path.replace(/^https?:\/\/[^/]+/, ''), body]), [['/api/v2/bands/1/memberships/2/remove', { confirm: true }]]); assert.equal(rosterReads, 1);
+    fireEvent.click(view.getByRole('button', { name: '명단 새로고침' })); await waitFor(() => assert.equal(rosterReads, 2));
+  } finally { globalThis.fetch = previousFetch; window.confirm = previousConfirm; }
+});
+
+test('ordinary band administrator does not get owner removal controls', async () => {
+  await load(); const previous = globalThis.fetch;
+  globalThis.fetch = async (url) => String(url).includes('/by-slug/a') ? response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } }) : response({ memberships: [{ id: 2, status: 'active', role: 'member', member_name: '멤버', can_remove_from_band: false }], invite_links: [], announcement: null });
+  try { const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('A 관리'); assert.equal(view.queryByText('멤버 역할'), null); assert.equal(view.queryByRole('button', { name: /추방$/ }), null); }
+  finally { globalThis.fetch = previous; }
+});
+
 test('visitor discover preserves a safe login return and join becomes pending once', async () => {
   await load(); const previous = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, request = {}) => { calls.push([String(url), request]); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
