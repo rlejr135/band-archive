@@ -1,6 +1,6 @@
 # 밴드 소개·로고·초대 링크·가입 요청 개편 계획
 
-상태: 공통 소개 기반과 공개 검색 버튼 보완은 운영 배포 완료. 로고 기능도 BE 933개·FE 294개 검증 및 별도 승인 후 백업·복구 검증, 운영 DB rev19, Fly v61, Cloudflare Pages 반영·운영 검증까지 완료(2026-10-19, 기능 소스 1b2b7b0). 상세 내용은 `band-logo-local-validation.md`에 기록했다. 2026-10-20 현재 24시간 재사용 초대 링크와 필수 가입 이름을 로컬 구현·단위 커밋했고 최종 BE 1,000개·FE 311개 테스트, 변경 파일 lint·운영 build를 통과했다. 운영 DB rev20·21 변경은 아직 승인되지 않았으며 push·배포하지 않았다. 상세 결과와 승인 범위는 `band-invite-links-local-validation.md`에 기록한다. 일반 가입 요청을 소개 페이지로 옮기는 마지막 5단계는 아직 남아 있다.
+상태: 공통 소개 기반·공개 검색 버튼·로고 운영 배포 완료(로고 상세 `band-logo-local-validation.md`). 2026-10-20 24시간 재사용 초대 링크와 필수 가입 이름도 최종 BE 1,000개·FE 311개 테스트, lint·build 및 별도 사용자 승인 후 운영 반영했다. 백업·로컬 복구·보존 검증, 운영 rev21, Fly v62, 기능 소스 cd3df59 origin/master 일반 push와 Cloudflare 라이브 번들/HTTP/CORS 확인을 완료했다. 상세 결과는 `band-invite-links-local-validation.md`. 일반 가입 요청을 소개 페이지로 옮기는 마지막 5단계는 아직 남아 있다.
 
 ## 목표와 순서
 

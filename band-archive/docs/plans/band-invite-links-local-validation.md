@@ -1,6 +1,6 @@
 # 24시간 초대 링크 — 로컬 검증·운영 반영 승인 자료
 
-작성일: 2026-10-19. 갱신: 2026-10-20. 상태: **초대 링크·가입 이름 필수 로컬 구현과 최종 전체 검증 완료. 운영 DB 변경·push·배포는 하지 않았으며 rev20·21 적용 승인을 기다린다.**
+작성일: 2026-10-19. 갱신: 2026-10-20. 상태: **사용자 승인 후 백업·복구·보존 검증 및 운영 DB rev21 적용 완료. 기능 소스 `cd3df59`를 origin/master에 일반 push했고 Fly v62·Cloudflare Pages 배포와 실제 HTTP/CORS/라이브 번들 검증을 완료했다.**
 
 ## 구현 범위
 
@@ -11,7 +11,7 @@
 - 비공개 밴드는 가입 전 이름·소개 외 멤버 콘텐츠/미디어 URL을 노출하지 않는다.
 - 기존 초대 코드 입력·발급·가입 경로는 종료하고 HTTP 410을 반환한다. 기존 DB 기록은 삭제하지 않는다.
 - 일반 가입 요청을 소개 페이지로 옮기는 마지막 단계는 아직 포함하지 않았다.
-- 2026-10-20 추가 요청: 일반 가입 신청과 초대 가입 확정에서 이름을 필수로 받고 새 멤버 프로필의 이름으로 사용한다. 기존 연결 프로필은 보존하며, 대기 신청 이름 보관을 위한 rev21 nullable 열 추가도 로컬 구현·검증 후 별도 승인받는다.
+- 2026-10-20 추가 요청: 일반 가입 신청과 초대 가입 확정에서 이름을 필수로 받고 새 멤버 프로필의 이름으로 사용한다. 기존 연결 프로필은 보존한다. 대기 신청 이름 보관을 위한 rev21 nullable 열도 이번 별도 승인 범위에 포함해 적용했다.
 
 ## 단위 커밋
 
@@ -54,9 +54,9 @@
 - 이름의 제어 문자·비가시 형식 문자·고립 surrogate 차단, 기존 연결 프로필 이름 보존, 신청 이름의 일반 명단/공개 응답 노출 방지.
 - 동일 계정의 다른 초대 컨텍스트로 전환할 때 늦은 수락 응답의 이동·상태 갱신을 차단하고, 취소된 이전 요청이 새 폼을 영구 대기 상태로 만들지 않도록 분리.
 
-## 운영 DB에 제안하는 변경 — 아직 미승인
+## 운영 DB 변경 범위 — 승인 후 적용 완료
 
-현재 운영 rev19에서 rev20을 거쳐 rev21로 이동한다. 사전 확인에서 운영 revision이 달라졌으면 중단하고 다시 비교한다.
+사전 확인에서 운영 rev19와 백업이 일치함을 검증한 뒤 rev20을 거쳐 rev21로 이동했다. 아래는 승인·적용한 범위이며 추가 데이터 변경 승인이 아니다.
 
 | 대상 | 추가 내용 |
 | --- | --- |
@@ -84,9 +84,22 @@
 
 별도 승인 범위에 메일 발송 활성화, 인증 제공자 설정 변경, R2 삭제, 재변환, 스케일 변경은 포함하지 않는다. 실제 사용자 회원가입→확인 메일 왕복 검증은 사용자와 테스트 범위를 합의한 뒤 한다.
 
-## 이번에 필요한 사용자 승인
+## 사용자 승인 기록
 
-위 백업·로컬 복구·보존 검증이 성공한 경우에만 운영 DB에 빈 초대 테이블 두 개와 신청 이름 nullable 열 하나(rev20·21)를 추가하고 BE→FE 배포까지 진행할지 확인받는다. 기존 프로필을 재명명하거나 데이터를 이전/삭제하는 승인이 아니다. 일반 가입 요청을 소개 페이지로 옮기는 마지막 화면 개편은 다음 단계로 남아 있다.
+사용자는 위 백업·로컬 복구·보존 검증 성공을 조건으로 빈 초대 테이블 두 개와 신청 이름 nullable 열 하나(rev20·21) 추가 및 BE→FE 배포를 승인했다. 같은 답변에서 필수 가입 이름의 즉시 반영도 재확인했다. 기존 프로필 재명명·데이터 이전/삭제는 포함하지 않았다. 일반 가입 요청을 소개 페이지로 옮기는 마지막 화면 개편은 다음 단계로 남아 있다.
+
+## 운영 반영 결과 — 2026-10-20
+
+- 같은 읽기 전용 repeatable-read snapshot에서 전체 접근 가능 DB와 public 앱 영역 아카이브를 생성했다. 전체 SHA-256 `c6a79d1609e8e82cf48459f69fdbefee02b9d18cec9c55cc5b8b713057cf28a6`, public SHA-256 `f549080567e1cc35f92a3b4d8855c925cb81696d5162af81e686e98252d1a07e`.
+- 소유 로컬 PG17에서 public 복구·원본 행/카탈로그/소유자/ACL/RLS/defaults/R2 키 동등성을 확인했다. rev19→21 리허설에서도 기존 값을 보존했다. 증거: `backend/tools/.state/invite19-21-20261020T091334Z-ae5017a6bba9/report.json`, SHA-256 `f64f9df3b973f3c9b365257c4dba610816b424549150a3ade85d22d8635ca151`.
+- 실제 운영 적용 도구와 같은 main을 별도 소유 로컬 복구본에서 실행했다. 외부 연결/비밀 어댑터를 차단하고 DDL 후 오류 주입 시 전체 rollback, 정상 시 commit 및 새 RO 연결 사후 확인을 검증했다. 최종 증거: `backend/tools/.state/invite-exact-main-local-20261020T091640Z-b78ac595923d/report.json`, SHA-256 `ae20b3d78a87dbb7bce0bc7602a3e68c97e461c077d7401f7100f257f069a8ce`.
+- 총괄·독립 읽기 전용 리뷰 후 고정한 적용 도구 SHA-256 `3777064bedc047063397784aaaa043ef33d0bdd951b6dfcf05e43a7dceb77f56`로 운영에 단 한 번 적용했다. 재시도·자동 downgrade·권한 repair는 없었다.
+- 운영 rev21, 35→37개 테이블, FK 85→90. 새 초대 두 테이블은 0행이고 기존 신청 이름은 전부 NULL이다. 기존 멤버십은 새 열만 제외한 원래 전체 열 해시로 대조했고 기존 프로필·계정·콘텐츠 행 및 R2 키·카탈로그·권한이 동일했다. 실제 R2 명령은 실행하지 않았다.
+- 운영 적용 증거: `backend/tools/.state/invite-prod-apply-20261020T091723Z-9e1af4260ab7/report.json`, SHA-256 `6d3e77fd70520ea3f488993f4c365f140828b8f9ea4cd5fff5d38ba5cc3363ce`. `committed=true`, `source_snapshot_matches_backup=true`, `existing_rows_keys_security_catalog_preserved=true`, `fresh_readonly_postcheck=true`를 총괄이 직접 확인했다.
+- BE Fly v62 complete, image `registry.fly.io/band-archive:deployment-01M5C9RS4JD42GEVHV6YENF8MX`, machine `080e444f9643d8` started, NRT shared 2 CPU / 2048MB, 기존 /data 볼륨 유지. 배포 smoke·DNS 통과, `/members` HTTP 200. 최신 Gunicorn 시작 구간의 오류 패턴 0건. 별도 Fly CHECKS는 설정되어 있지 않다.
+- 안전한 빈 body로 초대 preview API를 호출해 예상 400과 `private, no-store`, `Vary: Origin, Authorization`, 운영 Pages CORS를 확인했다. 초대 발급/가입/수락이나 실제 메일 발송을 운영 검증 목적으로 실행하지 않았다.
+- FE 기능 소스 `cd3df59` origin/master 일반 push 후 Cloudflare 자동 배포. 두 번째 확인에서 HTML/JS/CSS 모두 200, 라이브 JS `index-BIroJPiQ.js`, CSS `index-B_tATpSX.css`. `/invite/continue`, 초대 API, 필수 이름 문구와 Fly API 주소를 확인했다. `/members` 200 및 `Access-Control-Allow-Origin: https://band-archive.pages.dev`도 다시 확인했다.
+- 서비스 비밀·인증 제공자 설정·메일 활성화·VM 사양·R2 파일은 변경하지 않았다. Fly의 기존 CAPTCHA_SITE_KEY 경고는 브라우저 공개 Site Key에 대한 일반 경고이며 새 secret 변경을 하지 않았다. 실제 회원가입→인증 메일 왕복과 실제 초대 수락은 아래 한계대로 별도 사용자 테스트로 남긴다.
 
 ## 남는 한계
 
