@@ -409,7 +409,7 @@ def platform_membership_roster(band_id):
     rows = BandMembership.query.filter_by(band_id=band.id, status=ACTIVE).order_by(BandMembership.id).all()
     return jsonify({'band': {'id': band.id, 'name': band.name}, 'memberships': [{
         'id': item.id, 'band_id': item.band_id, 'role': item.role, 'status': item.status,
-        'member_name': profile_names.get(item.user_id) or (item.user.display_name if item.user else None),
+        'member_name': profile_names.get(item.user_id) or (item.user.display_name if item.user else None) or '멤버',
         'can_remove_from_band': can_remove_from_band(actor, actor_membership, item),
     } for item in rows]})
 

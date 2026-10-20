@@ -84,6 +84,23 @@ def test_owner_roster_flags_and_self_owner_target_protection(access_app, write_c
         assert write_client.post(endpoint(band_id, membership_id), headers=principals['member'], json={'confirm': True}).status_code == 409
 
 
+def test_platform_roster_has_safe_name_for_unlinked_nameless_account(access_app, write_client, principals):
+    band_id = _band_id(access_app)
+    member_id = target_id(access_app, band_id)
+    with access_app.app_context():
+        db.session.get(AppUser, 7).is_platform_admin = True
+        db.session.get(AppUser, 3).display_name = None
+        assert Member.query.filter_by(band_id=band_id, linked_user_id=3).count() == 0
+        db.session.commit()
+    response = write_client.get(f'/api/v2/platform/bands/{band_id}/memberships', headers=principals['outsider'])
+    assert response.status_code == 200
+    rows = response.get_json()['memberships']
+    assert all(isinstance(row['member_name'], str) and row['member_name'] for row in rows)
+    target = next(row for row in rows if row['id'] == member_id)
+    assert target['member_name'] == '멤버'
+    assert target['can_remove_from_band'] is True
+
+
 @pytest.mark.parametrize('user_id', [4, 5])
 def test_pending_rejected_are_not_removal_targets(access_app, write_client, principals, user_id):
     band_id = _band_id(access_app)
