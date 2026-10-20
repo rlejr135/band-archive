@@ -13,7 +13,7 @@ from extensions import db
 from models import (
     AppUser, AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership,
     DirectUploadSession, LegacyBandClaimToken, MultipartUploadSession,
-    PersonalLogMultipartUploadSession,
+    PersonalLogMultipartUploadSession, Member,
 )
 from sqlalchemy import and_, or_
 from member_profile_service import ensure_member_profile
@@ -792,6 +792,83 @@ def leave_band(actor, band_id):
     audit('membership_left', actor, band=band, target=item)
     db.session.commit()
     return item
+
+
+def membership_removal_access(actor, band_id, *, lock=False):
+    """Authorize only roster removal, never a general cross-band bypass.
+
+    All mutations serialize on the band before rereading DB-owned authority.
+    No JWT metadata or client-supplied role participates in this decision.
+    """
+    band_query = Band.query.filter_by(id=band_id, deleted_at=None)
+    if lock:
+        band_query = band_query.with_for_update()
+    band = band_query.populate_existing().one_or_none()
+    if band is None:
+        raise NotFoundError('Band not found')
+    actor_query = AppUser.query.filter_by(id=actor.id)
+    if lock:
+        actor_query = actor_query.with_for_update()
+    actor = actor_query.populate_existing().one_or_none()
+    if actor is None or actor.status != ACTIVE or actor.email_verified is not True:
+        raise ValidationError('Active verified account is required.', 403)
+    membership_query = BandMembership.query.filter_by(band_id=band.id, user_id=actor.id, status=ACTIVE)
+    if lock:
+        membership_query = membership_query.with_for_update()
+    membership = membership_query.populate_existing().one_or_none()
+    if actor.is_platform_admin is not True:
+        if membership is None:
+            raise NotFoundError('Band not found')
+        if membership.role != 'owner':
+            raise ValidationError('Band owner permission is required.', 403)
+    return band, actor, membership
+
+
+def can_remove_from_band(actor, actor_membership, target):
+    authorized = bool(actor and actor.status == ACTIVE and actor.email_verified is True and (
+        actor.is_platform_admin is True or (
+            actor_membership and actor_membership.user_id == actor.id
+            and actor_membership.band_id == target.band_id
+            and actor_membership.status == ACTIVE and actor_membership.role == 'owner'
+        )
+    ))
+    return bool(authorized and target.status == ACTIVE and target.role != 'owner'
+                and target.user_id != actor.id)
+
+
+def membership_profile_names(band_id):
+    return {item.linked_user_id: item.name for item in Member.query.filter(
+        Member.band_id == band_id, Member.linked_user_id.is_not(None),
+    ).all()}
+
+
+def remove_membership(actor, band_id, membership_id):
+    """Revoke membership immediately; retain accounts, profiles, and content.
+
+    Unlike voluntary leave, an uploader cannot prevent removal with a live
+    reservation. Upload materialization already rechecks the owner under this
+    same band lock, so a removal that commits first prevents completion.
+    """
+    _begin_privileged_mutation()
+    band, actor, _ = membership_removal_access(actor, band_id, lock=True)
+    item = BandMembership.query.filter_by(
+        id=membership_id, band_id=band.id,
+    ).with_for_update().populate_existing().one_or_none()
+    if item is None:
+        raise NotFoundError('Membership not found')
+    if item.user_id == actor.id or item.role == 'owner':
+        raise ValidationError('membership_removal_target_ineligible', 409)
+    if item.status == 'left':
+        db.session.commit()
+        return item, False
+    if item.status != ACTIVE:
+        raise ValidationError('membership_removal_target_ineligible', 409)
+    item.status = 'left'
+    item.left_at = now()
+    item.acted_by_user_id = actor.id
+    audit('membership_removed', actor, band=band, target=item)
+    db.session.commit()
+    return item, True
 
 
 def close_band(actor, band_id):

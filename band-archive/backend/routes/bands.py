@@ -12,6 +12,7 @@ from band_service import (
     create_request, creation_request_dict, invite_dict, join_invite, join_request,
     leave_band, membership_dict, require_band_role, review_request, revoke_invite,
     rotate_invite, set_role, transfer_ownership, update_band_profile,
+    can_remove_from_band, membership_profile_names, membership_removal_access, remove_membership,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -20,6 +21,14 @@ from routes.search import search_places_for_member
 
 
 bands_bp = Blueprint('bands', __name__, url_prefix='/api/v2')
+
+
+@bands_bp.after_request
+def private_removal_response(response):
+    if request.endpoint in {'bands.remove_band_member', 'bands.platform_membership_roster'}:
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.vary.add('Authorization')
+    return response
 
 
 @bands_bp.before_request
@@ -371,10 +380,13 @@ def list_memberships(band_id):
     if membership.role not in MANAGER_ROLES:
         query = query.filter_by(status=ACTIVE)
     audience = 'management' if membership.role in MANAGER_ROLES else 'member'
+    profile_names = membership_profile_names(band.id) if audience == 'management' else {}
     memberships = []
     for item in query.order_by(BandMembership.id).all():
         serialized = membership_dict(item, audience=audience)
         if audience == 'management':
+            serialized['member_name'] = profile_names.get(item.user_id) or (item.user.display_name if item.user else None)
+            serialized['can_remove_from_band'] = can_remove_from_band(user, membership, item)
             target_user = item.user
             serialized['can_receive_ownership'] = bool(
                 membership.role == 'owner'
@@ -386,6 +398,42 @@ def list_memberships(band_id):
             )
         memberships.append(serialized)
     return jsonify({'memberships': memberships})
+
+
+@bands_bp.get('/platform/bands/<int:band_id>/memberships')
+@require_auth
+def platform_membership_roster(band_id):
+    actor = require_platform_admin()
+    band, actor, actor_membership = membership_removal_access(actor, band_id)
+    profile_names = membership_profile_names(band.id)
+    rows = BandMembership.query.filter_by(band_id=band.id, status=ACTIVE).order_by(BandMembership.id).all()
+    return jsonify({'band': {'id': band.id, 'name': band.name}, 'memberships': [{
+        'id': item.id, 'band_id': item.band_id, 'role': item.role, 'status': item.status,
+        'member_name': profile_names.get(item.user_id) or (item.user.display_name if item.user else None),
+        'can_remove_from_band': can_remove_from_band(actor, actor_membership, item),
+    } for item in rows]})
+
+
+@bands_bp.post('/bands/<int:band_id>/memberships/<int:membership_id>/remove')
+@require_auth
+def remove_band_member(band_id, membership_id):
+    # Bound the confirmation payload before JSON parsing, including chunked requests.
+    if request.content_length is not None and request.content_length > 1024:
+        raise ValidationError('Request body is too large.', 413)
+    raw = request.stream.read(1025)
+    if len(raw) > 1024:
+        raise ValidationError('Request body is too large.', 413)
+    try:
+        body = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValidationError('A JSON object with confirm=true is required.')
+    if not isinstance(body, dict) or set(body) != {'confirm'} or body['confirm'] is not True:
+        raise ValidationError('Only confirm=true is accepted.')
+    item, changed = remove_membership(current_app_user(), band_id, membership_id)
+    return jsonify({'membership': {
+        'id': item.id, 'band_id': item.band_id, 'role': item.role, 'status': item.status,
+        'left_at': item.left_at.isoformat() if item.left_at else None,
+    }, 'changed': changed})
 
 
 @bands_bp.patch('/bands/<int:band_id>/profile')
