@@ -127,8 +127,14 @@ export const BandCreationRequestPage = () => {
     try { const data = await api.requestJson('/api/v2/band-creation-requests', requestOptions('POST', { name: form.get('name'), slug: form.get('slug'), description: form.get('description') })); setResult(data?.request || null); }
     catch { setError(genericFailure); } finally { guard.release(); setBusy(false); }
   };
-  return <main className="bands-page" aria-labelledby="create-band-title"><Link to="/bands">← 내 밴드</Link><h2 id="create-band-title">밴드 생성 요청</h2><p className="bands-help">플랫폼 검토 후 승인됩니다.</p>
-    <form onSubmit={submit} className="bands-form" aria-busy={busy}><label>밴드 이름<input name="name" required maxLength="120" /></label><label>주소(slug)<input name="slug" required maxLength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autoCapitalize="none" /></label><label>소개<textarea name="description" maxLength="2000" /></label><button type="submit" className="primary-btn" disabled={busy}>{busy ? '요청 중…' : '생성 요청 보내기'}</button></form>
+  return <main className="bands-page" aria-labelledby="create-band-title">
+    <header className="bands-manage-header"><Link className="bands-return-link" to="/bands"><span aria-hidden="true">←</span> 내 밴드</Link><h2 id="create-band-title">밴드 생성 요청</h2></header><p className="bands-help">플랫폼 검토 후 승인됩니다.</p>
+    <form onSubmit={submit} className="bands-form" aria-busy={busy}>
+      <label>밴드 이름<input name="name" required maxLength="120" /></label>
+      <label htmlFor="band-request-slug">밴드 영어명<input id="band-request-slug" name="slug" required maxLength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autoCapitalize="none" aria-describedby="band-request-slug-help" /></label>
+      <p id="band-request-slug-help" className="bands-help">해당 이름이 밴드 URL 주소가 됩니다. 영문 소문자·숫자로 입력하고, 단어 사이에는 하이픈(-)을 하나씩 사용할 수 있습니다. 공백·대문자는 사용할 수 없으며 최대 80자입니다.</p>
+      <label>소개<textarea name="description" maxLength="2000" /></label><button type="submit" className="primary-btn" disabled={busy}>{busy ? '요청 중…' : '생성 요청 보내기'}</button>
+    </form>
     {result && <p role="status">“{result.name}” 생성 요청이 {result.status === 'pending' ? '승인 대기 중' : result.status}입니다.</p>}{error && <p role="alert" className="auth-error">{error}</p>}
   </main>;
 };

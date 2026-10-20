@@ -43,7 +43,8 @@ test('owner roster shows only server-authorized removal and updates locally with
   };
   try {
     const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByRole('button', { name: '밴드 이름 추방' }); assert.equal(view.queryByRole('button', { name: 'Owner 추방' }), null);
-    fireEvent.click(view.getByRole('button', { name: '밴드 이름 추방' })); await waitFor(() => assert.equal(view.queryByText('밴드 이름 · member'), null)); assert.deepEqual(writes.map(([path, body]) => [path.replace(/^https?:\/\/[^/]+/, ''), body]), [['/api/v2/bands/1/memberships/2/remove', { confirm: true }]]); assert.equal(rosterReads, 1);
+    // Failed waitFor polls must not inspect a React DOM node (and its fiber graph).
+    fireEvent.click(view.getByRole('button', { name: '밴드 이름 추방' })); await waitFor(() => assert.equal(view.queryByText('밴드 이름 · member') === null, true)); assert.deepEqual(writes.map(([path, body]) => [path.replace(/^https?:\/\/[^/]+/, ''), body]), [['/api/v2/bands/1/memberships/2/remove', { confirm: true }]]); assert.equal(rosterReads, 1);
     fireEvent.click(view.getByRole('button', { name: '명단 새로고침' })); await waitFor(() => assert.equal(rosterReads, 2));
   } finally { globalThis.fetch = previousFetch; window.confirm = previousConfirm; }
 });
@@ -101,7 +102,7 @@ test('join introduction is optional plain text, bounded to 300 code points, trim
     await userEvent.click(send); fireEvent.submit(input.closest('form')); assert.equal(writes.length, 1);
     assert.deepEqual(writes[0], { name: '요청 이름', introduction: '기타와 보컬을 해요.' });
     await act(async () => pending.resolve(response({ membership: { id: 1 }, created: true }, 201)));
-    await waitFor(() => assert.equal(view.queryByLabelText('간단한 자기소개 (선택)'), null));
+    await waitFor(() => assert.equal(view.queryByLabelText('간단한 자기소개 (선택)') === null, true));
   } finally { globalThis.fetch = previous; }
 });
 
@@ -179,7 +180,16 @@ test('manager sees the requested member name with legacy account-name fallback',
 test('creation form has one in-flight submit and reports its status', async () => {
   await load(); const previous = globalThis.fetch; const first = deferred(); let writes = 0;
   globalThis.fetch = async (url) => { if (String(url).includes('band-creation-requests')) { writes += 1; return first.promise; } throw new Error('unexpected'); };
-  try { const view = render(createElement(App, { entry: '/bands/request', create: true })); await userEvent.type(view.getByLabelText('밴드 이름'), '새 밴드'); await userEvent.type(view.getByLabelText('주소(slug)'), 'new-band'); const button = view.getByRole('button', { name: '생성 요청 보내기' }); await userEvent.click(button); await userEvent.click(button); assert.equal(writes, 1); await act(async () => first.resolve(response({ request: { name: '새 밴드', status: 'pending' } }, 201))); await view.findByText(/승인 대기 중/); } finally { globalThis.fetch = previous; }
+  try { const view = render(createElement(App, { entry: '/bands/request', create: true })); await userEvent.type(view.getByLabelText('밴드 이름'), '새 밴드'); await userEvent.type(view.getByLabelText('밴드 영어명'), 'new-band'); const button = view.getByRole('button', { name: '생성 요청 보내기' }); await userEvent.click(button); await userEvent.click(button); assert.equal(writes, 1); await act(async () => first.resolve(response({ request: { name: '새 밴드', status: 'pending' } }, 201))); await view.findByText(/승인 대기 중/); } finally { globalThis.fetch = previous; }
+});
+
+test('creation request uses the shared return-link styling and explains the English URL name without weakening slug validation', async () => {
+  await load(); const view = render(createElement(App, { entry: '/bands/request', create: true }));
+  const back = view.getByRole('link', { name: '내 밴드' }); assert.equal(back.getAttribute('href'), '/bands'); assert.ok(back.classList.contains('bands-return-link')); assert.equal(back.tabIndex, 0); await user.tab(); assert.equal(document.activeElement === back, true);
+  const input = view.getByLabelText('밴드 영어명'); assert.equal(input.name, 'slug'); assert.equal(input.required, true); assert.equal(input.maxLength, 80); assert.equal(input.getAttribute('autoCapitalize'), 'none'); assert.equal(input.getAttribute('pattern'), '[a-z0-9]+(-[a-z0-9]+)*');
+  const help = document.getElementById(input.getAttribute('aria-describedby')); assert.match(help.textContent, /해당 이름이 밴드 URL 주소가 됩니다/); assert.match(help.textContent, /영문 소문자·숫자/); assert.match(help.textContent, /하이픈/); assert.match(help.textContent, /공백·대문자는 사용할 수 없/); assert.match(help.textContent, /80자/);
+  for (const value of ['new-band', 'band123', 'my-2-band']) { fireEvent.change(input, { target: { value } }); assert.equal(input.checkValidity(), true, value); }
+  for (const value of ['New-Band', 'new band', '-band', 'band-', 'new--band']) { fireEvent.change(input, { target: { value } }); assert.equal(input.checkValidity(), false, value); }
 });
 
 test('management hides non-manager and ignores a late A membership decision after route switch', async () => {
@@ -500,7 +510,7 @@ test('a late featured-image refresh cannot restore a feature after it is cleared
     await view.findByAltText('현재 대표 사진'); fireEvent.error(view.getByAltText('현재 대표 사진'));
     await waitFor(() => assert.equal(featureReads, 2));
     await user.click(view.getByRole('button', { name: '대표 사진 해제' }));
-    await waitFor(() => assert.equal(view.queryByText('현재 대표 사진'), null));
+    await waitFor(() => assert.equal(view.queryByText('현재 대표 사진') === null, true));
     lateRefresh.resolve(response({ gallery: { id: 99, filename: 'old.jpg', url: 'https://media.invalid/old-fresh.jpg', is_featured: true } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(view.queryByText('현재 대표 사진'), null);
