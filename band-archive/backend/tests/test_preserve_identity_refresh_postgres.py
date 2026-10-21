@@ -8,6 +8,7 @@ transaction core behind an explicit monkeypatch seam.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import socket
 import subprocess
 import time
@@ -23,7 +24,7 @@ from sqlalchemy.engine.base import RootTransaction
 from extensions import db
 from migration_bootstrap import MIGRATIONS_DIRECTORY, create_migration_app
 from tenant_backfill import apply as apply_tenant_backfill
-from tools.legacy_rehearsal.rehearsal import _copy_and_backfill, _file_fingerprint, reconcile
+from tools.legacy_rehearsal.rehearsal import RehearsalError, _copy_and_backfill, _file_fingerprint, reconcile
 from tools.legacy_rehearsal.preserve_identity_refresh import (
     PROFILE_VERSION, PROTECTED_TABLES, REFRESHED_TABLES, _insert_source_domain,
     _table_digests, run_preserve_identity_refresh,
@@ -222,6 +223,46 @@ def test_private_postgres_refresh_happy_path_preserves_claimed_identity(tmp_path
         assert _table_digests(connection, PROTECTED_TABLES) == profile["protected"]["table_digests"]
         assert _table_digests(connection, PROTECTED_TABLES)["band_request_email_outbox"] == outbox_before
         assert _table_digests(connection, REFRESHED_TABLES, band_id=band_id)["song"]["count"] == 1
+    target.dispose()
+
+
+@pytest.mark.postgres_integration
+@pytest.mark.parametrize('state', ('active', 'released'))
+def test_private_postgres_refresh_refuses_existing_rights_case_without_writes(
+        tmp_path, private_pg17, monkeypatch, state):
+    _internal_target_seam(monkeypatch)
+    source, target, band_id, profile, object_proof = _fixture(tmp_path, private_pg17)
+    with target.begin() as connection:
+        song_id = connection.execute(text('SELECT id FROM song WHERE band_id=:band_id'),
+                                     {'band_id': band_id}).scalar_one()
+        connection.execute(text("""INSERT INTO content_restriction
+            (band_id, resource_type, resource_id, case_ref, reason_code, state, created_at, released_at)
+            VALUES (:band_id, 'song', :song_id, :case_ref, 'privacy', :state,
+                    CURRENT_TIMESTAMP, :released_at)"""),
+            {'band_id': band_id, 'song_id': song_id, 'case_ref': f'preserve-case-{state}', 'state': state,
+             'released_at': datetime.now(timezone.utc) if state == 'released' else None})
+    with target.connect() as connection:
+        case_before = connection.execute(text("""SELECT band_id, resource_type, resource_id, case_ref,
+            reason_code, state, created_at, released_at FROM content_restriction""")).one()
+        song_before = connection.execute(text('SELECT title FROM song WHERE id=:id'),
+                                         {'id': song_id}).scalar_one()
+    source_engine = create_engine(f'sqlite:///{source.as_posix()}')
+    try:
+        with source_engine.begin() as connection:
+            connection.execute(text("UPDATE song SET title='must not refresh' WHERE id=7"))
+    finally:
+        source_engine.dispose()
+    source_before = _file_fingerprint(source)
+    prepared, marker = [], []
+    with pytest.raises(RehearsalError, match='refresh target contains unsupported new content'):
+        _refresh(source, private_pg17, profile, object_proof, prepared, marker)
+    assert prepared == marker == []
+    assert _file_fingerprint(source) == source_before
+    with target.connect() as connection:
+        assert connection.execute(text("""SELECT band_id, resource_type, resource_id, case_ref,
+            reason_code, state, created_at, released_at FROM content_restriction""")).one() == case_before
+        assert connection.execute(text('SELECT title FROM song WHERE id=:id'),
+                                  {'id': song_id}).scalar_one() == song_before
     target.dispose()
 
 

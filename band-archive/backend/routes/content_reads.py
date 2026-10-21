@@ -14,6 +14,7 @@ from band_access import (
 from errors import NotFoundError, ValidationError
 from extensions import db
 from member_profile_service import active_profile_condition
+from content_restrictions import prime_unrestricted_records, restriction_predicate
 from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, R2DeletionTask, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
@@ -89,6 +90,7 @@ def _page_query(query, order_columns, limit, offset):
     """Count and materialize one SQL-bounded deterministic page."""
     total = query.order_by(None).count()
     items = query.order_by(*order_columns).offset(offset).limit(limit).all()
+    prime_unrestricted_records(items)
     has_more = total > offset + len(items)
     return items, {
         'limit': limit,
@@ -258,6 +260,7 @@ def _roster_visible_or_404(scope):
 def _member_or_404(member_id, scope):
     _roster_visible_or_404(scope)
     member = Member.query.filter(Member.id == member_id, Member.band_id == scope.band_id,
+                                 restriction_predicate(Member),
                                  _not_pending_delete(Member, 'member')).one_or_none()
     if member is None:
         raise NotFoundError('Resource not found')
@@ -295,6 +298,7 @@ def _personal_comment_graph_sql(scope, log_id):
     return (
         Comment.band_id == scope.band_id,
         Comment.personal_log_id == log_id,
+        restriction_predicate(Comment),
         _creator_is_scoped_sql(Comment, scope),
         or_(Comment.parent_id.is_(None), parent_is_scoped),
     )
@@ -495,6 +499,7 @@ def get_media_comments(band_id, media_id):
     comments = Comment.query.filter(
         Comment.band_id == scope.band_id,
         Comment.media_id == media.id,
+        restriction_predicate(Comment),
         _not_pending_delete(Comment, 'comment'),
     )
     page, pagination = _page_query(comments, (Comment.created_at.asc(), Comment.id.asc()), limit, offset)
@@ -615,7 +620,8 @@ def list_members(band_id):
     scope = _scope(band_id)
     _roster_visible_or_404(scope)
     limit, offset = _page_request()
-    query = Member.query.filter(Member.band_id == scope.band_id, active_profile_condition(), _not_pending_delete(Member, 'member'))
+    query = Member.query.filter(Member.band_id == scope.band_id, active_profile_condition(),
+                                restriction_predicate(Member), _not_pending_delete(Member, 'member'))
     page, pagination = _page_query(query, (Member.name.asc(), Member.id.asc()), limit, offset)
     return jsonify({'members': [serialize_member(scope, item) for item in page], 'pagination': pagination})
 

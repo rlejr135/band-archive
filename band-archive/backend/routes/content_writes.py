@@ -24,8 +24,9 @@ from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comme
                     PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
                     SongSuggestion, SongSuggestionVote)
 from validators import validate_external_http_url
+from policy_service import confirm_public_expansion, upload_policy_enabled
 from v2_content_serializers import (
-    media_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
+    media_visibility, song_visibility, rehearsal_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
 )
 from v2_remaining_read_serializers import personal_log_visibility, serialize_personal_comment
@@ -35,14 +36,14 @@ from v2_remaining_read_serializers import serialize_announcement, serialize_gall
 content_writes_bp = Blueprint('content_writes', __name__, url_prefix='/api/v2/bands/<int:band_id>')
 
 _VISIBILITIES = {'PUBLIC', 'MEMBERS'}
-_SONG_FIELDS = {'title', 'artist', 'status', 'chords', 'link', 'memo', 'genre', 'difficulty', 'visibility'}
+_SONG_FIELDS = {'title', 'artist', 'status', 'chords', 'link', 'memo', 'genre', 'difficulty', 'visibility', 'visibility_confirm'}
 _REHEARSAL_FIELDS = {
     'title', 'date', 'start_date', 'end_date', 'time', 'location', 'latitude', 'longitude',
-    'memo', 'color', 'visibility', 'song_ids',
+    'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm',
 }
 _IGNORED_OWNERSHIP_FIELDS = {'band_id', 'created_by_membership_id', 'created_by_user_id', 'is_legacy'}
-_SUGGESTION_FIELDS = {'title', 'artist', 'link', 'memo', 'visibility'}
-_ANNOUNCEMENT_FIELDS = {'content', 'visibility'}
+_SUGGESTION_FIELDS = {'title', 'artist', 'link', 'memo', 'visibility', 'visibility_confirm'}
+_ANNOUNCEMENT_FIELDS = {'content', 'visibility', 'visibility_confirm'}
 
 
 def _no_store():
@@ -487,7 +488,10 @@ def update_song(band_id, song_id):
         song = _owned_or_404(Song, song_id, band.id, 'Song not found', lock=True)
         if not _can_change(song, membership):
             raise ValidationError('You may only edit your own content.', 403)
+        before_visibility = song_visibility(scope, song)
         _apply_song(song, data)
+        if before_visibility == 'MEMBERS' and song_visibility(scope, song) == 'PUBLIC':
+            confirm_public_expansion(data, user, band, song)
         audit('content.song.updated', user, band, song, {'fields': sorted(set(data) & _SONG_FIELDS)})
         return jsonify({'song': serialize_song(scope, song)})
     return _run_write(operation)
@@ -566,7 +570,25 @@ def update_rehearsal(band_id, rehearsal_id):
         rehearsal = _owned_or_404(Rehearsal, rehearsal_id, band.id, 'Rehearsal not found', lock=True)
         if not _can_change(rehearsal, membership):
             raise ValidationError('You may only edit your own content.', 403)
+        old_visibility = rehearsal_visibility(scope, rehearsal)
+        affected = []
+        before = {}
+        if upload_policy_enabled() and 'song_ids' in data:
+            song_ids = {song.id for song in rehearsal.songs}
+            song_ids.update(song.id for song in _songs_or_404(band.id, data['song_ids']))
+            affected = Media.query.filter(Media.band_id == band.id, Media.song_id.in_(song_ids)).all()
+            before = {item.id: media_visibility(scope, item) for item in affected}
         _apply_rehearsal(rehearsal, data, band.id)
+        db.session.flush()
+        expands = old_visibility == 'MEMBERS' and rehearsal_visibility(scope, rehearsal) == 'PUBLIC'
+        if affected:
+            for song_id in {item.song_id for item in affected}:
+                song = db.session.get(Song, song_id)
+                db.session.expire(song, ['rehearsals'])
+            expands = expands or any(before[item.id] == 'MEMBERS' and media_visibility(scope, item) == 'PUBLIC'
+                                     for item in affected)
+        if expands:
+            confirm_public_expansion(data, user, band, rehearsal)
         audit('content.rehearsal.updated', user, band, rehearsal, {'fields': sorted(set(data) & _REHEARSAL_FIELDS)})
         return jsonify({'rehearsal': serialize_rehearsal(scope, rehearsal)})
     return _run_write(operation)
@@ -800,6 +822,8 @@ def update_suggestion_v2(band_id, suggestion_id):
         suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
         if not _can_change_suggestion(suggestion, membership):
             raise ValidationError('You may only edit your own suggestion.', 403)
+        if band.default_visibility == 'PUBLIC' and suggestion.visibility == 'MEMBERS' and data.get('visibility') == 'PUBLIC':
+            confirm_public_expansion(data, user, band, suggestion)
         _apply_suggestion(suggestion, data)
         audit('content.suggestion.updated', user, band, suggestion,
               {'fields': sorted(set(data) & _SUGGESTION_FIELDS)})
@@ -932,6 +956,8 @@ def put_announcement_v2(band_id):
         )
         if 'content' not in data:
             raise ValidationError('content is required.')
+        if rows and band.default_visibility == 'PUBLIC' and announcement.visibility == 'MEMBERS' and data.get('visibility') == 'PUBLIC':
+            confirm_public_expansion(data, user, band, announcement)
         announcement.content = _text(data['content'], 'content', 10000, required=True)
         if 'visibility' in data:
             announcement.visibility = _visibility(data['visibility'], announcement.visibility)

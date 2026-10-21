@@ -46,6 +46,7 @@ PHASE18_REVISION = '20261017_18'
 PHASE19_REVISION = '20261018_19'
 PHASE20_REVISION = '20261019_20'
 PHASE21_REVISION = '20261020_21'
+PHASE22_REVISION = '20261021_22'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -60,7 +61,7 @@ DATA_API_MANAGED_TABLES_PHASE15 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14
 DATA_API_MANAGED_TABLES_PHASE16 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
 AVAILABILITY_TABLES = ('band_availability_day', 'band_availability_state', 'band_personal_schedule_note')
 DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES, 'band_logo',
-                                        'band_invite_link', 'invite_resume_context')))
+                                        'band_invite_link', 'invite_resume_context', 'content_restriction')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -242,6 +243,18 @@ def _remove_future_invite_links(metadata):
     for name in ('invite_resume_context', 'band_invite_link'):
         if name in metadata.tables:
             metadata.remove(metadata.tables[name])
+    _remove_future_content_restrictions(metadata)
+    return metadata
+
+
+def _remove_future_content_restrictions(metadata):
+    if 'content_restriction' in metadata.tables:
+        metadata.remove(metadata.tables['content_restriction'])
+    audit = metadata.tables.get('audit_event')
+    if audit is not None:
+        for index in list(audit.indexes):
+            if index.name == 'ix_audit_event_upload_policy_target':
+                audit.indexes.remove(index)
     return metadata
 
 
@@ -453,6 +466,17 @@ def phase21_metadata():
     metadata = phase20_metadata()
     metadata.tables['band_membership'].append_column(
         db.metadata.tables['band_membership'].c.requested_name._copy())
+    return metadata
+
+
+def phase22_metadata():
+    """Case-based restrictions and bounded upload-policy receipt lookup."""
+    metadata = phase21_metadata()
+    db.metadata.tables['content_restriction'].to_metadata(metadata)
+    table = metadata.tables['audit_event']
+    Index('ix_audit_event_upload_policy_target', table.c.target_type, table.c.target_id,
+          sqlite_where=text("event_type = 'upload_policy_confirmed'"),
+          postgresql_where=text("event_type = 'upload_policy_confirmed'"))
     return metadata
 
 
@@ -886,6 +910,7 @@ def _expected_check_constraints(table, dialect=None):
                 ('direct_upload_session', 'ck_direct_upload_session_target'),
                 ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
                 ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
+                ('content_restriction', 'ck_content_restriction_release'),
             },
             allow_not_equal=(table.name, constraint.name) in {
                 ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
@@ -948,6 +973,7 @@ def _reflected_check_constraints(inspector, table_name, dialect=None, table=None
                 ('direct_upload_session', 'ck_direct_upload_session_target'),
                 ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
                 ('r2_deletion_task', 'ck_r2_deletion_task_manifest_state'),
+                ('content_restriction', 'ck_content_restriction_release'),
             },
             allow_not_equal=(table_name, constraint.get('name')) in {
                 ('r2_deletion_task', 'ck_r2_deletion_task_lease_state'),
@@ -1500,6 +1526,8 @@ def _canonical_postgres_partial_predicate(value):
     if parsed not in {
         frozenset({('role', 'owner'), ('status', 'active')}),
         frozenset({('status', 'pending')}),
+        frozenset({('state', 'active')}),
+        frozenset({('event_type', 'upload_policy_confirmed')}),
     }:
         return None
     return parsed
@@ -1579,9 +1607,9 @@ def _postgres_predicate_operand(value, literal=False):
     if '::' in value:
         return None
     if literal:
-        match = re.fullmatch(r"'(owner|active|pending)'", value)
+        match = re.fullmatch(r"'(owner|active|pending|upload_policy_confirmed)'", value)
         return match.group(1) if match else None
-    match = re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?(role|status)', value)
+    match = re.fullmatch(r'(?:[a-z_][a-z0-9_]*\.)?(role|status|state|event_type)', value)
     return match.group(1) if match else None
 
 
@@ -1885,6 +1913,8 @@ def metadata_for_recorded_revision(revision):
         return phase20_metadata()
     if revision == PHASE21_REVISION:
         return phase21_metadata()
+    if revision == PHASE22_REVISION:
+        return phase22_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

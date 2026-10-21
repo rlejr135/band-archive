@@ -134,6 +134,8 @@ def scope_with_band_visibility(scope, band):
 def media_playback(media, visibility):
     """Sign only playable sources, using a TTL derived from effective access."""
     from deletion_service import is_pending_deletion
+    from content_restrictions import require_unrestricted
+    require_unrestricted(media)
     if is_pending_deletion('media', media.id, media.band_id):
         return {'url': None, 'video_url': None, 'audio_url': None,
                 'original_pruned': bool(media.original_pruned_at)}
@@ -158,6 +160,8 @@ def media_playback(media, visibility):
 
 
 def rehearsal_ref(scope, rehearsal):
+    from content_restrictions import require_unrestricted
+    require_unrestricted(rehearsal)
     visibility = rehearsal_visibility(scope, rehearsal)
     return {
         'id': rehearsal.id, 'title': rehearsal.title, 'date': _iso(rehearsal.date),
@@ -166,6 +170,8 @@ def rehearsal_ref(scope, rehearsal):
 
 
 def song_ref(scope, song):
+    from content_restrictions import require_unrestricted
+    require_unrestricted(song)
     visibility = song_visibility(scope, song)
     return {
         'id': song.id, 'title': song.title, 'artist': song.artist,
@@ -174,6 +180,8 @@ def song_ref(scope, song):
 
 
 def serialize_media(scope, media, viewer_vote=0):
+    from content_restrictions import require_unrestricted
+    require_unrestricted(media)
     if not graph_is_scoped(scope, media):
         raise ValueError('Media graph is outside the resolved band scope.')
     visibility = media_visibility(scope, media)
@@ -198,6 +206,8 @@ def serialize_media(scope, media, viewer_vote=0):
 
 
 def serialize_song(scope, song, *, include_children=True):
+    from content_restrictions import is_restricted, require_unrestricted
+    require_unrestricted(song)
     if not belongs_to_scope(scope, song):
         raise ValueError('Song is outside the resolved band scope.')
     visibility = song_visibility(scope, song)
@@ -212,12 +222,15 @@ def serialize_song(scope, song, *, include_children=True):
     if include_children:
         rehearsals = [rehearsal_ref(scope, item) for item in song.rehearsals
                       if belongs_to_scope(scope, item)
+                      and not is_restricted(item)
                       and visible_to_scope(scope, rehearsal_visibility(scope, item))]
         value['rehearsals'] = sorted(rehearsals, key=lambda item: (item['date'] or '', item['id']))
     return value
 
 
 def serialize_rehearsal(scope, rehearsal, *, include_children=True):
+    from content_restrictions import is_restricted, require_unrestricted
+    require_unrestricted(rehearsal)
     if not belongs_to_scope(scope, rehearsal):
         raise ValueError('Rehearsal is outside the resolved band scope.')
     visibility = rehearsal_visibility(scope, rehearsal)
@@ -233,6 +246,7 @@ def serialize_rehearsal(scope, rehearsal, *, include_children=True):
         value['songs'] = sorted(
             (song_ref(scope, song) for song in rehearsal.songs
              if belongs_to_scope(scope, song)
+             and not is_restricted(song)
              and visible_to_scope(scope, song_visibility(scope, song))),
             key=lambda item: item['id'],
         )
@@ -240,6 +254,8 @@ def serialize_rehearsal(scope, rehearsal, *, include_children=True):
 
 
 def serialize_processing(scope, media):
+    from content_restrictions import require_unrestricted
+    require_unrestricted(media)
     visibility = media_visibility(scope, media)
     return {
         'id': media.id, 'file_type': media.file_type, 'status': media.transcoding_status,
@@ -254,6 +270,8 @@ def serialize_processing(scope, media):
 
 
 def serialize_comment(scope, comment, media_visibility_value, children_by_parent=None, *, include_replies=True):
+    from content_restrictions import is_restricted, require_unrestricted
+    require_unrestricted(comment)
     value = {
         'id': comment.id, 'media_id': comment.media_id, 'parent_id': comment.parent_id,
         'author': comment.author, 'content': comment.content,
@@ -266,6 +284,7 @@ def serialize_comment(scope, comment, media_visibility_value, children_by_parent
         return value
     relation = (children_by_parent.get(comment.id, []) if children_by_parent is not None else comment.replies)
     replies = [reply for reply in relation if belongs_to_scope(scope, reply)
+               and not is_restricted(reply)
                and reply.media_id == comment.media_id]
     value['replies'] = [serialize_comment(scope, reply, media_visibility_value, children_by_parent)
                         for reply in sorted(replies, key=lambda item: (_iso(item.created_at) or '', item.id))]

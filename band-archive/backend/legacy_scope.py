@@ -42,7 +42,8 @@ def legacy_query(model):
     """Start a query pinned to the request's immutable legacy tenant."""
     if not hasattr(model, 'band_id'):
         raise TypeError(f'{model.__name__} is not tenant-scoped')
-    return model.query.filter(model.band_id == legacy_band_id())
+    from content_restrictions import restriction_predicate
+    return model.query.filter(model.band_id == legacy_band_id(), restriction_predicate(model))
 
 
 def _not_found(message):
@@ -152,6 +153,8 @@ def _validate_graph(record, band_id, seen):
 
 def validate_legacy_graph(record, message='Resource not found'):
     """Fail closed if a record's complete tenant graph is corrupt."""
+    from content_restrictions import require_unrestricted
+    require_unrestricted(record)
     try:
         band_id = legacy_band_id()
         # Graph rows may change during a request.  The root tenant id is

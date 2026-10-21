@@ -64,6 +64,9 @@ MUST_BE_EMPTY_TABLES = frozenset({
     # Invite-link digests and resume capabilities cannot be copied, discarded,
     # or silently invalidated by this legacy content refresh workflow.
     "band_invite_link", "invite_resume_context",
+    # A rights restriction names current content by ID. Refreshing legacy rows
+    # could silently bind even a released case to a different record.
+    "content_restriction",
 })
 MANAGED_TABLES = PROTECTED_TABLES | REFRESHED_TABLES | QUARANTINED_TABLES | MUST_BE_EMPTY_TABLES
 

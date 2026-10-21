@@ -198,7 +198,8 @@ def visible_query(query, entity, scope, *, parent_visibility=None):
 
     # Always bind the object query to the server-resolved URL band.  This is
     # deliberately unconditional even when callers have already filtered it.
-    query = query.filter(entity.band_id == scope.band_id)
+    from content_restrictions import restriction_predicate
+    query = query.filter(entity.band_id == scope.band_id, restriction_predicate(entity, band_id=scope.band_id))
     if not scope.is_member:
         query = query.filter(entity.visibility == PUBLIC)
     if not scope.is_member and effective_visibility(parent_visibility) != PUBLIC:

@@ -8,6 +8,7 @@ from band_access import MEMBERS, PUBLIC, content_capabilities, effective_visibil
 from media_processing import select_media_source_keys
 from storage import storage
 from v2_content_serializers import MEMBERS_URL_TTL, PUBLIC_URL_TTL, _iso
+from content_restrictions import require_unrestricted
 
 
 def _flags(scope, item, visibility):
@@ -43,6 +44,7 @@ def _ttl(visibility):
 
 
 def _personal_playback(log, visibility):
+    require_unrestricted(log)
     from deletion_service import is_pending_deletion
     if is_pending_deletion('personal_log', log.id, log.band_id):
         return {'url': None, 'video_url': None, 'audio_url': None,
@@ -63,6 +65,7 @@ def _personal_playback(log, visibility):
 
 
 def serialize_member(scope, member):
+    require_unrestricted(member)
     from member_profile_service import profile_fields
     flags = content_capabilities(scope, member)
     own = bool(scope.is_member and scope.audience.account_active and scope.audience.email_verified
@@ -85,6 +88,7 @@ def serialize_member(scope, member):
 
 
 def serialize_personal_log(scope, log):
+    require_unrestricted(log)
     visibility = personal_log_visibility(scope, log)
     return {
         'id': log.id,
@@ -100,6 +104,7 @@ def serialize_personal_log(scope, log):
 
 
 def serialize_personal_processing(scope, log):
+    require_unrestricted(log)
     visibility = personal_log_visibility(scope, log)
     return {
         'id': log.id,
@@ -115,6 +120,7 @@ def serialize_personal_processing(scope, log):
 
 
 def serialize_personal_comment(scope, comment, visibility):
+    require_unrestricted(comment)
     return {
         'id': comment.id,
         'personal_log_id': comment.personal_log_id,
@@ -129,6 +135,7 @@ def serialize_personal_comment(scope, comment, visibility):
 
 
 def serialize_gallery_image(scope, image):
+    require_unrestricted(image)
     from deletion_service import is_pending_deletion
     visibility = gallery_visibility(scope, image)
     key = image.object_key or (f'gallery/{image.filename}' if image.filename else None)
@@ -144,6 +151,7 @@ def serialize_gallery_image(scope, image):
 
 
 def serialize_announcement(scope, announcement):
+    require_unrestricted(announcement)
     visibility = announcement_visibility(scope, announcement)
     return {
         'id': announcement.id,
@@ -154,6 +162,7 @@ def serialize_announcement(scope, announcement):
 
 
 def serialize_suggestion(scope, suggestion, viewer_vote=0):
+    require_unrestricted(suggestion)
     visibility = suggestion_visibility(scope, suggestion)
     up = suggestion.thumbs_up or 0
     down = suggestion.thumbs_down or 0

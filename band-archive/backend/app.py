@@ -413,8 +413,9 @@ def create_app(config_class=None, start_worker=None):
         # decision.  It is independent of migration readiness and must not
         # parse a body or reach a handler before returning its stable status.
         from legacy_scope import legacy_v1_request, legacy_writes_enabled
+        from policy_service import upload_policy_enabled
         if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
-                and legacy_v1_request() and not legacy_writes_enabled()):
+                and legacy_v1_request() and (upload_policy_enabled() or not legacy_writes_enabled())):
             return jsonify(
                 error='legacy_v1_writes_disabled',
                 message='Legacy v1 writes have been retired.',

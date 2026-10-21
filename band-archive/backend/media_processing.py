@@ -132,6 +132,8 @@ def processing_fields(record, key_prefix, *, scope=None):
     """Shared JSON fields; callers retain their established endpoint names."""
     from deletion_service import is_pending_deletion
     from flask import has_request_context
+    from content_restrictions import require_unrestricted
+    require_unrestricted(record)
 
     resource_type = 'personal_log' if isinstance(record, PersonalLog) else 'media'
     hidden = False

@@ -20,6 +20,8 @@ from storage import storage
 from media_processing import (create_media, create_personal_log, save_media_and_start,
                               save_personal_log_and_start)
 from upload_record_service import create_uploaded_record
+from policy_service import (validate_upload_assertion, record_upload_assertion,
+                            upload_session_visibility, upload_policy_enabled)
 from multipart_upload_service import (
     MAX_MULTIPART_PARTS, MULTIPART_PART_SIZE, MEDIA_TARGET, PERSONAL_LOG_TARGET,
     abort_session, acknowledge_part, complete_session, completion_payload, create_session,
@@ -48,7 +50,16 @@ def _require_int(value, field_name, minimum=None, maximum=None):
 
 def _legacy_upload_band_id():
     """Resolve the only tenant v1 upload endpoints are allowed to mutate."""
+    if upload_policy_enabled():
+        raise ValidationError('Use the authenticated band upload flow.', 410,
+                              code='legacy_v1_writes_disabled')
     return legacy_band_id()
+
+
+def _v2_policy_session(factory, membership, assertion, *args, **kwargs):
+    session, capability = factory(*args, **kwargs)
+    record_upload_assertion(session, membership, assertion)
+    return session, capability
 
 
 def _v2_upload_write(view):
@@ -151,22 +162,33 @@ def _v2_used_and_reserved_bytes(band_id):
 
 
 def _v2_media_target(band_id, data):
+    from content_restrictions import require_unrestricted
     song_id = _require_int(data.get('song_id'), 'song_id', minimum=1)
     song = Song.query.filter_by(id=song_id, band_id=band_id).one_or_none()
     if song is None:
         raise NotFoundError('Song not found')
+    require_unrestricted(song)
+    for linked_rehearsal in song.rehearsals:
+        if linked_rehearsal.band_id != band_id:
+            raise NotFoundError('Song not found')
+        require_unrestricted(linked_rehearsal)
     rehearsal_id = data.get('rehearsal_id')
     if rehearsal_id is not None:
         rehearsal_id = _require_int(rehearsal_id, 'rehearsal_id', minimum=1)
-        if Rehearsal.query.filter_by(id=rehearsal_id, band_id=band_id).one_or_none() is None:
+        rehearsal = Rehearsal.query.filter_by(id=rehearsal_id, band_id=band_id).one_or_none()
+        if rehearsal is None:
             raise NotFoundError('Rehearsal not found')
+        require_unrestricted(rehearsal)
     return song_id, rehearsal_id
 
 
 def _v2_personal_log_target(band_id, member_id):
+    from content_restrictions import require_unrestricted
     member_id = _require_int(member_id, 'member_id', minimum=1)
-    if Member.query.filter_by(id=member_id, band_id=band_id).one_or_none() is None:
+    member = Member.query.filter_by(id=member_id, band_id=band_id).one_or_none()
+    if member is None:
         raise NotFoundError('Member not found')
+    require_unrestricted(member)
     return member_id
 
 
@@ -186,11 +208,21 @@ def _v2_require_upload_session_owner(band_id, session, membership):
     owner = AppUser.query.filter_by(id=membership.user_id).with_for_update().populate_existing().one_or_none()
     if owner is None or owner.status != ACTIVE or owner.email_verified is not True:
         raise ValidationError('An active, verified upload owner is required.', status_code=403)
+    member_id = getattr(session, 'member_id', None)
+    song_id = getattr(session, 'song_id', None)
+    if member_id is not None:
+        _v2_personal_log_target(band_id, member_id)
+    elif song_id is not None:
+        _v2_media_target(band_id, {'song_id': song_id, 'rehearsal_id': session.rehearsal_id})
     return membership
 
 
 def _v2_reauthorize_upload_session_owner(band_id, session):
     """Recheck creator authority after the completion claim and R2 verify."""
+    from content_restrictions import clear_restriction_cache
+    # The completing claim committed and released the original band lock.
+    # A rights case may have been applied while object I/O was in flight.
+    clear_restriction_cache()
     _, membership = _v2_active_membership(band_id, lock=True)
     return _v2_require_upload_session_owner(band_id, session, membership)
 
@@ -310,7 +342,7 @@ def _v2_multipart_item(session, actual_size):
     fields = {
         'band_id': session.band_id,
         'created_by_membership_id': session.created_by_membership_id,
-        'visibility': band.default_visibility,
+        'visibility': upload_session_visibility(session, band.default_visibility),
         'object_key': session.object_key,
     }
     if spec is PERSONAL_LOG_TARGET:
@@ -335,7 +367,7 @@ def _v2_direct_item(session, actual_size):
     fields = {
         'band_id': session.band_id,
         'created_by_membership_id': session.created_by_membership_id,
-        'visibility': band.default_visibility,
+        'visibility': upload_session_visibility(session, band.default_visibility),
         'object_key': session.object_key,
     }
     if session.kind == 'personal_log':
@@ -358,7 +390,7 @@ def _v2_direct_gallery_item(session, actual_size):
     band = db.session.get(Band, session.band_id)
     image = GalleryImage(
         band_id=session.band_id, created_by_membership_id=session.created_by_membership_id,
-        visibility=band.default_visibility, filename=session.object_key.rsplit('/', 1)[1],
+        visibility=upload_session_visibility(session, band.default_visibility), filename=session.object_key.rsplit('/', 1)[1],
         original_filename=session.original_filename, object_key=session.object_key,
         file_size=actual_size,
     )
@@ -387,6 +419,7 @@ def v2_initiate_direct_upload(band_id):
 
     def operation():
         band, membership = _v2_active_membership(band_id, lock=True)
+        assertion = validate_upload_assertion(data, current_app_user(required=True))
         used, reserved = _v2_used_and_reserved_bytes(band.id)
         if used + reserved + declared_bytes > band.storage_quota_bytes:
             raise ValidationError('Band storage quota exceeded.', status_code=409)
@@ -401,13 +434,13 @@ def v2_initiate_direct_upload(band_id):
             title = data.get('title', '').strip() if isinstance(data.get('title'), str) else ''
             if len(title or filename) > 200:
                 raise ValidationError('title must be 200 characters or less')
-            return create_direct_session(
+            return _v2_policy_session(create_direct_session, membership, assertion,
                 kind='personal_log', object_key=f'bands/{band.id}/personal_logs/{secure_name}',
                 member_id=_v2_personal_log_target(band.id, data.get('member_id')),
                 title=title or filename, **common,
             )
         song_id, rehearsal_id = _v2_media_target(band.id, data)
-        return create_direct_session(
+        return _v2_policy_session(create_direct_session, membership, assertion,
             kind='media', object_key=f'bands/{band.id}/media/{secure_name}',
             song_id=song_id, rehearsal_id=rehearsal_id, **common,
         )
@@ -454,10 +487,11 @@ def v2_initiate_direct_gallery_upload(band_id):
 
     def operation():
         band, membership = _v2_active_membership(band_id, lock=True)
+        assertion = validate_upload_assertion(data, current_app_user(required=True))
         used, reserved = _v2_used_and_reserved_bytes(band.id)
         if used + reserved + declared_bytes > band.storage_quota_bytes:
             raise ValidationError('Band storage quota exceeded.', status_code=409)
-        return create_direct_session(
+        return _v2_policy_session(create_direct_session, membership, assertion,
             band_id=band.id, created_by_membership_id=membership.id, kind='gallery',
             object_key=f'bands/{band.id}/gallery/{secure_name}', original_filename=filename,
             content_type=content_type or guess_content_type(filename), declared_bytes=declared_bytes,
@@ -510,6 +544,7 @@ def v2_initiate_multipart_upload(band_id):
 
     def operation():
         band, membership = _v2_active_membership(band_id, lock=True)
+        assertion = validate_upload_assertion(data, current_app_user(required=True))
         used, reserved = _v2_used_and_reserved_bytes(band.id)
         if used + reserved + declared_bytes > band.storage_quota_bytes:
             raise ValidationError('Band storage quota exceeded.', status_code=409)
@@ -525,10 +560,12 @@ def v2_initiate_multipart_upload(band_id):
                 raise ValidationError('title must be 200 characters or less')
             member_id = _v2_personal_log_target(band.id, data.get('member_id'))
             common['object_key'] = common['object_key'].format(prefix='personal_logs')
-            return create_session(PERSONAL_LOG_TARGET, member_id=member_id, title=title or filename, **common)
+            return _v2_policy_session(create_session, membership, assertion, PERSONAL_LOG_TARGET,
+                                      member_id=member_id, title=title or filename, **common)
         song_id, rehearsal_id = _v2_media_target(band.id, data)
         common['object_key'] = common['object_key'].format(prefix='media')
-        return create_session(MEDIA_TARGET, song_id=song_id, rehearsal_id=rehearsal_id, **common)
+        return _v2_policy_session(create_session, membership, assertion, MEDIA_TARGET,
+                                  song_id=song_id, rehearsal_id=rehearsal_id, **common)
 
     session, capability_token = _v2_write(operation)
     return jsonify({

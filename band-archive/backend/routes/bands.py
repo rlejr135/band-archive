@@ -169,6 +169,7 @@ def _logo_for_management_scope(scope):
     from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
     from v2_content_serializers import scope_with_band_visibility
     from v2_remaining_read_serializers import serialize_gallery_image
+    from content_restrictions import restriction_predicate
 
     selected = db.session.get(BandLogo, scope.band_id)
     if selected is None:
@@ -176,6 +177,7 @@ def _logo_for_management_scope(scope):
     image = GalleryImage.query.filter(
         GalleryImage.id == selected.gallery_image_id,
         GalleryImage.band_id == scope.band_id,
+        restriction_predicate(GalleryImage),
         _creator_is_scoped_sql(GalleryImage, scope),
         _not_pending_delete(GalleryImage, 'gallery'),
     ).one_or_none()
@@ -217,6 +219,7 @@ def get_band_logo_management(band_slug):
     from routes.content_reads import _gallery_query
     from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
     from v2_remaining_read_serializers import serialize_gallery_image
+    from content_restrictions import restriction_predicate
 
     band = Band.query.filter_by(slug=band_slug).filter(Band.deleted_at.is_(None)).one_or_none()
     if band is None:
@@ -238,6 +241,7 @@ def get_band_logo_management(band_slug):
         # other private-resource route accepts this scope.
         query = GalleryImage.query.filter(
             GalleryImage.band_id == band.id,
+            restriction_predicate(GalleryImage),
             GalleryImage.visibility.in_(('PUBLIC', 'MEMBERS')),
             _creator_is_scoped_sql(GalleryImage, scope),
             _not_pending_delete(GalleryImage, 'gallery'),

@@ -63,6 +63,10 @@ class StorageClient:
 
     def generate_url(self, key, expires_in=None):
         """presigned URL 생성 (기본: config S3_PRESIGN_EXPIRES)"""
+        from flask import has_app_context
+        if has_app_context():
+            from content_restrictions import require_unrestricted_key
+            require_unrestricted_key(key)
         return self._client.generate_presigned_url(
             'get_object',
             Params={'Bucket': self._bucket, 'Key': key},

@@ -148,7 +148,7 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            assert migration_head_revision() == '20261020_21'
+            assert migration_head_revision() == '20261021_22'
             assert _version(app) == migration_head_revision()
             with db.engine.connect() as connection:
                 assert 'band_request_email_outbox' in inspect(connection).get_table_names()
@@ -863,6 +863,13 @@ def test_postgres_audit_trigger_verifier_checks_catalog_oid_contract_and_functio
         ("(((role))::text = (('owner')::text)) AND (((status)::text) = ('active'::text))",
          frozenset({('role', 'owner'), ('status', 'active')})),
         ("((status)::text='pending'::text)", frozenset({('status', 'pending')})),
+        ("((state)::text = 'active'::text)", frozenset({('state', 'active')})),
+        ("((audit_event.event_type)::text = 'upload_policy_confirmed'::text)",
+         frozenset({('event_type', 'upload_policy_confirmed')})),
+        ("state = 'released'", None),
+        ("event_type = 'active'", None),
+        ("state = 'active' OR state = 'released'", None),
+        ("state = 'active' AND status = 'pending'", None),
         ("(((gallery_image.is_featured IS TRUE)))", ('is_featured', 'is_true')),
         ("(invalidated_at IS NULL) AND (redeemed_at IS NULL)",
          frozenset({('invalidated_at', 'is_null'), ('redeemed_at', 'is_null')})),
@@ -888,7 +895,9 @@ class _PostgresIndexesConnection:
 
     dialect = type('Dialect', (), {'name': 'postgresql'})()
 
-    def __init__(self, owner_predicate, request_predicate, gallery_predicate='(is_featured IS TRUE)'):
+    def __init__(self, owner_predicate, request_predicate, gallery_predicate='(is_featured IS TRUE)',
+                 restriction_predicate="((state)::text = 'active'::text)",
+                 upload_predicate="((event_type)::text = 'upload_policy_confirmed'::text)"):
         self.rows = [
             ('band_membership', 'uq_band_membership_active_owner', owner_predicate),
             ('band_creation_request', 'uq_band_creation_request_pending_user_slug', request_predicate),
@@ -897,6 +906,8 @@ class _PostgresIndexesConnection:
             ('song_suggestion_vote', 'uq_song_suggestion_vote_user', '(voter_user_id IS NOT NULL)'),
             ('legacy_band_claim_token', 'uq_legacy_band_claim_outstanding',
              '(invalidated_at IS NULL) AND (redeemed_at IS NULL)'),
+            ('content_restriction', 'ix_content_restriction_active_target', restriction_predicate),
+            ('audit_event', 'ix_audit_event_upload_policy_target', upload_predicate),
         ]
 
     def execute(self, statement):
@@ -953,6 +964,40 @@ def test_postgres_featured_gallery_partial_index_predicate_is_exact(
             differences = _partial_index_differences(connection, db.metadata)
         gallery_differences = [item for item in differences if item.startswith('gallery_image.')]
         assert bool(gallery_differences) is not valid
+    finally:
+        _dispose(app)
+
+
+@pytest.mark.parametrize(
+    ('restriction_predicate', 'upload_predicate', 'invalid_index'),
+    [
+        ("((state)::text = 'released'::text)",
+         "((event_type)::text = 'upload_policy_confirmed'::text)",
+         'content_restriction.ix_content_restriction_active_target'),
+        ("state = 'active' OR state = 'released'",
+         "((event_type)::text = 'upload_policy_confirmed'::text)",
+         'content_restriction.ix_content_restriction_active_target'),
+        ("((state)::text = 'active'::text)",
+         "((event_type)::text = 'upload_policy_rejected'::text)",
+         'audit_event.ix_audit_event_upload_policy_target'),
+        ("((state)::text = 'active'::text)",
+         "event_type = 'upload_policy_confirmed' OR event_type = 'upload_policy_rejected'",
+         'audit_event.ix_audit_event_upload_policy_target'),
+    ],
+)
+def test_postgres_new_policy_partial_indexes_reject_changed_predicates(
+        tmp_path, restriction_predicate, upload_predicate, invalid_index):
+    app = _migration_app(tmp_path / 'postgres-policy-predicate.db')
+    try:
+        with app.app_context():
+            connection = _PostgresIndexesConnection(
+                "((role)::text = 'owner'::text) AND ((status)::text = 'active'::text)",
+                "((status)::text = 'pending'::text)",
+                restriction_predicate=restriction_predicate,
+                upload_predicate=upload_predicate,
+            )
+            differences = _partial_index_differences(connection, db.metadata)
+        assert any(item.startswith(invalid_index) for item in differences)
     finally:
         _dispose(app)
 

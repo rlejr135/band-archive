@@ -7,6 +7,7 @@ from legacy_scope import legacy_band_id
 from errors import NotFoundError
 from legacy_read_visibility import legacy_read_scope
 from band_access import PUBLIC
+from content_restrictions import restriction_predicate
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -28,7 +29,9 @@ def get_stats():
         # private import band contains any content.
         return _empty_stats()
 
-    visible_songs = db.session.query(Song.id, Song.status).filter(Song.band_id == band_id)
+    visible_songs = db.session.query(Song.id, Song.status).filter(
+        Song.band_id == band_id, restriction_predicate(Song),
+    )
     if not scope.is_member:
         if scope.band_visibility != PUBLIC:
             return _empty_stats()

@@ -5,7 +5,8 @@ from flask import Blueprint, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
 from errors import ValidationError
-from policy_service import accept_policy, public_policy_config, receipt_required
+from policy_service import (accept_policy, public_policy_config, receipt_required,
+                            accept_upload_policy, upload_policy_receipt_required)
 
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/v2')
@@ -18,8 +19,10 @@ def me():
     payload = user.to_dict()
     if current_app.config.get('BAND_API_SCHEMA_READY', False):
         payload['policy_acceptance_required'] = receipt_required(user)
+        payload['upload_policy_acceptance_required'] = upload_policy_receipt_required(user)
     else:
         payload['policy_acceptance_required'] = False
+        payload['upload_policy_acceptance_required'] = False
     return jsonify({'user': payload})
 
 
@@ -31,6 +34,7 @@ def policy_config():
 
 
 @auth_bp.post('/me/policy-acceptance')
+@auth_bp.post('/me/upload-policy-acceptance')
 @require_auth
 def policy_acceptance():
     if not current_app.config.get('BAND_API_SCHEMA_READY', False):
@@ -46,7 +50,8 @@ def policy_acceptance():
         body = None
     if not isinstance(body, dict):
         raise ValidationError('A JSON object is required.')
-    item, created = accept_policy(current_app_user(), body)
+    accept = accept_upload_policy if request.path.endswith('/upload-policy-acceptance') else accept_policy
+    item, created = accept(current_app_user(), body)
     accepted_at = item.accepted_at if item else None
     if accepted_at is not None and accepted_at.tzinfo is None:
         accepted_at = accepted_at.replace(tzinfo=timezone.utc)
@@ -56,4 +61,5 @@ def policy_acceptance():
         'accepted_at': accepted_at.astimezone(timezone.utc).isoformat() if accepted_at else None,
     })
     response.headers['Cache-Control'] = 'no-store'
+    response.vary.add('Authorization')
     return response, 201 if created else 200

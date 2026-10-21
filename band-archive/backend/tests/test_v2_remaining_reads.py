@@ -1,6 +1,7 @@
 """Contracts for the remaining tenant-scoped Phase 6 read domains."""
 
 from datetime import datetime, timezone
+import re
 import pytest
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
@@ -232,7 +233,11 @@ def test_postgres_contracts_keep_creator_comment_and_featured_queries_tenant_fir
     assert 'band_membership.band_id = 71' in creator_sql
     assert 'EXISTS' in creator_sql and 'personal_log.band_id = 71' in creator_sql
     assert 'comment.band_id = 71' in comment_sql
-    assert 'comment_1.personal_log_id = 19' in comment_sql and 'EXISTS' in comment_sql
+    parent_aliases = re.findall(r'\b(comment_\d+)\.personal_log_id = 19\b', comment_sql)
+    assert 'EXISTS' in comment_sql and any(
+        f'{alias}.band_id = 71' in comment_sql and f'{alias}.id = comment.parent_id' in comment_sql
+        for alias in parent_aliases
+    )
     # The duplicate detector sees every same-band featured row before any
     # audience predicate. The second audience query then applies PUBLIC.
     assert 'gallery_image.band_id = 71' in featured_sql

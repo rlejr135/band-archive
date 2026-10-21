@@ -434,6 +434,47 @@ class AuditEvent(db.Model):
 
     band = db.relationship('Band')
     actor = db.relationship('AppUser')
+    __table_args__ = (
+        db.Index('ix_audit_event_upload_policy_target', 'target_type', 'target_id',
+                 sqlite_where=db.text("event_type = 'upload_policy_confirmed'"),
+                 postgresql_where=db.text("event_type = 'upload_policy_confirmed'")),
+    )
+
+
+class ContentRestriction(db.Model):
+    """An operator-reviewed case restricts access without deleting content."""
+    __tablename__ = 'content_restriction'
+
+    id = db.Column(db.Integer, primary_key=True)
+    band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False)
+    resource_type = db.Column(db.String(20), nullable=False)
+    resource_id = db.Column(db.Integer, nullable=False)
+    case_ref = db.Column(db.String(36), nullable=False)
+    reason_code = db.Column(db.String(20), nullable=False)
+    state = db.Column(db.String(10), nullable=False, default='active', server_default='active')
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False,
+                           default=lambda: datetime.now(timezone.utc))
+    released_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True)
+    released_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('band_id', 'resource_type', 'resource_id', 'case_ref',
+                            name='uq_content_restriction_case_target'),
+        db.CheckConstraint('resource_id > 0', name='ck_content_restriction_resource_id'),
+        db.CheckConstraint("resource_type IN ('song','rehearsal','member','media','personal_log',"
+                           "'gallery','announcement','suggestion','comment')",
+                           name='ck_content_restriction_resource_type'),
+        db.CheckConstraint("reason_code IN ('copyright','privacy','portrait','other_rights')",
+                           name='ck_content_restriction_reason'),
+        db.CheckConstraint("state IN ('active','released')", name='ck_content_restriction_state'),
+        db.CheckConstraint("(state = 'active' AND released_at IS NULL AND released_by_user_id IS NULL) OR "
+                           "(state = 'released' AND released_at IS NOT NULL)",
+                           name='ck_content_restriction_release'),
+        db.Index('ix_content_restriction_active_target', 'band_id', 'resource_type', 'resource_id',
+                 sqlite_where=db.text("state = 'active'"),
+                 postgresql_where=db.text("state = 'active'")),
+    )
 
 
 class TenantBackfillState(db.Model):
@@ -489,16 +530,18 @@ class Song(db.Model):
     )
 
     def to_dict(self, media_viewer_votes=None, *, media_items=None, rehearsal_items=None):
+        from content_restrictions import is_restricted, require_unrestricted
+        require_unrestricted(self)
         media_viewer_votes = media_viewer_votes or {}
         # Keep the pre-vote list order for Song itself.  Votes only rank media
         # within a song; ties retain the historical ID/insertion order.
         media_source = self.media_files if media_items is None else media_items
         rehearsal_source = self.rehearsals if rehearsal_items is None else rehearsal_items
         media = sorted(
-            (item for item in media_source if item.band_id == self.band_id),
+            (item for item in media_source if item.band_id == self.band_id and not is_restricted(item)),
             key=lambda item: (-item.vote_score, item.id),
         )
-        rehearsals = [item for item in rehearsal_source if item.band_id == self.band_id]
+        rehearsals = [item for item in rehearsal_source if item.band_id == self.band_id and not is_restricted(item)]
         return {
             'id': self.id,
             'title': self.title,
@@ -931,6 +974,8 @@ class Rehearsal(db.Model):
     )
 
     def to_dict(self, *, song_items=None, media_items=None):
+        from content_restrictions import is_restricted, require_unrestricted
+        require_unrestricted(self)
         songs = self.songs if song_items is None else song_items
         media = self.media_files if media_items is None else media_items
         return {
@@ -946,8 +991,8 @@ class Rehearsal(db.Model):
             'memo': self.memo,
             'color': self.color,
             'songs': [{'id': s.id, 'title': s.title, 'artist': s.artist}
-                      for s in songs if s.band_id == self.band_id],
-            'media_count': sum(item.band_id == self.band_id for item in media),
+                      for s in songs if s.band_id == self.band_id and not is_restricted(s)],
+            'media_count': sum(item.band_id == self.band_id and not is_restricted(item) for item in media),
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -996,6 +1041,8 @@ class GalleryImage(db.Model):
     def to_dict(self):
         from storage import storage
         from deletion_service import is_pending_deletion
+        from content_restrictions import require_unrestricted
+        require_unrestricted(self)
         pending = is_pending_deletion('gallery', self.id, self.band_id)
         visible = True
         from flask import has_request_context
@@ -1069,6 +1116,8 @@ class Comment(db.Model):
         return check_password_hash(self.password_hash, password)
 
     def to_dict(self):
+        from content_restrictions import is_restricted, require_unrestricted
+        require_unrestricted(self)
         return {
             'id': self.id,
             'media_id': self.media_id,
@@ -1078,7 +1127,8 @@ class Comment(db.Model):
             'content': self.content,
             'timestamp_seconds': self.timestamp_seconds,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'replies': [reply.to_dict() for reply in self.replies if reply.band_id == self.band_id],
+            'replies': [reply.to_dict() for reply in self.replies
+                        if reply.band_id == self.band_id and not is_restricted(reply)],
         }
 
 
