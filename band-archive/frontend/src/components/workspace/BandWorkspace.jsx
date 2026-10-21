@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useServicePolicy } from '../../context/ServicePolicyContext.jsx';
+import { reviewPublicVisibility } from '../../services/uploadPolicy.js';
 import { useBands } from '../../context/BandContext.jsx';
 import BandSwitcher from '../bands/BandSwitcher.jsx';
 import BandActivityDashboard from '../dashboard/BandActivityDashboard.jsx';
@@ -285,7 +287,7 @@ const ContentDetail = ({ kind, item, onEdit, onDeleted }) => {
   const resourceLabel = kind === 'songs' ? '곡' : '합주';
   return <article><div className="detail-heading"><div><h2>{item.title}</h2><p>{kind === 'songs' ? item.artist : `${item.date}${item.time ? ` · ${item.time}` : ''}`}</p></div>{item.can_edit && <button className="secondary-btn" onClick={onEdit}>수정</button>}<BandDeleteAction band={band} workspaceKey={workspaceKey} canDelete={item.can_delete} label={resourceLabel} path={kind === 'songs' ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.rehearsal(band.id, item.id)} onDeleted={onDeleted} /></div>
     {kind === 'songs' ? <dl><dt>상태</dt><dd>{item.status || '-'}</dd><dt>장르</dt><dd>{item.genre || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl> : <dl><dt>장소</dt><dd>{item.location || '-'}</dd><dt>연결된 곡</dt><dd>{item.songs?.map((song) => song.title).join(', ') || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl>}
-    {kind === 'songs' && band.membership && <BandUploadInput band={band} songId={item.id} onMediaComplete={refreshAuthoritativeMedia} />}
+    {kind === 'songs' && band.membership && <BandUploadInput band={band} songId={item.id} parentVisibility={item.effective_visibility || item.visibility} onMediaComplete={refreshAuthoritativeMedia} />}
     <h3>재생 미디어</h3>{mediaState.loading && mediaState.pages.length === 0 ? <p>미디어를 불러오는 중입니다…</p> : mediaState.error && mediaState.pages.length === 0 ? <p className="workspace-muted">{mediaState.error}</p> : mediaState.pages.length === 0 ? <p className="workspace-muted">표시할 미디어가 없습니다. 업로드는 준비 중입니다.</p> : <><div className="media-list">{mediaState.pages.flatMap((page) => page.media.map((media) => <PlaybackMedia key={media.id} media={media} band={band} api={api} workspaceKey={workspaceKey} onMediaUpdate={updateMedia} onAuthoritativeRefresh={refreshAuthoritativeMedia} onDeleted={refreshAuthoritativeMedia} onStale={() => { if (takeOneStaleRefresh(staleAttempts.current, page.offset, media.id)) loadMedia(page.offset); }} />))}</div>{mediaState.pagination?.has_more && <button className="secondary-btn" disabled={mediaState.loading} onClick={() => loadMedia(mediaState.pagination.next_offset)}>{mediaState.loading ? '미디어를 불러오는 중…' : '미디어 더 불러오기'}</button>}{mediaState.error && <p className="workspace-muted" role="alert">{mediaState.error}</p>}</>}
   </article>;
 };
@@ -306,6 +308,7 @@ const PlaybackMedia = ({ media, band, api, workspaceKey, onMediaUpdate, onAuthor
 };
 
 const ContentForm = ({ kind, item, onDone, onCancel }) => {
+  const { config } = useServicePolicy();
   const { band, api, workspaceKey } = useWorkspace(); const [saving, setSaving] = useState(false); const savingRef = useRef(false); const [error, setError] = useState(''); const [songs, setSongs] = useState([]);
   const [resultUnknown, setResultUnknown] = useState(false);
   const [searchParams] = useSearchParams();
@@ -317,7 +320,11 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
   useEffect(() => { if (kind !== 'rehearsals') return undefined; const controller = new AbortController(); api.requestJson(bandWorkspacePaths.songs(band.id, { limit: 100, offset: 0 }), requestOptions(controller.signal)).then((response) => setSongs(response?.songs || [])).catch(() => setSongs([])); return () => controller.abort(); }, [api, band.id, kind]);
   const change = (event) => setValue((previous) => ({ ...previous, [event.target.name]: event.target.value }));
   const save = async (event) => {
-    event.preventDefault(); if (savingRef.current || resultUnknown) return; savingRef.current = true; setSaving(true); setError(''); const controller = new AbortController(); saveController.current = controller; let submitted = false;
+    event.preventDefault(); if (savingRef.current || resultUnknown) return;
+    const relationshipsChanged = kind === 'rehearsals' && Boolean(item) && [...(item.songs || []).map((song) => String(song.id))].sort().join(',') !== [...value.song_ids].sort().join(',');
+    const decision = reviewPublicVisibility(config, { previous: item?.visibility, next: value.visibility, relationshipsChanged });
+    if (!decision.proceed) { if (decision.error) setError(decision.error); return; }
+    savingRef.current = true; setSaving(true); setError(''); const controller = new AbortController(); saveController.current = controller; let submitted = false;
     try {
       if (candidate.current) {
         const current = await api.requestJson(availabilityPath(band.id, value.date, value.date), { signal: controller.signal });
@@ -330,7 +337,7 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
       }
       const path = kind === 'songs' ? (item ? bandWorkspacePaths.song(band.id, item.id) : bandWorkspacePaths.songs(band.id)) : (item ? bandWorkspacePaths.rehearsal(band.id, item.id) : bandWorkspacePaths.rehearsals(band.id));
       submitted = true;
-      await api.requestJson(path, { method: item ? 'PATCH' : 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(kind === 'songs' ? songPayload(value) : rehearsalPayload(value)) });
+      await api.requestJson(path, { method: item ? 'PATCH' : 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(kind === 'songs' ? songPayload(value) : rehearsalPayload(value)), ...(decision.confirmation ? { visibility_confirm: decision.confirmation } : {}) }) });
       if (!controller.signal.aborted && live.current) onDone();
     } catch (cause) { if (!controller.signal.aborted && live.current) {
       if (candidate.current && submitted && (!cause.status || cause.status >= 500)) { setResultUnknown(true); setError('저장 결과를 확인하지 못했습니다. 중복 생성을 막기 위해 다시 저장하지 않습니다. 취소로 폼을 닫은 뒤 합주 목록을 새로고침해 결과를 확인해 주세요.'); }
@@ -342,6 +349,7 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
 };
 
 export const AnnouncementEditor = ({ announcement, band, api, workspaceKey, onSaved, onForbidden }) => {
+  const { config } = useServicePolicy();
   const [editing, setEditing] = useState(false); const [content, setContent] = useState(''); const [visibility, setVisibility] = useState('MEMBERS'); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   const savingRef = useRef(false); const generation = useRef(0); const controllerRef = useRef(null);
   const defaultVisibility = announcement?.visibility === 'PUBLIC' || announcement?.visibility === 'MEMBERS' ? announcement.visibility : band.default_visibility === 'PUBLIC' ? 'PUBLIC' : 'MEMBERS';
@@ -354,11 +362,13 @@ export const AnnouncementEditor = ({ announcement, band, api, workspaceKey, onSa
   }, [announcement?.content, announcement?.visibility, defaultVisibility, workspaceKey]);
   const save = async (event) => {
     event.preventDefault(); if (savingRef.current || !content.trim()) return;
+    const decision = reviewPublicVisibility(config, { previous: announcement?.visibility, next: visibility });
+    if (!decision.proceed) { if (decision.error) setError(decision.error); return; }
     const token = ++generation.current; const controller = new AbortController();
     controllerRef.current?.abort(); controllerRef.current = controller;
     savingRef.current = true; setSaving(true); setError('');
     try {
-      const response = await api.requestJson(bandWorkspacePaths.announcement(band.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: content.trim(), visibility }), signal: controller.signal });
+      const response = await api.requestJson(bandWorkspacePaths.announcement(band.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: content.trim(), visibility, ...(decision.confirmation ? { visibility_confirm: decision.confirmation } : {}) }), signal: controller.signal });
       if (controller.signal.aborted || token !== generation.current) return;
       if (response?.announcement) onSaved?.(response.announcement);
       setEditing(false);
@@ -544,15 +554,15 @@ export const GalleryWorkspace = () => {
     if (kind === 'featured') refreshFeatured();
     else gallery.refresh();
   };
-  const uploadGallery = useCallback(async (file, onProgress) => {
+  const uploadGallery = useCallback(async (file, onProgress, { uploadPolicy, isCurrent: reviewIsCurrent = () => true } = {}) => {
     // Capture both the band id and account-scoped workspace identity before
     // initiating. A late B completion must never refresh A's gallery.
     const capturedBandId = band.id;
     const requestKey = `${workspaceKey}:gallery-upload`;
     const token = uploadGate.current.begin(requestKey);
-    const isCurrent = () => uploadGate.current.accepts(requestKey, token);
+    const isCurrent = () => reviewIsCurrent() && uploadGate.current.accepts(requestKey, token);
     const result = await uploadBandGalleryImageFile({
-      file, bandId: capturedBandId, api, onProgress, isCurrent,
+      file, bandId: capturedBandId, api, uploadPolicy, onProgress, isCurrent,
     });
     if (isCurrent()) {
       gallery.refresh();
@@ -561,7 +571,7 @@ export const GalleryWorkspace = () => {
     return result?.gallery || result;
   }, [api, band.id, gallery, refreshFeatured, workspaceKey]);
   return <section className="workspace-page" aria-labelledby="workspace-gallery-title"><div className="workspace-page-heading"><div><h1 id="workspace-gallery-title">갤러리</h1><p>밴드에서 공개한 사진입니다.</p></div></div>
-    {band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active' && <BandUploadInput band={band} onUpload={uploadGallery} accept="image/*,.png,.jpg,.jpeg,.gif,.webp" multiple={true} />}
+    {band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active' && <BandUploadInput band={band} parentVisibility={band.default_visibility} onUpload={uploadGallery} accept="image/*,.png,.jpg,.jpeg,.gif,.webp" multiple={true} />}
     {featured?.url && <section className="workspace-featured"><h2>대표 사진</h2><img src={featured.url} alt="대표 갤러리 이미지" onError={() => refreshImage(featured.id, 'featured')} />{!gallery.entries.some((image) => Number(image.id) === Number(featured.id)) && <BandDeleteAction band={band} workspaceKey={`${workspaceKey}:gallery:${featured.id}`} canDelete={featured.can_delete} label="갤러리 사진" path={bandWorkspacePaths.galleryImage(band.id, featured.id)} asynchronous resourceType="gallery" onDeleted={() => { gallery.refresh(); refreshFeatured(); }} />}</section>}
     {gallery.loading && gallery.entries.length === 0 ? <p aria-live="polite">갤러리를 불러오는 중입니다…</p> : gallery.error && gallery.entries.length === 0 ? <ErrorState message={genericError} retry={gallery.refresh} /> : gallery.entries.length === 0 ? <div className="workspace-empty"><p>표시할 사진이 없습니다.</p></div> : <div className="workspace-gallery-grid">{gallery.entries.map((image) => <figure className="workspace-gallery-item" key={image.id}>{image.url ? <img src={image.url} alt="갤러리 이미지" onError={() => refreshImage(image.id)} /> : <div className="workspace-gallery-missing">표시할 사진이 없습니다.</div>}<BandDeleteAction band={band} workspaceKey={`${workspaceKey}:gallery:${image.id}`} canDelete={image.can_delete} label="갤러리 사진" path={bandWorkspacePaths.galleryImage(band.id, image.id)} asynchronous resourceType="gallery" onDeleted={() => { gallery.refresh(); refreshFeatured(); }} /></figure>)}</div>}
     {gallery.pagination?.has_more && <button className="secondary-btn" disabled={gallery.loading} onClick={gallery.loadMore}>{gallery.loading ? '사진을 불러오는 중…' : '사진 더 불러오기'}</button>}
@@ -588,8 +598,9 @@ export const SuggestionsWorkspace = () => {
 };
 
 const SuggestionForm = ({ item, onDone, onCancel }) => {
+  const { config } = useServicePolicy();
   const { band, api } = useWorkspace(); const [value, setValue] = useState({ title: item?.title || '', artist: item?.artist || '', link: item?.link || '', memo: item?.memo || '', visibility: item?.visibility || band.default_visibility || 'MEMBERS' }); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const flight = useRef(false);
-  const save = async (event) => { event.preventDefault(); if (flight.current) return; flight.current = true; setSaving(true); setError(''); try { await api.requestJson(item ? bandWorkspacePaths.suggestion(band.id, item.id) : bandWorkspacePaths.suggestions(band.id), { method: item ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(suggestionPayload(value)) }); onDone(); } catch { setError('추천곡을 저장하지 못했습니다. 입력값을 확인해 주세요.'); setSaving(false); } finally { flight.current = false; } };
+  const save = async (event) => { event.preventDefault(); if (flight.current) return; const decision = reviewPublicVisibility(config, { previous: item?.visibility, next: value.visibility }); if (!decision.proceed) { if (decision.error) setError(decision.error); return; } flight.current = true; setSaving(true); setError(''); try { await api.requestJson(item ? bandWorkspacePaths.suggestion(band.id, item.id) : bandWorkspacePaths.suggestions(band.id), { method: item ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...suggestionPayload(value), ...(decision.confirmation ? { visibility_confirm: decision.confirmation } : {}) }) }); onDone(); } catch { setError('추천곡을 저장하지 못했습니다. 입력값을 확인해 주세요.'); setSaving(false); } finally { flight.current = false; } };
   const change = (event) => setValue((previous) => ({ ...previous, [event.target.name]: event.target.value }));
   return <form className="workspace-form" onSubmit={save}><h2>{item ? '추천곡 수정' : '추천곡 추가'}</h2><label>제목<input required name="title" value={value.title} onChange={change} /></label><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>참고 링크<input required type="url" name="link" value={value.link} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label><label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving}>{saving ? '저장 중…' : '저장'}</button></div></form>;
 };

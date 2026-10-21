@@ -8,6 +8,12 @@ const response = (status, payload = {}) => ({
   json: async () => payload,
 });
 
+test('upload policy errors expose only supported safe codes, not raw backend details', async () => {
+  const api = (payload) => createAuthenticatedApiClient({ getAccessToken: async () => 'token', fetchImpl: async () => response(409, payload) });
+  await assert.rejects(api({ code: 'upload_policy_version_mismatch', error: 'sensitive internal details' }).requestJson('/upload'), (error) => error.code === 'upload_policy_version_mismatch' && error.message.includes('안내가 변경') && !error.message.includes('sensitive'));
+  await assert.rejects(api({ code: '<script>unsafe</script>', error: 'private' }).requestJson('/upload'), (error) => error.code === null && !error.message.includes('private'));
+});
+
 test('anonymous calls remain anonymous', async () => {
   const calls = [];
   const api = createAuthenticatedApiClient({

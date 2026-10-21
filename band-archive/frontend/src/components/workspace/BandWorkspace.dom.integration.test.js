@@ -15,14 +15,16 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let auth; let bands;
+let vite; let workspace; let auth; let bands; let policies;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-const load = async () => { if (workspace) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
+const load = async () => { if (workspace) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 
-const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null)))));
+// The existing API-contract fixtures explicitly cover the disabled rollout.
+// Enabled and unavailable policy behavior has its own real-form DOM cases.
+const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(policies.ServicePolicyContext.Provider, { value: { config: { policies: { upload: { enabled: false } } } } }, createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null))))));
 const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => createElement(
   auth.AuthContext.Provider, { value: authValue },
   createElement(bands.BandContext.Provider, { value: bandValue },

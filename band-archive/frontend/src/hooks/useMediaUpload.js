@@ -33,6 +33,10 @@ export function useUploadController() {
       (active.transport?.abort ? active.transport.abort(active.session) : abortMultipartUpload(active.session)).catch(() => {});
     }
   }, []);
+  useEffect(() => {
+    const activeUploads = activeRef.current;
+    return () => { activeUploads.forEach((_active, key) => cancel(key)); };
+  }, [cancel]);
   // This controller is mounted once by UploadProvider. User-started transfers must
   // outlive route components; only explicit cancel actions stop them.
   useEffect(() => {
@@ -108,7 +112,7 @@ export function useUploadController() {
     });
   }, [authenticatedApi,nativePending,poll]);
 
-  const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, band, onProgress, onStatus, onMediaUpdate }) => {
+  const upload = useCallback(async ({ key, file, songId, rehearsalId, memberId, title, band, uploadPolicy, onProgress, onStatus, onMediaUpdate }) => {
     const active = { cancelled: false, xhrs: new Set(), session: null, onStatus };
     activeRef.current.set(key, active);
     try {
@@ -188,7 +192,7 @@ export function useUploadController() {
         ? createBandUploadTransport({ bandId, api: authenticatedApi, putPart: getWebUploadTransport().putPart })
         : null;
       active.transport = bandTransport || transport;
-      const media = normalizeMedia(await (isBandUpload ? uploadBandMediaFile : uploadMediaFile)({ file, target, transport: bandTransport || undefined, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, isCancelled: () => active.cancelled, registerXhr: (xhr) => { if (active.cancelled) xhr.abort(); else active.xhrs.add(xhr); } }));
+      const media = normalizeMedia(await (isBandUpload ? uploadBandMediaFile : uploadMediaFile)({ file, target, ...(isBandUpload ? { uploadPolicy } : {}), transport: bandTransport || undefined, onProgress, onUploadState: onStatus, setSession: (session) => { active.session = session; }, isCancelled: () => active.cancelled, registerXhr: (xhr) => { if (active.cancelled) xhr.abort(); else active.xhrs.add(xhr); } }));
       if (active.cancelled) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
       onProgress(file.size, file.size); onStatus('queued', media); onMediaUpdate?.(media);
       const readProcessing = isBandUpload

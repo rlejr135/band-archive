@@ -2,13 +2,16 @@ import React, { useState, useCallback, useId, useEffect, useMemo, useRef } from 
 import useMediaUpload from '../../hooks/useMediaUpload';
 import { getUploadStatusLabel, isUploadCancellable } from '../../services/uploadPresentation';
 import { mergeNativeUploadState, nativeTargetMatches } from '../../services/nativeUploadQueue';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { UploadReview } from './UploadReview.jsx';
 import './FileUpload.css';
 
-const FileUpload = ({ 
+const FileUploadSession = ({
   songId,
   rehearsalId,
   memberId,
   band,
+  parentVisibility,
   onMediaComplete,
   onUpload,
   accept = "audio/*,video/*,image/*,.pdf,.mp3,.wav,.ogg,.m4a,.aac,.flac,.mp4,.webm,.mov,.avi,.mkv,.png,.jpg,.jpeg,.gif,.webp",
@@ -16,7 +19,10 @@ const FileUpload = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
-  const { upload, cancel, cancelByNativeId, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
+  const [staged, setStaged] = useState([]);
+  const live = useRef(true); const starting = useRef(false);
+  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
+  const { uploadBatch, cancel, cancelByNativeId, transport, nativePending, subscribeMediaCompletion } = useMediaUpload();
   const inputId = useId();
   const nativeTarget = useMemo(() => ({ ...(memberId ? { memberId } : { songId, rehearsalId }), bandId: band?.id }), [band?.id,memberId,rehearsalId,songId]);
   const onMediaCompleteRef = useRef(onMediaComplete);
@@ -53,32 +59,37 @@ const FileUpload = ({
     e.stopPropagation();
   }, []);
 
-  const handleFiles = useCallback(async (files) => {
-    for (const file of files) {
-      const uniqueId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-      const fileId = file.id || `${file.name}-${file.lastModified}-${uniqueId}`;
-      setUploadProgress(prev => ({ ...prev, [fileId]: { name: file.name, progress: 0, status: 'preparing', nativeId: file.id || null } }));
-
-      try {
-        const updateProgress = (loaded, total) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'uploading', progress: total ? Math.round((loaded / total) * 100) : 0 } }));
-        const media = onUpload
-          ? await onUpload(file, (percent) => updateProgress(percent, 100))
-          : await upload({
-            key: fileId, file, songId, rehearsalId, memberId, band,
-            onProgress: updateProgress,
-            onStatus: (status, mediaState) => setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status, error: mediaState?.error } })),
-          });
-        setUploadProgress(prev => ({ ...prev, [fileId]: {
-          ...prev[fileId],
-          status: media?.transcoding_status === 'failed' ? 'processing_failed' : 'completed',
-          progress: 100,
-          error: media?.processing_error || media?.error,
-        } }));
-      } catch (error) {
-        if (error.name !== 'AbortError') setUploadProgress(prev => ({ ...prev, [fileId]: { ...prev[fileId], status: 'failed', error: error.message } }));
+  const handleFiles = useCallback((files) => {
+    if (starting.current) return;
+    setStaged(Array.from(files).slice(0, multiple ? undefined : 1).map((file) => ({ file, id: globalThis.crypto.randomUUID() })));
+  }, [multiple]);
+  const startFiles = async ({ uploadPolicy }) => {
+    if (starting.current || !staged.length || !live.current) return;
+    starting.current = true;
+    const selected = staged; setStaged([]);
+    const patch = (id, value) => { if (live.current) setUploadProgress((previous) => ({ ...previous, [id]: { ...previous[id], ...value } })); };
+    const optionsFor = ({ id, file }) => ({ key: id, file, songId, rehearsalId, memberId, band, uploadPolicy,
+      onProgress: (loaded, total) => patch(id, { status: 'uploading', progress: total ? Math.round(loaded / total * 100) : 0 }),
+      onStatus: (status, mediaState) => patch(id, { status, error: mediaState?.error }),
+    });
+    selected.forEach(({ id, file }) => patch(id, { name: file.name, status: 'pending', progress: 0, nativeId: file.id || null }));
+    try {
+      if (onUpload) {
+        for (const entry of selected) {
+          if (!live.current) break;
+          try {
+            const media = await onUpload(entry.file, (percent) => patch(entry.id, { status: 'uploading', progress: percent }), { uploadPolicy, isCurrent: () => live.current });
+            patch(entry.id, { status: 'completed', progress: 100, error: media?.error });
+          } catch (error) { patch(entry.id, { status: error.name === 'AbortError' ? 'cancelled' : 'failed', error: error.message }); }
+        }
+      } else {
+        const results = await uploadBatch({ items: selected.map((entry) => ({ id: entry.id, options: optionsFor(entry) })) });
+        results.forEach((result) => patch(result.id, result.error ? { status: result.error.name === 'AbortError' ? 'cancelled' : 'failed', error: result.error.message } : { status: result.media?.transcoding_status === 'failed' ? 'processing_failed' : 'completed', progress: 100, error: result.media?.processing_error || result.media?.error }));
       }
-    }
-  }, [band, memberId, onUpload, rehearsalId, songId, upload]);
+    } catch (error) {
+      selected.forEach(({ id }) => patch(id, { status: error.name === 'AbortError' ? 'cancelled' : 'failed', error: '업로드를 시작하지 못했습니다. 현재 권한과 안내를 확인해 주세요.' }));
+    } finally { starting.current = false; }
+  };
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
@@ -145,6 +156,8 @@ const FileUpload = ({
         />
       </div>
 
+      {staged.length > 0 && <UploadReview files={staged} band={band} parentVisibility={parentVisibility} targetLabel={memberId ? `개인 연습 기록 #${memberId}` : songId ? `곡 #${songId}${rehearsalId ? ` · 합주 #${rehearsalId}` : ''}` : '갤러리'} onExclude={(id) => setStaged((previous) => previous.filter((entry) => entry.id !== id))} onCancel={() => setStaged([])} onStart={startFiles} />}
+
       {hasActiveUploads && (
         <div className="upload-progress-list">
           {Object.entries(uploadProgress).map(([fileId, item]) => (
@@ -165,4 +178,8 @@ const FileUpload = ({
   );
 };
 
+const FileUpload = (props) => {
+  const { user, authGeneration = 0 } = useAuth();
+  return <FileUploadSession key={`${user?.id || 'anonymous'}:${authGeneration}:${props.band?.id || ''}:${props.songId || ''}:${props.rehearsalId || ''}:${props.memberId || ''}`} {...props} />;
+};
 export default FileUpload;

@@ -77,9 +77,9 @@ const targetPayload = (target, file, filename) => target.kind === 'personal_log'
   ? { filename, original_filename: file.name, file_size: file.size, member_id: target.memberId, title: personalTitle(file, target.title) }
   : { filename, original_filename: file.name, file_size: file.size, song_id: target.songId, rehearsal_id: target.rehearsalId };
 
-const initiatePayload = (target, file) => target.kind === 'personal_log'
+const initiatePayload = (target, file, uploadPolicy) => ({ ...(target.kind === 'personal_log'
   ? { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, member_id: target.memberId, title: personalTitle(file, target.title) }
-  : { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, song_id: target.songId, rehearsal_id: target.rehearsalId };
+  : { filename: file.name, content_type: file.type || undefined, declared_bytes: file.size, song_id: target.songId, rehearsal_id: target.rehearsalId }), ...(uploadPolicy ? { upload_policy: uploadPolicy } : {}) });
 
 const throwIfCancelled = (isCancelled) => {
   if (isCancelled?.()) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
@@ -100,10 +100,10 @@ const uploadSingle = async ({ file, target, onProgress, registerXhr, isCancelled
 
 const acknowledgedParts = (session) => session?.acknowledged_parts || session?.ack_parts || session?.parts || [];
 
-const uploadMultipart = async ({ file, target, onProgress, onUploadState, registerXhr, setSession, isCancelled, transport = webTransport }) => {
+const uploadMultipart = async ({ file, target, uploadPolicy, onProgress, onUploadState, registerXhr, setSession, isCancelled, transport = webTransport }) => {
   throwIfCancelled(isCancelled);
   const { initiated, session } = await initiateMultipartSession({
-    initiate: () => transport.initiateMultipart(initiatePayload(target, file)),
+    initiate: () => transport.initiateMultipart(initiatePayload(target, file, uploadPolicy)),
     setSession: (session) => setSession?.({ ...session, uploadMode: 'multipart' }),
     isCancelled, abort: (current) => transport.abort(current),
   });
@@ -184,7 +184,7 @@ export const uploadBandMediaFile = async ({ transport, ...options }) => {
   if (isVideo(file) && file.size > MAX_VIDEO_BYTES) throw new Error('영상 파일은 1GiB를 초과할 수 없습니다.');
   if (isVideo(file) && file.size >= MULTIPART_THRESHOLD_BYTES) return uploadMultipart({ ...options, target, transport });
   throwIfCancelled(isCancelled);
-  const session = await transport.initiateDirect(initiatePayload(target, file));
+  const session = await transport.initiateDirect(initiatePayload(target, file, options.uploadPolicy));
   setSession?.({ ...session, uploadMode: 'direct' });
   if (isCancelled?.()) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
   await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => onProgress(loaded, file.size), registerXhr);
@@ -212,7 +212,7 @@ export const galleryUploadProgressPercent = (loaded, total) => {
 // Gallery remains browser-only, but its v2 request chain is still captured to
 // one immutable band URL.  The caller supplies isCurrent so a route/account
 // switch cannot turn a late completion into a refresh for a new workspace.
-export const uploadBandGalleryImageFile = async ({ file, bandId, api, onProgress, isCurrent = () => true }) => {
+export const uploadBandGalleryImageFile = async ({ file, bandId, api, uploadPolicy, onProgress, isCurrent = () => true }) => {
   if (!file || !Number.isInteger(Number(file.size)) || file.size <= 0) throw new Error('업로드할 이미지 파일이 올바르지 않습니다.');
   const capturedBandId = normalizePositiveInteger(bandId, '밴드 ID');
   const transport = createBandGalleryUploadTransport({
@@ -223,10 +223,12 @@ export const uploadBandGalleryImageFile = async ({ file, bandId, api, onProgress
   const ensureCurrent = () => {
     if (!isCurrent()) throw new DOMException('밴드가 변경되어 업로드 결과를 적용하지 않았습니다.', 'AbortError');
   };
+  ensureCurrent();
   const session = await transport.initiate({
     filename: file.name,
     content_type: file.type || undefined,
     declared_bytes: file.size,
+    ...(uploadPolicy ? { upload_policy: uploadPolicy } : {}),
   });
   ensureCurrent();
   await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => {

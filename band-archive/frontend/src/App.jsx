@@ -81,6 +81,7 @@ export const AppRoutes = () => <Routes>
   <Route path="/signup" element={<SignupPage />} />
   <Route path="/privacy" element={<PolicyPage kind="privacy" />} />
   <Route path="/terms" element={<PolicyPage kind="terms" />} />
+  <Route path="/upload-policy" element={<PolicyPage kind="upload" />} />
   <Route path="/verify-email" element={<VerifyEmailPage />} />
   <Route path="/invite" element={<InviteLinkRoute />} />
   <Route path="/invite/continue" element={<RequireAuth><InviteContinueRoute /></RequireAuth>} />

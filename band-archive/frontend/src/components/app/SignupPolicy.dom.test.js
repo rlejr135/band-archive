@@ -270,7 +270,11 @@ test('public policy hides unapproved draft facts and uses runtime contact after 
   assert.ok(view.getByText(/정식 정책을 준비/)); assert.equal(view.queryByText('Confirmed retention'), null); assert.ok(view.getByRole('link', { name: 'contact@example.test' }));
   const approved = config(); approved.service.contact_email = 'new-contact@example.test';
   view.rerender(tree(policyPages.PolicyPage, approved, account(), { kind: 'privacy' }));
-  assert.ok(view.getByText('Confirmed retention')); assert.ok(view.getByRole('link', { name: 'new-contact@example.test' })); assert.equal(view.queryByText('contact@example.test'), null);
+  assert.ok(view.getByText('Confirmed retention'));
+  const contactLinks = view.getAllByRole('link', { name: 'new-contact@example.test' });
+  assert.equal(contactLinks.length, 2);
+  assert.equal(contactLinks.every((link) => link.getAttribute('href') === 'mailto:new-contact@example.test'), true);
+  assert.equal(view.queryByText('contact@example.test') === null, true);
 });
 
 test('runtime policy timeout is bounded, explicit retry recovers, and old response is ignored', async () => {

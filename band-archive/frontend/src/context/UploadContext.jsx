@@ -19,8 +19,8 @@ const targetLabel = (target = {}) => {
 };
 
 export const UploadProvider = ({ children }) => {
-  const { user } = useAuth();
-  return <UploadTaskProvider key={user?.id || 'anonymous'} userId={user?.id}>{children}</UploadTaskProvider>;
+  const { user, authGeneration = 0 } = useAuth();
+  return <UploadTaskProvider key={`${user?.id || 'anonymous'}:${authGeneration}`} userId={user?.id}>{children}</UploadTaskProvider>;
 };
 
 const UploadTaskProvider = ({ children, userId }) => {
@@ -30,6 +30,8 @@ const UploadTaskProvider = ({ children, userId }) => {
   const registry = useRef(createUploadJobRegistry());
   const dismissedNative = useRef(new Set());
   const completions = useRef(createUploadCompletionStore());
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   useEffect(() => {
     persistBandUploadTasks(userId, tasks);
   }, [tasks, userId]);
@@ -55,6 +57,7 @@ const UploadTaskProvider = ({ children, userId }) => {
   }, []);
 
   const upload = useCallback((options) => {
+    if (!active.current) return Promise.reject(new DOMException('계정이 변경되어 업로드를 중단했습니다.', 'AbortError'));
     const { key, file, songId, rehearsalId, memberId, title, band } = options;
     const target = { songId, rehearsalId, memberId, title, bandId: band?.id };
     const bandTask = band?.id ? { bandId: Number(band.id), bandName: band.name || `밴드 #${band.id}`, bandSlug: band.slug || null } : {};
@@ -182,7 +185,7 @@ const UploadTaskProvider = ({ children, userId }) => {
     for (const item of items) {
       const target = { songId: item.options.songId, rehearsalId: item.options.rehearsalId, memberId: item.options.memberId, title: item.options.title, bandId: item.options.band?.id };
       const id = createUploadTaskId({ key: item.options.key, file: item.options.file, target });
-      if (registry.current.isCancelled(id)) {
+      if (!active.current || registry.current.isCancelled(id)) {
         results.push({ ...item, taskId: id, error: new DOMException('업로드가 취소되었습니다.', 'AbortError') });
         continue;
       }

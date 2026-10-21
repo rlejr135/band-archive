@@ -1,10 +1,11 @@
 import { API_URL } from './api.js';
 
 export class ApiRequestError extends Error {
-  constructor(message, status) {
+  constructor(message, status, code = null) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -71,7 +72,13 @@ export const createAuthenticatedApiClient = ({
       assertActive();
       response = await send(token);
     }
-    if (!response.ok) throw new ApiRequestError(errorMessage, response.status);
+    if (!response.ok) {
+      let payload; try { payload = await response.json(); } catch { /* Keep the generic client message for non-JSON errors. */ }
+      assertActive();
+      const code = typeof payload?.code === 'string' && /^[a-z_]{1,80}$/.test(payload.code) ? payload.code : null;
+      const message = code === 'upload_policy_version_mismatch' ? '업로드 안내가 변경되었습니다. 파일을 다시 선택하고 현재 안내를 확인해 주세요.' : code === 'upload_policy_acceptance_required' ? '최초 업로드 약관·연령 확인이 필요합니다. 파일을 다시 선택해 확인해 주세요.' : errorMessage;
+      throw new ApiRequestError(message, response.status, code);
+    }
     return response.json();
   };
 

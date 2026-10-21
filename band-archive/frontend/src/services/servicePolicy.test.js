@@ -19,3 +19,18 @@ test('enabled policy and CAPTCHA reject incomplete facts, versions, and public k
   const notReady = valid(); notReady.policies.ready = false; assert.throws(() => validateServicePolicy(notReady));
   const missingKey = valid(); missingKey.captcha.site_key = ''; assert.throws(() => validateServicePolicy(missingKey));
 });
+
+test('upload rollout requires a ready supported policy while disabled rollout preserves existing contracts', () => {
+  const enabled = valid();
+  enabled.policies.upload = { enabled: true, version: 'u1', default_visibility: 'MEMBERS', notice_url: '/upload-policy' };
+  assert.equal(validateServicePolicy(enabled), enabled);
+  for (const change of [{ enabled: 'false' }, { version: '' }, { default_visibility: 'PUBLIC' }, { notice_url: '/other' }]) {
+    const malformed = structuredClone(enabled);
+    Object.assign(malformed.policies.upload, change);
+    assert.throws(() => validateServicePolicy(malformed));
+  }
+  const unready = structuredClone(enabled); unready.policies.ready = false;
+  assert.throws(() => validateServicePolicy(unready));
+  const disabled = valid(); disabled.policies.upload = { enabled: false };
+  assert.equal(validateServicePolicy(disabled), disabled);
+});

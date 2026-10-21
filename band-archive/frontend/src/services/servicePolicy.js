@@ -8,5 +8,10 @@ export const validateServicePolicy = (config) => {
   if (policies.ready && (!nonEmpty(service.operator_name) || !nonEmpty(policies.terms_version) || !nonEmpty(policies.privacy_version)
     || !nonEmpty(policies.retention_notice) || !nonEmpty(policies.providers_notice))) throw new Error('policy_incomplete');
   if (captcha.enabled && !nonEmpty(captcha.site_key)) throw new Error('captcha_not_ready');
+  if (policies.upload !== undefined) {
+    const upload = policies.upload;
+    if (typeof upload?.enabled !== 'boolean') throw new Error('invalid_upload_policy');
+    if (upload.enabled && (!policies.ready || !nonEmpty(upload.version) || upload.default_visibility !== 'MEMBERS' || upload.notice_url !== '/upload-policy')) throw new Error('upload_policy_not_ready');
+  }
   return config;
 };

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBandGalleryUploadTransport, createBandUploadTransport } from './bandUploadTransport.js';
-import { galleryUploadProgressPercent, MULTIPART_THRESHOLD_BYTES, uploadBandMediaFile } from './mediaUploadManager.js';
+import { galleryUploadProgressPercent, getWebUploadTransport, MULTIPART_THRESHOLD_BYTES, uploadBandGalleryImageFile, uploadBandMediaFile } from './mediaUploadManager.js';
 import { createAuthenticatedApiClient } from './authApiClient.js';
 
 test('band upload transport keeps direct and multipart capability requests under its immutable v2 band URL', async () => {
@@ -94,4 +94,43 @@ test('gallery FileUpload progress is a clamped percentage, not a byte count', ()
   assert.equal(galleryUploadProgressPercent(5 * mib, 4 * mib), 100);
   assert.equal(galleryUploadProgressPercent(-1, 4 * mib), 0);
   assert.equal(galleryUploadProgressPercent(mib, 0), 0);
+});
+
+for (const kind of ['media', 'personal_log']) for (const multipart of [false, true]) {
+  test(`confirmed policy stays on ${kind} ${multipart ? 'multipart' : 'direct'} initiate only`, async () => {
+    const calls = [];
+    const assertion = { version: 'u1', batch_id: '1474c767-d671-4fae-989c-30646802cb63', rights_confirmed: true, visibility: 'MEMBERS' };
+    const file = { name: 'clip.mp4', type: 'video/mp4', size: multipart ? MULTIPART_THRESHOLD_BYTES : 12, slice: (start, end) => ({ size: end - start }) };
+    const api = { requestJson: async (path, options = {}) => {
+      calls.push({ path, body: options.body ? JSON.parse(options.body) : null });
+      if (path.endsWith('/initiate')) return { session_id: 'scope', upload_capability_token: 'cap', upload_url: 'https://r2.invalid/direct', part_size: file.size, max_parts: 1 };
+      if (path.endsWith('/parts')) return { upload_url: 'https://r2.invalid/part' };
+      return path.endsWith('/complete') ? { [kind]: { id: 11 } } : {};
+    } };
+    const transport = createBandUploadTransport({ bandId: 7, api, putPart: async () => 'etag' });
+    await uploadBandMediaFile({ transport, file, uploadPolicy: assertion, target: kind === 'media' ? { kind, songId: 3 } : { kind, memberId: 4 }, onProgress: () => {} });
+    assert.deepEqual(calls[0].body.upload_policy, assertion);
+    assert.equal(calls[0].body[kind === 'media' ? 'song_id' : 'member_id'], kind === 'media' ? 3 : 4);
+    assert.equal(calls.every((call) => call.path.startsWith('/api/v2/bands/7/uploads/')), true);
+    assert.deepEqual(calls.at(-1).body, {});
+    assert.equal(calls.slice(1).some((call) => call.body?.upload_policy), false);
+  });
+}
+
+test('gallery carries batch consent at initiate and a stale workspace cannot initiate a new file', async () => {
+  const calls = [];
+  const assertion = { version: 'u1', batch_id: '1474c767-d671-4fae-989c-30646802cb63', rights_confirmed: true, visibility: 'MEMBERS' };
+  const api = { requestJson: async (path, options) => {
+    calls.push({ path, body: JSON.parse(options.body) });
+    return path.endsWith('/initiate') ? { session_id: 'g', upload_capability_token: 'cap', upload_url: 'https://r2.invalid/gallery' } : { gallery: { id: 12 } };
+  } };
+  const web = getWebUploadTransport(); const previousPut = web.putPart;
+  web.putPart = async () => 'etag';
+  try {
+    const options = { file: { name: 'photo.jpg', type: 'image/jpeg', size: 12 }, bandId: 7, api, uploadPolicy: assertion };
+    await uploadBandGalleryImageFile(options);
+    assert.deepEqual(calls[0].body.upload_policy, assertion); assert.deepEqual(calls[1].body, {});
+    await assert.rejects(uploadBandGalleryImageFile({ ...options, isCurrent: () => false }), { name: 'AbortError' });
+    assert.equal(calls.length, 2);
+  } finally { web.putPart = previousPut; }
 });
