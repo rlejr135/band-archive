@@ -127,6 +127,8 @@ test('dashboard section actions share button styling and keep member-only schedu
     }
     const scheduleGroup = view.container.querySelector('.activity-upcoming .activity-card-actions');
     assert.equal(scheduleGroup.querySelectorAll('a').length, 2);
+    assert.equal(view.container.querySelector('.activity-upcoming-empty') === null, true);
+    assert.equal(view.getAllByRole('link', { name: '일정 조율하기' }).length, 1);
     assert.equal(scheduleGroup.textContent.includes('·'), false);
     assert.ok(view.getByRole('button', { name: '전체 공지 보기' }).classList.contains('activity-action'));
     const songLink = view.getByRole('link', { name: '연습곡 1 밴드' });
@@ -141,6 +143,35 @@ test('dashboard section actions share button styling and keep member-only schedu
       assert.equal(visitorView.queryByRole('link', { name: '일정 조율하기' }), null);
       assert.ok(visitorView.getByRole('link', { name: '전체 일정' }).classList.contains('activity-action'));
       visitorView.unmount();
+    }
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('empty upcoming card has exactly one prominent scheduling link in its centered body for active members', async () => {
+  await load(); const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => String(url).includes('/by-slug/empty-band')
+    ? response({ band: { id: 401, slug: 'empty-band', name: '활동 밴드', membership: { status: 'active', role: 'member' } } })
+    : response({ dashboard: dashboardData(monthForTest(), { upcoming_rehearsals: [] }) });
+  try {
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/empty-band' })); await view.findByText('예정된 합주가 없습니다.');
+    const card = view.container.querySelector('.activity-upcoming'); const body = card.querySelector('.activity-upcoming-empty'); const action = view.getByRole('link', { name: '일정 조율하기' });
+    assert.equal(view.getAllByRole('link', { name: '일정 조율하기' }).length, 1); assert.equal(body.contains(action), true);
+    assert.ok(action.classList.contains('primary-btn')); assert.ok(action.classList.contains('activity-action')); assert.ok(action.classList.contains('activity-schedule-cta'));
+    assert.equal(action.getAttribute('href'), '/bands/empty-band/availability');
+    const header = card.querySelector('.activity-card-heading'); assert.equal(header.querySelectorAll('a').length, 1); assert.equal(header.querySelector('a').textContent, '전체 일정'); assert.equal(header.querySelector('a').getAttribute('href'), '/bands/empty-band/rehearsals');
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('empty upcoming card does not expose scheduling to visitors or pending memberships', async () => {
+  await load(); const previousFetch = globalThis.fetch; let membership = null;
+  globalThis.fetch = async (url) => String(url).includes('/by-slug/empty-public')
+    ? response({ band: { id: 401, slug: 'empty-public', name: '공개 밴드', membership } })
+    : response({ dashboard: dashboardData(monthForTest(), { upcoming_rehearsals: [] }) });
+  try {
+    for (const next of [null, { status: 'pending', role: 'member' }]) {
+      membership = next; const view = render(createElement(ReadOnlyApp, { entry: '/bands/empty-public' })); await view.findByText('예정된 합주가 없습니다.');
+      assert.equal(view.queryByRole('link', { name: '일정 조율하기' }) === null, true); assert.equal(view.container.querySelector('.activity-schedule-cta') === null, true);
+      assert.equal(view.getByRole('link', { name: '전체 일정' }).getAttribute('href'), '/bands/empty-public/rehearsals'); view.unmount();
     }
   } finally { globalThis.fetch = previousFetch; }
 });

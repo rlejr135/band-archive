@@ -264,8 +264,8 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
       </section>
 
       <section className="activity-card activity-upcoming" aria-labelledby="activity-upcoming-title">
-        <div className="activity-card-heading"><h2 id="activity-upcoming-title">다가오는 합주</h2><div className="activity-card-actions">{activeAvailabilityMember(band) && <Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/availability`}>일정 조율하기</Link>}<Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/rehearsals`}>전체 일정</Link></div></div>
-        {upcoming.length ? <div className="activity-rehearsal-list">{upcoming.map((rehearsal) => <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal} compact />)}</div> : <p className="activity-muted">예정된 합주가 없습니다.</p>}
+        <div className="activity-card-heading"><h2 id="activity-upcoming-title">다가오는 합주</h2><div className="activity-card-actions">{upcoming.length > 0 && activeAvailabilityMember(band) && <Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/availability`}>일정 조율하기</Link>}<Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/rehearsals`}>전체 일정</Link></div></div>
+        {upcoming.length ? <div className="activity-rehearsal-list">{upcoming.map((rehearsal) => <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal} compact />)}</div> : <div className="activity-upcoming-empty"><p className="activity-muted">예정된 합주가 없습니다.</p>{activeAvailabilityMember(band) && <Link className="primary-btn activity-action activity-schedule-cta" to={`/bands/${encodeURIComponent(band.slug)}/availability`}>일정 조율하기</Link>}</div>}
       </section>
 
       <section className="activity-card activity-calendar-card" aria-labelledby="activity-calendar-title">
