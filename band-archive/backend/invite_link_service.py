@@ -13,7 +13,7 @@ from band_service import ACTIVE, MANAGER_ROLES, _begin_privileged_mutation, audi
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, Band, BandInviteLink, BandMembership, InviteResumeContext
-from member_profile_service import ensure_member_profile
+from member_profile_service import activate_member_profile, ensure_member_profile
 from join_name import required_join_name
 
 _TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{43}$')
@@ -314,7 +314,7 @@ def accept(context, actor, name=None):
         existing.join_introduction = None
     row.completed_at = now()
     existing.requested_name = name
-    ensure_member_profile(existing)
+    activate_member_profile(existing, name)
     existing.requested_name = None
     audit('membership_joined_by_invite_link', actor, band=band, target=existing)
     db.session.commit()

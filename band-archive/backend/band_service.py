@@ -16,7 +16,7 @@ from models import (
     PersonalLogMultipartUploadSession, Member,
 )
 from sqlalchemy import and_, or_
-from member_profile_service import ensure_member_profile
+from member_profile_service import activate_member_profile, ensure_member_profile
 from join_name import required_join_name
 
 
@@ -342,7 +342,7 @@ def approve_membership(actor, membership_id, approved):
             item.left_at = None
         item.acted_by_user_id = actor.id
         if approved:
-            ensure_member_profile(item)
+            activate_member_profile(item, item.requested_name)
         item.requested_name = None
         audit('membership_approved' if approved else 'membership_rejected', actor, band=band, target=item)
         db.session.commit()
@@ -463,7 +463,9 @@ def join_invite(user, raw):
         item.approved_at = now()
         item.acted_by_user_id = user.id
         item.join_introduction = None
-        ensure_member_profile(item)
+        requested_name = item.requested_name
+        activate_member_profile(item, requested_name)
+        item.requested_name = None
         audit('membership_rejoined_by_invite', user, band=invite.band, target=item, details={'invite_id': invite.id})
         db.session.commit()
     else:

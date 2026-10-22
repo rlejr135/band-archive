@@ -334,8 +334,12 @@ def test_accept_reactivates_inactive_membership_as_plain_member(invite_auth, sta
         outsider = AppUser.query.filter_by(email='outsider@example.com').one()
         db.session.add(BandMembership(band_id=1, user_id=outsider.id, role='admin', status=status,
                                       requested_name='Old application name'))
+        db.session.add(Member(band_id=1, linked_user_id=outsider.id, name='Old profile name',
+                              instrument='보컬', biography='Keep biography', positions_json='["VOCAL"]',
+                              custom_position='', profile_revision=3))
         outsider_id = outsider.id
         db.session.commit()
+        profile_id = Member.query.filter_by(band_id=1, linked_user_id=outsider_id).one().id
     client = app.test_client()
     owner_headers = _auth(signer)
     token = client.post('/api/v2/bands/1/invite-links', json={}, headers=owner_headers).get_json()['token']
@@ -347,8 +351,17 @@ def test_accept_reactivates_inactive_membership_as_plain_member(invite_auth, sta
     accepted = client.post('/api/v2/invite-links/accept', json={'context': context, 'name': 'Returning Member'}, headers=headers)
     assert accepted.status_code == 200
     assert accepted.get_json()['membership'] == {'status': 'active', 'role': 'member'}
+    replay = client.post('/api/v2/invite-links/accept',
+                         json={'context': context, 'name': 'Replay Rename'}, headers=headers)
+    assert replay.status_code == 200 and replay.get_json()['already_member'] is True
     with app.app_context():
-        assert Member.query.filter_by(band_id=1, linked_user_id=outsider_id).one().name == 'Returning Member'
+        profile = Member.query.filter_by(band_id=1, linked_user_id=outsider_id).one()
+        assert profile.name == 'Returning Member'
+        assert profile.id == profile_id
+        assert profile.biography == 'Keep biography'
+        assert profile.positions_json == '["VOCAL"]'
+        assert profile.instrument == '보컬'
+        assert profile.profile_revision == 4
         assert BandMembership.query.filter_by(band_id=1, user_id=outsider_id).one().requested_name is None
 
 

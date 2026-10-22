@@ -190,6 +190,8 @@ test('required member name is bounded, retained after a failed request and clear
     const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
     await view.findAllByRole('button', { name: '가입 요청' }); await user.click(view.getAllByRole('button', { name: '가입 요청' })[0]);
     const name = view.getByLabelText('밴드에서 사용할 이름 (필수)'); const send = view.getByRole('button', { name: '가입 요청 보내기' });
+    assert.equal(view.getByText('승인 후 멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요.').id, 'join-name-help');
+    assert.equal(view.queryByText(/기존에 연결된 멤버 프로필이 있다면 이름은 유지됩니다/), null);
     assert.equal(name.required, true); assert.equal(name.maxLength, 100); assert.equal(send.disabled, true);
     await user.type(name, '  '); assert.equal(send.disabled, true); await user.clear(name);
     await user.type(name, 'x'.repeat(101)); assert.equal(name.value.length, 100); await user.clear(name);

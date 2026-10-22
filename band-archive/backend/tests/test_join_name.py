@@ -1,4 +1,4 @@
-"""Band-local submitted names survive approval without renaming old profiles."""
+"""Band-local join names update on activation without renaming other profiles."""
 import pytest
 from sqlalchemy import create_engine
 
@@ -38,6 +38,11 @@ def test_http_new_application_requires_name_without_creating_rows(band_app):
 def test_pending_name_first_value_private_then_approval_consumes_name(profiles):
     with profiles.app_context():
         actor, user = db.session.get(AppUser, 1), db.session.get(AppUser, 4)
+        other_band_profile = Member(band_id=2, linked_user_id=user.id, name='Other band profile',
+                                    instrument='기타', biography='Other band biography',
+                                    positions_json='["GUITAR"]', custom_position='', profile_revision=2)
+        db.session.add(other_band_profile)
+        db.session.commit()
         application, created = join_request(user, 1, introduction='My introduction', name='  밴드 이름  ')
         assert created and application.requested_name == '밴드 이름'
         assert membership_dict(application, 'management')['requested_name'] == '밴드 이름'
@@ -52,6 +57,9 @@ def test_pending_name_first_value_private_then_approval_consumes_name(profiles):
         member = Member.query.filter_by(band_id=1, linked_user_id=user.id).one()
         assert member.name == '밴드 이름'
         assert user.display_name == account_name
+        assert other_band_profile.name == 'Other band profile'
+        assert other_band_profile.biography == 'Other band biography'
+        assert other_band_profile.profile_revision == 2
         assert not AuditEvent.query.filter(AuditEvent.details_json.contains('밴드 이름')).count()
         # A different band's application has its own independently supplied name.
         other, _ = join_request(user, 2, name='Other band name')
@@ -63,16 +71,29 @@ def test_legacy_pending_null_name_fill_once_and_rejoin_preserves_profile(profile
         actor, user = db.session.get(AppUser, 1), db.session.get(AppUser, 3)
         pending = BandMembership.query.filter_by(user_id=3).one()
         assert pending.requested_name is None
+        member = Member(band_id=1, linked_user_id=3, name='Old profile name', instrument='보컬',
+                        biography='Keep biography', positions_json='["VOCAL"]', custom_position='',
+                        profile_revision=3)
+        db.session.add(member)
+        db.session.commit()
         join_request(user, 1, name='New local name', introduction='Do not replace legacy intro')
         assert pending.requested_name == 'New local name'
         assert pending.join_introduction == 'Private application'
         approve_membership(actor, pending.id, True)
-        member = Member.query.filter_by(band_id=1, linked_user_id=3).one()
         assert member.name == 'New local name'
+        profile_id = member.id
+        assert member.biography == 'Keep biography' and member.positions_json == '["VOCAL"]'
+        assert member.profile_revision == 4
         pending.status = 'left'; db.session.commit()
         join_request(user, 1, name='Attempted rename')
         approve_membership(actor, pending.id, True)
-        assert member.name == 'New local name'
+        assert member.name == 'Attempted rename'
+        assert member.id == profile_id
+        assert member.biography == 'Keep biography'
+        assert member.positions_json == '["VOCAL"]'
+        assert member.profile_revision == 5
+        approve_membership(actor, pending.id, True)
+        assert member.name == 'Attempted rename' and member.profile_revision == 5
         assert pending.requested_name is None
 
 
@@ -92,9 +113,9 @@ def test_profile_creation_failure_cannot_commit_approval_or_discard_name(profile
         actor, user = db.session.get(AppUser, 1), db.session.get(AppUser, 4)
         pending, _ = join_request(user, 1, name='Preserve on failure')
         membership_id = pending.id
-        def fail(_membership):
+        def fail(_membership, _submitted_name=None):
             raise ValidationError('Injected profile failure', 409)
-        monkeypatch.setattr(band_service, 'ensure_member_profile', fail)
+        monkeypatch.setattr(band_service, 'activate_member_profile', fail)
         with pytest.raises(ValidationError):
             approve_membership(actor, membership_id, True)
         db.session.rollback()

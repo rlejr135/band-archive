@@ -8,6 +8,7 @@ from threading import Event, current_thread
 import pytest
 from sqlalchemy import text
 import band_service
+import member_profile_service
 from extensions import db
 from migration_bootstrap import create_migration_app, schema_contract_differences
 from models import AppUser, Band, BandMembership, Member
@@ -42,13 +43,13 @@ def test_profile_concurrent_approval_has_one_linked_record(private_pg17, monkeyp
             "FROM pg_class WHERE oid='public.member'::regclass")).one()
         db.session.rollback()
     entered, release, second_started = Event(), Event(), Event()
-    original = band_service.ensure_member_profile
+    original = member_profile_service.ensure_member_profile
     def hold_first(membership):
         if current_thread().name.startswith('profile-first'):
             entered.set()
             assert release.wait(10)
         return original(membership)
-    monkeypatch.setattr(band_service, 'ensure_member_profile', hold_first)
+    monkeypatch.setattr(member_profile_service, 'ensure_member_profile', hold_first)
     def approve(second=False):
         with app.app_context():
             try:

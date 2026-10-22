@@ -225,7 +225,7 @@ export const InviteContinueRoute = () => {
       : <section className="band-introduction-actions invite-actions"><h2>{introduction.band.name} 밴드에 가입하시겠습니까?</h2><p>{viewer.membership_status === 'pending' ? '대기 중인 가입 요청은 초대 수락과 함께 활성 멤버십으로 전환됩니다.' : `${user?.email || '로그인 계정'}으로 초대받은 밴드에 가입합니다.`}</p>
         <form className="bands-form" onSubmit={(event) => { event.preventDefault(); accept(); }} aria-busy={accepting}>
           <label htmlFor="invite-member-name">밴드에서 사용할 이름 (필수)<input id="invite-member-name" value={name} onChange={(event) => setNameDraft({ identity: draftIdentity, value: event.target.value })} required maxLength={100} autoComplete="name" disabled={accepting} aria-describedby="invite-member-name-help" /></label>
-          <p className="bands-help" id="invite-member-name-help">멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요. 기존에 연결된 멤버 프로필이 있다면 이름은 유지됩니다.</p>
+          <p className="bands-help" id="invite-member-name-help">가입 후 멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요.</p>
           <button className="primary-btn" type="submit" disabled={accepting || !validJoinName(name)}>{accepting ? '가입 중…' : '초대받은 밴드에 가입'}</button>
         </form><p className="bands-help">가입 버튼을 누르기 전에는 밴드 멤버가 되지 않습니다.</p></section>}
   </BandIntroduction>;

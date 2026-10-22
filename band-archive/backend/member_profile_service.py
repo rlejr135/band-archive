@@ -64,6 +64,20 @@ def ensure_member_profile(membership):
     return profile
 
 
+def activate_member_profile(membership, submitted_name=None):
+    """Ensure the linked profile and apply a name submitted for this activation.
+
+    Call only while transitioning a non-active membership to active. Routine
+    profile ensures and active-member retries must never rename an existing
+    band-local profile.
+    """
+    profile = ensure_member_profile(membership)
+    if submitted_name is not None and profile.name != submitted_name:
+        profile.name = submitted_name[:100]
+        profile.profile_revision += 1
+    return profile
+
+
 def profile_fields(member, user_id=None, *, can_edit=False):
     return {'biography': member.biography, 'positions': json.loads(member.positions_json),
             'custom_position': member.custom_position, 'profile_revision': member.profile_revision,
