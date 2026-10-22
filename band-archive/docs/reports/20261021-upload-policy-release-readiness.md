@@ -1,6 +1,6 @@
 # 업로드·권리 보호 정책 배포 전 준비 보고
 
-작성: 2026-10-21 (KST) · 상태: **운영 DB v22·BE v64 검증 완료 / FE 배포 미완료, 정책 활성화 보류**
+작성: 2026-10-21 (KST) · 상태: **운영 DB v22·BE v64·FE 기술 릴리스 검증 완료 / 정책 활성화 보류**
 
 최종 갱신: 2026-10-23 (KST). 첫 전체 회귀와 2026-10-22의 기술 선배포 결정 기록은 유지한다. 이 갱신은 root가 확인한 운영 도구의 검증 결과를 문서화한 것이며, 문서 작성자가 DB 적용이나 배포를 실행한 것은 아니다.
 
@@ -35,7 +35,7 @@
 
 레거시 보존 복원 도구는 `content_restriction`을 반드시 비어 있어야 하는 테이블로 분류한다. 활성·해제된 제한 이력 모두 기존 콘텐츠 ID에 잘못 다시 연결될 수 있으므로, 한 건이라도 있으면 원본을 바꾸기 전에 거부한다. SQL 계약 테스트는 변할 수 있는 alias 번호를 고정하지 않으면서 동일한 부모 alias의 밴드 ID, 개인 기록 ID, 부모 댓글 연결과 `EXISTS` 조건을 계속 확인한다.
 
-## 운영 DB 결과와 배포 보류 항목
+## 운영 DB와 기술 릴리스 결과
 
 - **운영 DB:** 2026-10-23 root의 리허설·적용·별도 읽기 전용 사후 검증 결과 schema v22. **Fly:** 기존 v63에서 v64로 배포·확인 완료. NRT의 기존 machine 1대(`shared 2 CPU`, 2048 MB)는 그대로다. 이미지 `deployment-01M5J2XJ9512B3A31S3J8BWNW8`, 소스 `7d71302`.
 - 검증 이력의 로컬 단위 커밋은 프런트엔드 `cea4d6e`, 백엔드 `4b5661b`, 최초 운영 검증 도구 `40b755b`다. ledger whitelist를 바로잡은 운영 helper는 `7d71302`에서 추가 검증됐다. 운영 실행 소스는 전체 SHA `7d71302ab53314c1d791fd8153000e0185626fa0`로 고정했다.
@@ -43,15 +43,18 @@
 - 배포 후보 소스는 Git archive로 추출해 사용자 소유 untracked script와 백업을 빌드 컨텍스트에서 제외했다. 공개 CA 해시를 검증했고 빌드 컨텍스트는 1.23 MB다. BE 배포 성공 여부는 아래 릴리스·운영 응답 검증으로 별도 확인했다.
 - BE 배포 뒤 시작 로그 5건을 포함한 표준 JSON 로그 스트림 29건을 파싱해 Gunicorn 시작 1건·listen 1건·worker boot 1건, 오류 후보 0건을 확인했다. 운영 `/api/v2/policy`는 HTTP 200과 정확한 Pages origin CORS를 반환했다. 응답의 `policies.ready=false`, `policy_acceptance_enabled=false`, `upload.enabled=false`이며 신규 upload 응답 구조는 존재한다. `/members`도 HTTP 200과 정확한 Pages origin CORS를 확인했다. 초기 sandbox DNS 제한은 권한 있는 읽기 전용 네트워크 검증에서 해소됐으며 API 오류로 기록하지 않는다.
 - 운영 DB DDL 전후 Supabase advisor의 경고 2개는 동일하여 새 경고가 관찰되지 않았다. 기존 개선 과제인 [`function_search_path_mutable`](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable)과 [`auth_leaked_password_protection`](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)은 별도 검토 대상으로 남긴다. 이 결과만으로 모든 보안·법적 적합성을 인증하지 않는다.
-- R2 원본 쓰기·삭제, 재변환, 실제 메일 발송, 비밀 설정 변경은 수행하지 않았다. 프런트엔드 push도 아직 수행하지 않았다.
+- `origin/master` 일반 push는 `912d011`에서 `0999381ac846b282c02b1f1e1ca1d811ee78271c`로 완료됐다. 이 커밋의 런타임 기술 변경은 라이브에서 확인됐다. 이 보고서 자체의 후속 문서 커밋 ID는 자기참조를 피하기 위해 적지 않는다.
+- Cloudflare 자동 배포의 새 라이브 번들 `/assets/index-B5n_c4WL.js`는 HTTP 200이며 `업로드 전 확인` feature marker와 `https://band-archive.fly.dev` API 대상이 확인됐다. 공개 웹 `/`, `/terms`, `/privacy`, `/upload-policy`는 각각 HTTP 200. `/members`도 HTTP 200이고 CORS는 정확히 `https://band-archive.pages.dev`였다. 정책 API의 세 값 `policies.ready`, `policy_acceptance_enabled`, `upload.enabled`는 모두 실제 boolean `false`로 재확인했다.
+- production public 환경값에 따라 로컬 번들 `index-CKj0b_Hs.js`와 라이브 번들의 이름이 달라질 수 있으므로, 이름·hash 동일성 대신 라이브 feature marker와 API 대상을 검증했다. 실제 브라우저 시각 검증과 로그인·업로드 실동작 테스트는 수행하지 않았다. 이는 위 기술 릴리스 검증 결과와 구분한다.
+- R2 원본 쓰기·삭제, 재변환, 실제 메일 발송, 비밀 설정 변경은 수행하지 않았다. 초대 링크 버그와 VOC는 다음 작업으로 남아 있으며 이 릴리스에서 착수하지 않았다.
 - 현재 R2 버킷의 가능한 처리 국가·관할, 국가 보장 여부와 국외 이전 고지 자료는 여전히 미확인이다. [Cloudflare 문의 초안](../policies/provider-location-confirmation.md)은 미발송 참고 문안일 뿐이고, 사용자는 이번 기술 릴리스의 선행 조건으로 문의를 요구하지 않기로 했다.
 - 기술 릴리스 후에도 공급자별 실제 경로와 법적 근거를 확인하기 전에는 한국 전용 저장이라는 주장이나 최종 정책 공표·필수 확인 활성화를 하지 않는다.
 
-## 완료 증거와 남은 릴리스 게이트
+## 완료 증거와 남은 정책 과제
 
 - 최종 로컬 회귀 검증: **완료.** 프런트엔드 345/345와 lint/build, 백엔드 1098/1098 통과. 실제 브라우저 화면의 시각 확인은 수행하지 않음
 - 검증된 로컬 단위 커밋: **FE `cea4d6e`, BE `4b5661b`, 운영 검증 도구 `40b755b`**. 이 보고서의 후속 커밋 ID는 자기참조를 피하기 위해 기록하지 않음
 - 운영 읽기 전용 백업·소유 로컬 복원 리허설과 승인된 DB v22 적용: **root의 검증 결과 완료.** 비공개 증거 원문은 별도 보관
 - BE 릴리스: **Fly v64 배포·시작 로그·운영 HTTP/CORS 확인 완료.** 정책 확인·업로드 필수 플래그 비활성 확인
-- FE 릴리스: **`origin/master` push 미실행, HTTP·라이브 번들·feature marker·API 대상·CORS 검증 미완료.** 브라우저 시각 검증 미실시(이번 숨김 기술 릴리스의 별도 완료 조건은 아님)
+- FE 릴리스: **일반 push·Cloudflare 자동 배포·HTTP·라이브 번들·feature marker·API 대상·CORS 검증 완료.** 브라우저 시각 검증과 로그인·업로드 실동작 테스트는 미실시(이번 숨김 기술 릴리스의 별도 완료 조건은 아님)
 - 정책 최종 검토·공표, `ready=true` 및 필수 확인 활성화: **국외 이전 사실·법적 근거 미확정으로 보류**
