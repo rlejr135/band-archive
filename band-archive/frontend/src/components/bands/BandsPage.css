@@ -70,6 +70,8 @@
 .bands-form { display: grid; gap: 12px; max-width: 540px; }
 .bands-form label { display: grid; gap: 6px; color: var(--text-secondary); }
 .bands-form input,.bands-form textarea,.bands-panel select { width: 100%; padding: 9px; border: 1px solid var(--color-border); border-radius: var(--radius-default); color: var(--color-text); background: var(--color-background); }
+.bands-form input,.bands-form textarea,.bands-form select { font: inherit; }
+.bands-form input::placeholder,.bands-form textarea::placeholder { font: inherit; }
 .bands-form textarea { min-height: 88px; resize: vertical; }
 .band-list > li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-default); }
 .band-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
