@@ -33,7 +33,7 @@
 
 - report `status=verified`, `mode=rehearse`, `remote_writes=false`.
 - `restore_verified`, `local_migration_verified`, `original_rows_security_keys_preserved` 모두 true.
-- 원본 37개 테이블의 모든 행·catalog·기존 sequence 상태·owner·ACL/RLS·키 보존.
+- 원본 37개 public 테이블(앱 메타데이터 36개 + 별도 Alembic 버전 테이블)의 모든 행·catalog·기존 sequence 상태·owner·ACL/RLS·키 보존.
 - 새 head v22, 총 38개 private 관리 테이블, 새 제한 테이블 0행.
 - 신규 부분 인덱스와 전체 스키마 계약 일치, 로컬 PG 종료 확인.
 

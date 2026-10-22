@@ -59,6 +59,17 @@ def load(path, pin, name):
     return module
 
 
+def source_public_tables(metadata):
+    # Alembic owns its ledger outside the application metadata, but the
+    # pinned public inventory hashes every physical table, including it.
+    application = tuple(sorted(metadata.tables))
+    check(len(application) == 36 and 'alembic_version' not in application and ADDED not in application,
+          'source table topology differs')
+    public = tuple(sorted((*application, 'alembic_version')))
+    check(len(public) == 37, 'source table topology differs')
+    return public
+
+
 def primitives(args):
     check(args.approved_helper_sha256 == digest(Path(__file__)), 'reviewed helper pin required')
     if str(BACKEND) not in sys.path:
@@ -66,8 +77,7 @@ def primitives(args):
     prior = load(PRIOR, PRIOR_SHA, 'restriction_pinned_prior')
     logo, ops = prior.primitives()
     from migration_bootstrap import metadata_for_recorded_revision
-    ops.prior.TABLES = tuple(sorted(metadata_for_recorded_revision(OLD).tables))
-    check(len(ops.prior.TABLES) == 37, 'source table topology differs')
+    ops.prior.TABLES = source_public_tables(metadata_for_recorded_revision(OLD))
     ops.EXPECTED_SOURCE_REVISION = ops.PHASE13_REVISION = OLD
     ops.verify_source_pin(args.source_commit, args.migration_sha256, MIGRATION)
     revision = load(MIGRATION, args.migration_sha256, 'restriction_exact_revision')

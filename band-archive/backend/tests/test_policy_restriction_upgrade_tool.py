@@ -68,3 +68,91 @@ def test_preservation_projection_removes_only_new_table_and_new_audit_index(tool
     assert tool.old_catalog(before) == tool.old_catalog(after)
     after['catalog']['sequences'][0] = ('public', 'song_id_seq', 43)
     assert tool.old_catalog(before) != tool.old_catalog(after)
+
+
+def test_source_public_whitelist_includes_alembic_ledger_and_not_new_restrictions(tool):
+    import models  # Populate the application's metadata without creating a database connection.
+    from migration_bootstrap import metadata_for_recorded_revision
+
+    old = metadata_for_recorded_revision(tool.OLD)
+    new = metadata_for_recorded_revision(tool.NEW)
+    public = tool.source_public_tables(old)
+    assert len(old.tables) == 36
+    assert 'alembic_version' not in old.tables
+    assert tool.ADDED not in old.tables
+    assert len(public) == 37
+    assert public == tuple(sorted((*old.tables, 'alembic_version')))
+    assert len(new.tables) == 37
+    assert tool.ADDED in new.tables
+    assert 'alembic_version' not in new.tables
+    assert len((*new.tables, 'alembic_version')) == 38
+
+
+def test_source_public_whitelist_rejects_wrong_revision_or_ledger_in_metadata(tool):
+    import models
+    from migration_bootstrap import metadata_for_recorded_revision
+
+    old = metadata_for_recorded_revision(tool.OLD)
+    for tables in (
+        {name: None for name in old.tables if name != 'song'},
+        {**dict.fromkeys(old.tables), 'alembic_version': None},
+        dict.fromkeys(metadata_for_recorded_revision(tool.NEW).tables),
+    ):
+        with pytest.raises(tool.GateError, match='source table topology differs'):
+            tool.source_public_tables(SimpleNamespace(tables=tables))
+
+
+def test_pinned_inventory_rejects_missing_or_unknown_public_tables(tool):
+    import models
+    from migration_bootstrap import metadata_for_recorded_revision
+
+    pinned_prior = tool.load(tool.PRIOR, tool.PRIOR_SHA, 'test_pinned_prior_inventory')
+    _, ops = pinned_prior.primitives()
+    expected = tool.source_public_tables(metadata_for_recorded_revision(tool.OLD))
+    ops.prior.TABLES = expected
+
+    class PastTableAllowlist(Exception):
+        pass
+
+    class FirstRowCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _type, _value, _traceback):
+            return False
+
+        def execute(self, query):
+            assert query.startswith('SELECT to_jsonb(t)::text FROM public."alembic_version"')
+            raise PastTableAllowlist
+
+    class FirstCatalogQuery:
+        def __init__(self, names):
+            self.names = names
+            self.calls = 0
+            self.cursor_calls = 0
+
+        def execute(self, query):
+            self.calls += 1
+            assert self.calls == 1
+            assert "relkind IN ('r', 'p')" in query
+            return [(name,) for name in self.names]
+
+        def cursor(self, *, name):
+            self.cursor_calls += 1
+            assert name == 'rehearsal_rows_alembic_version'
+            return FirstRowCursor()
+
+    correct = FirstCatalogQuery(expected)
+    with pytest.raises(PastTableAllowlist):
+        ops.prior.public_inventory(correct)
+    assert correct.calls == 1 and correct.cursor_calls == 1
+
+    for wrong in (
+        expected[1:],
+        tuple(name for name in expected if name != 'song'),
+        tuple(sorted((*expected, 'unexpected_public_table'))),
+    ):
+        connection = FirstCatalogQuery(wrong)
+        with pytest.raises(ops.prior.RehearsalError, match='public table allowlist'):
+            ops.prior.public_inventory(connection)
+        assert connection.calls == 1 and connection.cursor_calls == 0
