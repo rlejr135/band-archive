@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createElement, useEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -15,7 +15,7 @@ const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300
 const deferred = () => { let resolve; let reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const user = userEvent.setup({ document: dom.window.document });
 let vite; let onboarding; let auth; let bands;
-const load = async () => { if (onboarding) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
+const load = async () => { if (onboarding) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
 const account = (id = 'u1') => ({ user: id ? { id } : null, getAccessToken: async () => id, refreshSession: async () => id, loading: false });
 const Login = () => createElement('p', null, `login:${useLocation().search}`);
@@ -54,6 +54,42 @@ test('ordinary band administrator does not get owner removal controls', async ()
   globalThis.fetch = async (url) => String(url).includes('/by-slug/a') ? response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'admin' }, permissions: { can_manage_members: true, can_manage_invites: true } } }) : response({ memberships: [{ id: 2, status: 'active', role: 'member', member_name: '멤버', can_remove_from_band: false }], invite_links: [], announcement: null });
   try { const view = render(createElement(App, { entry: '/bands/a/manage', manage: true })); await view.findByText('A 관리'); assert.equal(view.queryByText('멤버 역할'), null); assert.equal(view.queryByRole('button', { name: /추방$/ }), null); }
   finally { globalThis.fetch = previous; }
+});
+
+test('revoking an invite immediately removes it from the manager list without a full-page reload', async () => {
+  await load(); const previousFetch = globalThis.fetch; const previousConfirm = window.confirm; window.confirm = () => true;
+  let inviteReads = 0; let pageOffset = null; const revokedAt = '2026-10-23T00:00:00Z';
+  const activeInvite = { id: 44, band_id: 1, created_at: '2026-10-22T00:00:00Z', expires_at: '2099-01-01T00:00:00Z', revoked_at: null };
+  const initialInvites = [{ id: 43, band_id: 1, created_at: '2026-10-21T00:00:00Z', expires_at: '2099-01-01T00:00:00Z', revoked_at: revokedAt }, activeInvite, ...Array.from({ length: 18 }, (_, index) => ({ id: 50 + index, band_id: 1, created_at: '2026-10-20T00:00:00Z', expires_at: '2099-01-01T00:00:00Z', revoked_at: null }))];
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith('/by-slug/a')) return response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
+    if (path.includes('/bands/1/invite-links') && options.method === 'POST') return response({ invite_link: { ...activeInvite, revoked_at: revokedAt } });
+    if (path.includes('/bands/1/invite-links')) {
+      inviteReads += 1;
+      if (path.includes('offset=20')) { pageOffset = 20; return response({ invite_links: [{ id: 100, band_id: 1, created_at: '2026-10-19T00:00:00Z', expires_at: '2099-01-01T00:00:00Z', revoked_at: null }], pagination: { limit: 20, offset: 20, total: 21, has_more: false } }); }
+      return response({ invite_links: initialInvites, pagination: { limit: 20, offset: 0, total: 21, has_more: true } });
+    }
+    if (path.endsWith('/memberships')) return response({ memberships: [] });
+    if (path.endsWith('/announcement')) return response({ announcement: null });
+    throw new Error(`unexpected ${path}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/a/manage', manage: true }));
+    await waitFor(() => assert.equal(view.getAllByText(/사용 가능 · 발급/).length, 19));
+    assert.equal(view.getAllByText(/사용 가능 · 발급/).length, 19);
+    assert.equal(view.queryByText(/2026-10-21/), null);
+    const activeRow = view.getAllByRole('listitem').find((item) => item.textContent.includes('2026-10-22'));
+    assert.ok(activeRow);
+    await userEvent.click(within(activeRow).getByRole('button', { name: '폐기' }));
+    await waitFor(() => assert.equal(view.queryByText(/2026-10-22/), null));
+    assert.equal(view.queryByText(/2026-10-22/), null);
+    assert.equal(view.getByRole('button', { name: '이전 초대 링크 더 보기' }) !== null, true);
+    await userEvent.click(view.getByRole('button', { name: '이전 초대 링크 더 보기' }));
+    await waitFor(() => assert.equal(view.queryByText(/2026-10-19/) !== null, true));
+    assert.equal(pageOffset, 20);
+    assert.equal(inviteReads, 2);
+  } finally { globalThis.fetch = previousFetch; window.confirm = previousConfirm; }
 });
 
 test('visitor discover preserves a safe login return and join becomes pending once', async () => {
