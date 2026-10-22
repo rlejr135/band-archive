@@ -14,7 +14,7 @@ dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.
 let vite; let pages; let policy; let auth; let gate; let challenge; let policyPages; let inviteService; let requireAuth; let inviteRoute;
 const load = async () => {
   if (pages) return;
-  vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true }, plugins: [{ name: 'auth-test-double', enforce: 'pre', transform(_code, id) {
+  vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true }, plugins: [{ name: 'auth-test-double', enforce: 'pre', transform(_code, id) {
     if (id.replaceAll('\\', '/').endsWith('/src/services/supabase.js')) return 'export const getSupabaseClient = () => globalThis.testSupabase; export const getSupabaseConfigError = () => null;';
   } }] });
   pages = await vite.ssrLoadModule('/src/components/auth/AuthPages.jsx');
@@ -115,6 +115,24 @@ test('invite signup uses only an opaque callback context and sends the raw token
     assert.deepEqual(JSON.parse(acceptRequest.options.body), { context: resumeContext, name: '가입 멤버' });
     globalThis.fetch = previousContinuationFetch;
   } finally { globalThis.fetch = previousFetch; inviteService.resetInviteUrlContextForTests(); delete globalThis.testSupabase; }
+});
+
+test('email verification preserves the fixed invite return only while an opaque invite context exists', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  const context = 'M'.repeat(42) + 'A';
+  inviteService.saveInviteResumeContext(context, '2099-01-01T00:00:00Z');
+  try {
+    const invited = render(tree(pages.VerifyEmailPage));
+    assert.match(invited.getByRole('status').textContent, /이메일 인증을 완료했다면 로그인해 초대를 이어가세요/);
+    assert.equal(invited.getByRole('link', { name: '로그인 후 초대 이어가기' }).getAttribute('href'), '/login?returnTo=%2Finvite%2Fcontinue');
+    assert.equal(invited.queryByRole('link', { name: '밴드 선택' }), null);
+    invited.unmount();
+
+    inviteService.clearInviteResumeContext();
+    const ordinary = render(tree(pages.VerifyEmailPage));
+    assert.equal(ordinary.getByRole('link', { name: '로그인' }).getAttribute('href'), '/login');
+    assert.ok(ordinary.getByRole('link', { name: '밴드 선택' }));
+  } finally { inviteService.resetInviteUrlContextForTests(); }
 });
 
 test('login and signup abort pending invite-context creation on unmount before calling Supabase', async () => {

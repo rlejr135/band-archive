@@ -5,6 +5,7 @@ import { BandContext } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { BandIntroduction } from './BandIntroduction.jsx';
 import { normalizedJoinName, validJoinName } from '../../services/joinName.js';
+import { LoginPage } from '../auth/AuthPages.jsx';
 import {
   clearInviteResumeContext,
   clearPendingInviteToken,
@@ -54,27 +55,38 @@ const toIntroduction = (payload) => ({
 });
 
 const GuestActions = () => <section className="band-introduction-actions invite-actions" aria-label="밴드 초대">
-  <p>이 초대 링크로 밴드에 가입할 수 있습니다. 계속하려면 로그인하거나 계정을 만들어 주세요.</p>
-  <div className="band-actions">
-    <Link className="primary-btn" to={`/login?returnTo=${encodeURIComponent(inviteContinuationPath)}`}>로그인하고 계속</Link>
-    <Link className="secondary-btn" to={`/signup?returnTo=${encodeURIComponent(inviteContinuationPath)}`}>회원가입하고 계속</Link>
-  </div>
+  <p>이 초대 링크로 밴드에 가입할 수 있습니다. 로그인하면 이 화면에서 초대를 이어갑니다.</p>
+  <LoginPage embedded returnToOverride={inviteContinuationPath} />
+  <p className="bands-help">초대 확인에 실패하면 <Link to="/login">일반 로그인</Link> 후 원래 받은 초대 링크를 다시 열어 주세요.</p>
+  <Link className="secondary-btn" to={`/signup?returnTo=${encodeURIComponent(inviteContinuationPath)}`}>회원가입하고 계속</Link>
 </section>;
 
 export const InviteLinkRoute = () => {
   captureInviteFragment();
   const location = useLocation();
-  const { user, authGeneration = 0, getAccessToken, refreshSession } = useAuth();
+  const { user, loading: authLoading, authGeneration = 0, getAccessToken, refreshSession } = useAuth();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ identity: '', loading: true, payload: null, error: '' });
+  const [previewAttempt, setPreviewAttempt] = useState(0);
   const [continuing, setContinuing] = useState(false);
   const actionControllerRef = useRef(null);
   const identityRef = useRef('');
+  const previousUserIdRef = useRef(user?.id || null);
   const navigate = useNavigate();
   const identity = `${user?.id || 'anonymous'}:${authGeneration}:${getInviteTokenGeneration()}`;
   identityRef.current = identity;
 
   useEffect(() => () => { actionControllerRef.current?.abort(); actionControllerRef.current = null; }, [identity]);
+
+  useEffect(() => {
+    const nextUserId = user?.id || null;
+    const previousUserId = previousUserIdRef.current;
+    previousUserIdRef.current = nextUserId;
+    if (!previousUserId && nextUserId && getInviteResumeContext()) {
+      clearPendingInviteToken();
+      navigate(inviteContinuationPath, { replace: true });
+    }
+  }, [navigate, user?.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -91,7 +103,7 @@ export const InviteLinkRoute = () => {
       if (!controller.signal.aborted && error?.name !== 'AbortError') setState({ identity, loading: false, payload: null, error: apiError(error) });
     });
     return () => controller.abort();
-  }, [api, identity, location.pathname, location.search, location.hash]);
+  }, [api, identity, location.pathname, location.search, location.hash, previewAttempt]);
 
   const continueSignedIn = async () => {
     if (!user?.email || continuing) return;
@@ -116,14 +128,16 @@ export const InviteLinkRoute = () => {
   };
 
   if (state.identity !== identity || state.loading) return <main className="band-introduction-page"><p role="status">초대받은 밴드 소개를 불러오는 중입니다…</p></main>;
-  if (!state.payload) return <main className="band-introduction-page"><Link className="bands-return-link" to="/bands/discover">← 공개 밴드 찾기</Link><section className="invite-error" role="alert"><h1>초대 링크를 확인할 수 없습니다</h1><p>{state.error}</p></section></main>;
+  if (!state.payload) return <main className="band-introduction-page"><Link className="bands-return-link" to="/bands/discover">← 공개 밴드 찾기</Link><section className="invite-error" role="alert"><h1>초대 링크를 확인할 수 없습니다</h1><p>{hasPendingInviteToken() ? state.error : '로그인 후 다시 초대 링크를 열어 주세요. 링크 정보가 브라우저에 남아 있지 않습니다.'}</p>{hasPendingInviteToken() && <button className="secondary-btn" type="button" onClick={() => { setState((previous) => ({ ...previous, loading: true, error: '' })); setPreviewAttempt((attempt) => attempt + 1); }}>다시 시도</button>}<p><Link to="/login">로그인</Link></p></section></main>;
   const introduction = toIntroduction(state.payload);
   const viewer = state.payload.viewer;
   return <BandIntroduction introduction={introduction}>
     {state.error && <p className="auth-error" role="alert">{state.error}</p>}
     {viewer.can_open_workspace
       ? <section className="band-introduction-actions"><p>이미 가입한 밴드입니다.</p><Link className="primary-btn" to={`/bands/${encodeURIComponent(introduction.band.slug)}`}>밴드 공간 열기</Link></section>
-      : user
+      : authLoading
+        ? <section className="band-introduction-actions invite-actions"><p role="status">로그인 상태를 확인하고 있습니다…</p></section>
+        : user
         ? <section className="band-introduction-actions invite-actions"><p>로그인한 계정으로 초대 내용을 확인한 뒤 가입을 진행할 수 있습니다.</p><button className="primary-btn" type="button" onClick={continueSignedIn} disabled={continuing}>{continuing ? '초대 확인 중…' : '초대 확인하고 계속'}</button></section>
         : <GuestActions />}
   </BandIntroduction>;
@@ -134,6 +148,7 @@ export const InviteContinueRoute = () => {
   const bands = useContext(BandContext);
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ identity: '', loading: true, payload: null, error: '' });
+  const [resumeAttempt, setResumeAttempt] = useState(0);
   const [acceptingIdentity, setAcceptingIdentity] = useState('');
   const actionControllerRef = useRef(null);
   const identityRef = useRef('');
@@ -147,6 +162,10 @@ export const InviteContinueRoute = () => {
   const [nameDraft, setNameDraft] = useState({ identity: draftIdentity, value: '' });
   const name = nameDraft.identity === draftIdentity ? nameDraft.value : '';
 
+  useEffect(() => {
+    if (!context && hasPendingInviteToken()) navigate('/invite', { replace: true });
+  }, [context, navigate]);
+
   useEffect(() => () => { actionControllerRef.current?.abort(); actionControllerRef.current = null; }, [identity]);
 
   useEffect(() => {
@@ -155,7 +174,7 @@ export const InviteContinueRoute = () => {
       setState({ identity, loading: false, payload: null, error: '초대 확인 정보가 없습니다. 원래 받은 초대 링크를 다시 열어 주세요.' });
       return () => controller.abort();
     }
-    setState({ identity, loading: true, payload: null, error: '' });
+    setState({ identity, loading: true, payload: null, error: '', retryable: false });
     api.requestJson(inviteLinkPath('/resume'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context }), signal: controller.signal, cache: 'no-store',
     }).then((payload) => {
@@ -167,11 +186,11 @@ export const InviteContinueRoute = () => {
     }).catch((error) => {
       if (!controller.signal.aborted && error?.name !== 'AbortError') {
         if (error?.status === 403 || error?.status === 404) clearInviteResumeContext();
-        setState({ identity, loading: false, payload: null, error: apiError(error) });
+        setState({ identity, loading: false, payload: null, error: apiError(error), retryable: error?.status !== 403 && error?.status !== 404 });
       }
     });
     return () => controller.abort();
-  }, [api, context, identity]);
+  }, [api, context, identity, resumeAttempt]);
 
   const accept = useCallback(async () => {
     if (!context || accepting || !validJoinName(name)) return;
@@ -196,7 +215,7 @@ export const InviteContinueRoute = () => {
   }, [accepting, api, context, identity, name, bands, navigate]);
 
   if (state.identity !== identity || state.loading) return <main className="band-introduction-page"><p role="status">초대 상태를 확인하는 중입니다…</p></main>;
-  if (!state.payload) return <main className="band-introduction-page"><Link className="bands-return-link" to="/bands">← 내 밴드</Link><section className="invite-error" role="alert"><h1>초대를 이어갈 수 없습니다</h1><p>{state.error}</p><p><Link to="/bands/discover">공개 밴드 찾기</Link></p></section></main>;
+  if (!state.payload) return <main className="band-introduction-page"><Link className="bands-return-link" to="/bands">← 내 밴드</Link><section className="invite-error" role="alert"><h1>초대를 이어갈 수 없습니다</h1><p>{state.error}</p>{state.retryable && context && <button type="button" className="secondary-btn" onClick={() => { setState((previous) => ({ ...previous, loading: true, error: '' })); setResumeAttempt((attempt) => attempt + 1); }}>다시 시도</button>}<p>초대 정보가 만료되었거나 브라우저에서 사라졌다면 로그인 후 원래 받은 초대 링크를 다시 열어 주세요.</p><p><Link to="/bands/discover">공개 밴드 찾기</Link></p></section></main>;
   const introduction = toIntroduction(state.payload);
   const viewer = state.payload.viewer;
   return <BandIntroduction introduction={introduction}>

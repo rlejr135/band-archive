@@ -2,22 +2,28 @@ import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { createElement } from 'react';
+import { createElement, useEffect, useState } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { createServer } from 'vite';
+import userEvent from '@testing-library/user-event';
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://localhost/' });
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, location: dom.window.location, history: dom.window.history, sessionStorage: dom.window.sessionStorage, HTMLElement: dom.window.HTMLElement, Event: dom.window.Event });
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
-let vite; let auth; let invitePage; let inviteService; let bands;
+const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+let vite; let auth; let invitePage; let inviteService; let bands; let policy; let authPages; let requireAuth;
 const load = async () => {
   if (invitePage) return;
-  vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
+  vite = await createServer({ envDir: false, server: { middlewareMode: true, hmr: false }, appType: 'custom', optimizeDeps: { noDiscovery: true }, plugins: [{ name: 'auth-test-double', enforce: 'pre', transform(_code, id) {
+    if (id.replaceAll('\\', '/').endsWith('/src/services/supabase.js')) return 'export const getSupabaseClient = () => globalThis.testSupabase; export const getSupabaseConfigError = () => null;';
+  } }] });
   auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx');
   bands = await vite.ssrLoadModule('/src/context/BandContext.jsx');
+  policy = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx');
+  authPages = await vite.ssrLoadModule('/src/components/auth/AuthPages.jsx');
+  requireAuth = await vite.ssrLoadModule('/src/components/layout/RequireAuth.jsx');
   invitePage = await vite.ssrLoadModule('/src/components/bands/InviteLink.jsx');
   inviteService = await vite.ssrLoadModule('/src/services/inviteLinks.js');
 };
@@ -41,10 +47,25 @@ const invitePayload = (viewer = { membership_status: null, can_open_workspace: f
   }, viewer,
 });
 const tree = (authValue, entry = '/invite') => createElement(auth.AuthContext.Provider, { value: authValue },
+  createElement(policy.ServicePolicyContext.Provider, { value: { config: { captcha: { enabled: false } }, loading: false, error: '', retry: () => {} } },
   createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null,
     createElement(Route, { path: '/invite', element: createElement(invitePage.InviteLinkRoute) }),
-    createElement(Route, { path: '/invite/continue', element: createElement(invitePage.InviteContinueRoute) }),
-    createElement(Route, { path: '/bands/:slug', element: createElement('p', null, 'workspace') }))));
+    createElement(Route, { path: '/login', element: createElement(authPages.LoginPage) }),
+    createElement(Route, { path: '/invite/continue', element: createElement(requireAuth.default, null, createElement(invitePage.InviteContinueRoute)) }),
+    createElement(Route, { path: '/bands/:slug', element: createElement('p', null, 'workspace') })))));
+const DynamicAuth = ({ children }) => {
+  const [value, setValue] = useState(account());
+  useEffect(() => {
+    globalThis.setInviteTestAccount = setValue;
+    return () => { delete globalThis.setInviteTestAccount; };
+  }, []);
+  return createElement(auth.AuthContext.Provider, { value }, children);
+};
+const inviteRoutes = (entry = '/invite') => createElement(policy.ServicePolicyContext.Provider, { value: { config: { captcha: { enabled: false } }, loading: false, error: '', retry: () => {} } },
+  createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null,
+    createElement(Route, { path: '/invite', element: createElement(invitePage.InviteLinkRoute) }),
+    createElement(Route, { path: '/invite/continue', element: createElement(requireAuth.default, null, createElement(invitePage.InviteContinueRoute)) }),
+    createElement(Route, { path: '/login', element: createElement(authPages.LoginPage) }))));
 
 test('invite fragment is scrubbed synchronously; preview is body-only and never accepts implicitly', async () => {
   await load(); inviteService.resetInviteUrlContextForTests();
@@ -63,9 +84,133 @@ test('invite fragment is scrubbed synchronously; preview is body-only and never 
     assert.deepEqual(JSON.parse(calls[0].options.body), { token: opaque() });
     assert.equal(calls.some(({ url }) => url.includes(opaque())), false);
     assert.equal(calls.some(({ url }) => url.endsWith('/accept')), false);
-    assert.ok(view.getByRole('link', { name: '로그인하고 계속' }));
+    assert.ok(view.getByRole('textbox', { name: '이메일' }));
+    assert.ok(view.getByRole('button', { name: '로그인' }));
     assert.ok(view.getByRole('link', { name: '회원가입하고 계속' }));
   } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('inline login returns to the invite and resumes successfully with a real public-audience payload', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  const token = opaque('P'); const context = opaque('Q');
+  setUrl(`http://localhost/invite#token=${token}`); inviteService.initializeInviteUrlContext();
+  const previous = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url); calls.push({ path, options });
+    if (path.endsWith('/preview')) return response(invitePayload());
+    if (path.endsWith('/resume-context')) return response({ context, expires_at: '2099-01-01T00:00:00Z' }, 201);
+    if (path.endsWith('/resume')) return response(invitePayload());
+    throw new Error(`unexpected ${path}`);
+  };
+  const signIn = deferred();
+  globalThis.testSupabase = { auth: { signInWithPassword: async () => { globalThis.setInviteTestAccount(account('signed-in')); return signIn.promise; } } };
+  try {
+    const view = render(createElement(DynamicAuth, null, inviteRoutes()));
+    await view.findByRole('heading', { name: '초대 밴드' });
+    await userEvent.type(view.getByLabelText('이메일'), 'signed-in@example.test');
+    await userEvent.type(view.getByLabelText('비밀번호'), 'correct-password');
+    await userEvent.click(view.getByRole('button', { name: '로그인' }));
+    await view.findByLabelText('밴드에서 사용할 이름 (필수)');
+    // AuthContext can publish SIGNED_IN before signInWithPassword resolves.
+    // The invite continuation must already be recoverable in that window.
+    assert.ok(calls.some(({ path, options }) => path.endsWith('/resume-context') && JSON.parse(options.body).token === token));
+    assert.ok(calls.some(({ path, options }) => path.endsWith('/resume') && JSON.parse(options.body).context === context));
+    assert.ok(view.getByRole('heading', { name: '초대 밴드 밴드에 가입하시겠습니까?' }));
+    assert.equal(document.body.textContent.includes('다시 초대 링크'), false);
+    await act(async () => { signIn.resolve({}); await signIn.promise; });
+  } finally { globalThis.fetch = previous; delete globalThis.testSupabase; delete globalThis.setInviteTestAccount; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('continuation with a pending fragment returns to invite preview instead of losing the invite', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  setUrl(`http://localhost/invite#token=${opaque('R')}`); inviteService.initializeInviteUrlContext();
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => response(invitePayload());
+  try {
+    const view = render(tree(account('signed-in'), '/invite/continue'));
+    await view.findByRole('heading', { name: '초대 밴드' });
+    assert.ok(view.getByRole('button', { name: '초대 확인하고 계속' }));
+  } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('invite continuation retries a transient resume failure without accepting automatically', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests(); inviteService.saveInviteResumeContext(opaque('T'), '2099-01-01T00:00:00Z');
+  const previous = globalThis.fetch; let resumeReads = 0; let accepts = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/resume')) { resumeReads += 1; return resumeReads === 1 ? response({ error: 'temporary' }, 500) : response(invitePayload()); }
+    if (String(url).endsWith('/accept')) { accepts += 1; return response({ joined: true }); }
+    throw new Error(`unexpected ${String(url)}`);
+  };
+  try {
+    const view = render(tree(account('signed-in'), '/invite/continue'));
+    await view.findByRole('button', { name: '다시 시도' });
+    await userEvent.click(view.getByRole('button', { name: '다시 시도' }));
+    await view.findByRole('heading', { name: '초대 밴드 밴드에 가입하시겠습니까?' });
+    assert.equal(resumeReads, 2);
+    assert.equal(accepts, 0);
+  } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('expired invite continuation does not offer retry after the context is cleared', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests(); inviteService.saveInviteResumeContext(opaque('U'), '2099-01-01T00:00:00Z');
+  const previous = globalThis.fetch; globalThis.fetch = async () => response({ error: 'expired' }, 404);
+  try {
+    const view = render(tree(account('signed-in'), '/invite/continue'));
+    await view.findByRole('heading', { name: '초대를 이어갈 수 없습니다' });
+    assert.equal(view.queryByRole('button', { name: '다시 시도' }), null);
+    assert.equal(inviteService.getInviteResumeContext(), '');
+  } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('invite preview can retry after a transient failure', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  setUrl(`http://localhost/invite#token=${opaque('S')}`); inviteService.initializeInviteUrlContext();
+  assert.equal(inviteService.hasPendingInviteToken(), true);
+  const previous = globalThis.fetch; let reads = 0;
+  globalThis.fetch = async () => { reads += 1; return reads === 1 ? response({}, 503) : response(invitePayload()); };
+  try {
+    const view = render(tree(account()));
+    await waitFor(() => assert.equal(reads, 1));
+    await view.findByRole('button', { name: '다시 시도' });
+    await userEvent.click(view.getByRole('button', { name: '다시 시도' }));
+    await view.findByRole('heading', { name: '초대 밴드' });
+    assert.equal(reads, 2);
+    assert.ok(view.getByLabelText('이메일'));
+  } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('invite page waits for the auth session before mounting the inline login form', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  setUrl(`http://localhost/invite#token=${opaque('U')}`); inviteService.initializeInviteUrlContext();
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => response(invitePayload());
+  try {
+    const view = render(tree({ ...account(), loading: true }));
+    await view.findByRole('heading', { name: '초대 밴드' });
+    await view.findByText('로그인 상태를 확인하고 있습니다…');
+    assert.equal(view.queryByLabelText('이메일'), null);
+    view.rerender(tree(account()));
+    assert.ok(await view.findByLabelText('이메일'));
+  } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
+test('resume-context failures stay distinct from credential failures and do not submit login', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  setUrl(`http://localhost/invite#token=${opaque('T')}`); inviteService.initializeInviteUrlContext();
+  const previous = globalThis.fetch; let signInCalls = 0;
+  globalThis.fetch = async (url) => String(url).endsWith('/preview') ? response(invitePayload()) : response({}, 429);
+  globalThis.testSupabase = { auth: { signInWithPassword: async () => { signInCalls += 1; return {}; } } };
+  try {
+    const view = render(tree(account()));
+    await view.findByRole('heading', { name: '초대 밴드' });
+    assert.ok(view.getByRole('link', { name: '일반 로그인' }));
+    await userEvent.type(view.getByLabelText('이메일'), 'person@example.test');
+    await userEvent.type(view.getByLabelText('비밀번호'), 'correct-password');
+    await userEvent.click(view.getByRole('button', { name: '로그인' }));
+    await view.findByText(/초대 확인 정보를 만들지 못했습니다/);
+    assert.equal(signInCalls, 0);
+    assert.equal(document.body.textContent.includes(opaque('T')), false);
+  } finally { globalThis.fetch = previous; delete globalThis.testSupabase; inviteService.resetInviteUrlContextForTests(); }
 });
 
 test('signed-in visitor must explicitly supply a member name and accept after resume', async () => {

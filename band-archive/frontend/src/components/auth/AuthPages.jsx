@@ -45,12 +45,12 @@ const AuthForm = ({ children, onSubmit, submitting }) => (
   </form>
 );
 
-export const LoginPage = ({ embedded = false }) => {
+export const LoginPage = ({ embedded = false, returnToOverride }) => {
   const challenge = useAuthChallenge();
   const { user, loading, configError } = useAuth();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const returnTo = useMemo(() => returnFromSearch(searchParams), [searchParams]);
+  const returnTo = useMemo(() => returnToOverride ? safeAuthReturnPath(returnToOverride) : returnFromSearch(searchParams), [returnToOverride, searchParams]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -68,10 +68,13 @@ export const LoginPage = ({ embedded = false }) => {
     inviteFlowRef.current = inviteFlow;
     setSubmitting(true);
     setError('');
+    let inviteContextFailed = false;
     try {
       if (isInviteContinuationPath(returnTo)) {
-        if (hasPendingInviteToken()) await createInviteResumeContext(normalizeEmail(email), { signal: inviteFlow.signal });
-        else if (!getInviteResumeContext()) throw new Error('invite_context_unavailable');
+        if (hasPendingInviteToken()) {
+          try { await createInviteResumeContext(normalizeEmail(email), { signal: inviteFlow.signal }); }
+          catch (error) { inviteContextFailed = true; throw error; }
+        } else if (!getInviteResumeContext()) { inviteContextFailed = true; throw new Error('invite_context_unavailable'); }
       }
       if (inviteFlow?.signal.aborted) return;
       const supabase = getSupabaseClient();
@@ -84,9 +87,10 @@ export const LoginPage = ({ embedded = false }) => {
       else navigate(returnTo, { replace: true });
     } catch {
       if (inviteFlow?.signal.aborted) return;
-      setError(isInviteContinuationPath(returnTo) && !hasPendingInviteToken() && !getInviteResumeContext()
-        ? '초대 링크가 만료되었거나 이 화면에서 초대 정보를 이어갈 수 없습니다. 원래 받은 초대 링크를 다시 열어 주세요.'
-        : authFailure);
+      if (inviteContextFailed) setError(hasPendingInviteToken()
+        ? '초대 확인 정보를 만들지 못했습니다. 잠시 후 다시 시도해 주세요. 로그인은 진행되지 않았습니다.'
+        : '초대 링크 정보를 찾을 수 없습니다. 로그인 후 원래 받은 초대 링크를 다시 열어 주세요.');
+      else setError(authFailure);
     } finally {
       submission.release();
       if (inviteFlowRef.current === inviteFlow) inviteFlowRef.current = null;
@@ -185,10 +189,11 @@ export const SignupPage = () => {
 
 export const VerifyEmailPage = () => {
   const { user, loading } = useAuth();
+  const inviteContext = getInviteResumeContext();
   return (
     <AuthFrame title="이메일 확인">
-      {loading ? <p>확인 상태를 불러오는 중입니다…</p> : user ? <><p className="auth-success" role="status">이메일 확인이 완료되었습니다. 밴드를 선택해 계속하세요.</p>{getInviteResumeContext() && <p><Link className="primary-btn" to={inviteContinuationPath}>초대받은 밴드 확인하기</Link></p>}</> : <p>확인 메일의 링크를 열어 이메일 인증을 완료해 주세요.</p>}
-      <p><Link to="/login">로그인</Link> · <Link to="/bands">밴드 선택</Link></p>
+      {loading ? <p>확인 상태를 불러오는 중입니다…</p> : user ? <><p className="auth-success" role="status">이메일 확인이 완료되었습니다. {inviteContext ? '초대를 계속할 수 있습니다.' : '밴드를 선택해 계속하세요.'}</p>{inviteContext && <p><Link className="primary-btn" to={inviteContinuationPath}>초대받은 밴드 확인하기</Link></p>}</> : inviteContext ? <p className="auth-success" role="status">이메일 인증을 완료했다면 로그인해 초대를 이어가세요. 아직 인증하지 않았다면 확인 메일의 링크를 먼저 열어 주세요.</p> : <p>확인 메일의 링크를 열어 이메일 인증을 완료해 주세요.</p>}
+      <p><Link to={inviteContext ? `/login?returnTo=${encodeURIComponent(inviteContinuationPath)}` : '/login'}>{inviteContext ? '로그인 후 초대 이어가기' : '로그인'}</Link>{!inviteContext && <> · <Link to="/bands">밴드 선택</Link></>}</p>
     </AuthFrame>
   );
 };
