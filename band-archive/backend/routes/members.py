@@ -73,7 +73,9 @@ def update_member(id):
     if 'name' in data:
         validate_required_string(data['name'], 'name')
         validate_string_length(data['name'], 'name', 100)
-        member.name = data['name'].strip()
+        requested_name = data['name'].strip()
+        if requested_name != member.name:
+            raise ValidationError('Member names can only be changed through the authenticated own profile endpoint.', 403)
 
     if 'instrument' in data:
         validate_required_string(data['instrument'], 'instrument')

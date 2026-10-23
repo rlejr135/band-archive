@@ -6,6 +6,7 @@ from sqlalchemy import and_, exists, or_
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, BandMembership, Member
+from join_name import required_join_name
 
 POSITION_LABELS = {'VOCAL': '보컬', 'GUITAR': '기타', 'BASS': '베이스',
                    'DRUMS': '드럼', 'KEYBOARD': '키보드', 'OTHER': '기타 역할'}
@@ -103,7 +104,7 @@ def own_profile(actor, band_id, payload=None):
     if is_pending_deletion('member', member.id, band_id):
         raise NotFoundError('Member profile not found')
     if payload is not None:
-        allowed = {'biography', 'positions', 'custom_position', 'profile_revision'}
+        allowed = {'name', 'biography', 'positions', 'custom_position', 'profile_revision'}
         if (set(payload) - allowed or 'profile_revision' not in payload
                 or not (set(payload) & (allowed - {'profile_revision'}))):
             raise ValidationError('Profile fields and profile_revision are required.')
@@ -112,6 +113,7 @@ def own_profile(actor, band_id, payload=None):
             raise ValidationError('profile_revision must be a nonnegative integer.')
         if revision != member.profile_revision:
             raise ValidationError('Profile changed; reload before editing.', 409, 'profile_conflict')
+        name = required_join_name(payload['name']) if 'name' in payload else member.name
         biography = payload.get('biography', member.biography)
         positions = payload.get('positions', json.loads(member.positions_json))
         custom = payload.get('custom_position', member.custom_position)
@@ -128,6 +130,7 @@ def own_profile(actor, band_id, payload=None):
                 raise ValidationError('custom_position requires OTHER.')
             custom = ''
         positions = [p for p in POSITION_LABELS if p in positions]
+        member.name = name
         member.biography = biography.strip()
         member.positions_json = json.dumps(positions)
         member.custom_position = custom.strip()

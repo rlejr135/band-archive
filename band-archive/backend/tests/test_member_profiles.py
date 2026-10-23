@@ -63,24 +63,65 @@ BASE = '/api/v2/bands/1/members'
 def test_own_profile_edit_and_scope(profiles):
     c = profiles.test_client()
     assert c.get(BASE + '/me').status_code == 401
+    assert c.patch(BASE + '/me', json={'profile_revision': 0, 'name': 'Unauthenticated'}).status_code == 401
     for user in (3, 4):
         assert c.get(BASE + '/me', headers=headers(user)).status_code == 404
     assert c.get('/api/v2/bands/2/members/me', headers=headers()).status_code == 404
+    assert c.patch('/api/v2/bands/2/members/me', headers=headers(),
+                   json={'profile_revision': 0, 'name': 'Cross-band'}).status_code == 404
+    assert c.patch(BASE + '/2', headers=headers(1),
+                   json={'profile_revision': 0, 'name': 'Owner override'}).status_code == 405
+    with profiles.app_context():
+        user = db.session.get(AppUser, 2)
+        user.email_verified = False
+        db.session.commit()
+    assert c.patch(BASE + '/me', headers=headers(),
+                   json={'profile_revision': 0, 'name': 'Unverified'}).status_code == 403
+    with profiles.app_context():
+        user = db.session.get(AppUser, 2)
+        user.email_verified = True
+        db.session.commit()
     own = c.get(BASE + '/me', headers=headers())
     assert own.status_code == 200 and 'Authorization' in own.vary
     member = own.json['member']
     assert member['positions'] == [] and member['biography'] == '' and member['is_self']
     result = c.patch(BASE + '/me', headers=headers(), json={'profile_revision': 0,
-        'biography': '<script>plain text</script>', 'positions': ['GUITAR', 'VOCAL', 'OTHER'],
+        'name': '  New band name  ', 'biography': '<script>plain text</script>', 'positions': ['GUITAR', 'VOCAL', 'OTHER'],
         'custom_position': '작곡'})
     assert result.status_code == 200
+    assert result.json['member']['name'] == 'New band name'
     assert result.json['member']['instrument'] == '보컬, 기타, 작곡'
     assert result.json['member']['profile_revision'] == 1
-    assert c.patch(BASE + '/me', headers=headers(), json={'profile_revision': 0, 'biography': 'stale'}).status_code == 409
+    stale = c.patch(BASE + '/me', headers=headers(), json={'profile_revision': 0, 'name': 'Stale name'})
+    assert stale.status_code == 409 and stale.json['code'] == 'profile_conflict'
     assert c.patch(BASE + '/me', headers=headers(), json={'profile_revision': 1, 'positions': []}).json['member']['custom_position'] == ''
     with profiles.app_context():
         assert Member.query.filter_by(linked_user_id=1).one().biography == ''
+        assert Member.query.filter_by(linked_user_id=2).one().name == 'New band name'
+        assert Member.query.filter_by(linked_user_id=2).one().instrument == ''
         assert Member.query.filter_by(name='Historical').one().instrument == 'Old custom instrument'
+
+
+def test_own_name_edit_preserves_member_identity_and_other_profile_fields(profiles):
+    c = profiles.test_client()
+    before = c.get(BASE + '/me', headers=headers()).json['member']
+    changed = c.patch(BASE + '/me', headers=headers(), json={
+        'profile_revision': before['profile_revision'], 'name': 'My new name',
+    })
+    assert changed.status_code == 200
+    after = changed.json['member']
+    assert after['name'] == 'My new name'
+    assert after['id'] == before['id']
+    assert after['instrument'] == before['instrument']
+    assert after['biography'] == before['biography']
+    assert after['positions'] == before['positions']
+    assert after['custom_position'] == before['custom_position']
+    assert after['profile_revision'] == before['profile_revision'] + 1
+    with profiles.app_context():
+        account = db.session.get(AppUser, 2)
+        profile = Member.query.filter_by(band_id=1, linked_user_id=2).one()
+        assert account.display_name == 'Person2'
+        assert profile.id == before['id'] and profile.linked_user_id == account.id
 
 
 @pytest.mark.parametrize('payload', [
@@ -88,8 +129,10 @@ def test_own_profile_edit_and_scope(profiles):
     {'profile_revision': 0, 'biography': 'x' * 301}, {'profile_revision': 0, 'positions': ['GUITAR', 'GUITAR']},
     {'profile_revision': 0, 'positions': ['x']}, {'profile_revision': 0, 'positions': [None]},
     {'profile_revision': 0, 'custom_position': 'x'}, {'profile_revision': 0, 'linked_user_id': 1},
-    {'profile_revision': 0, 'name': 'another'}, {'profile_revision': -1, 'biography': 'x'},
+    {'profile_revision': -1, 'biography': 'x'},
     {'profile_revision': 0, 'custom_position': 'x' * 51}, {'profile_revision': 0},
+    {'profile_revision': 0, 'name': ''}, {'profile_revision': 0, 'name': 'x' * 101},
+    {'profile_revision': 0, 'name': 'bad\nname'}, {'profile_revision': 0, 'name': 17},
 ])
 def test_invalid_profile_requests_atomic(profiles, payload):
     assert profiles.test_client().patch(BASE + '/me', headers=headers(), json=payload).status_code == 400
@@ -119,8 +162,23 @@ def test_roster_privacy_active_delete_protection_and_legacy_bypass(profiles):
         db.session.commit()
     legacy_write = c.put('/members/2', json={'name': 'hacked'})
     assert legacy_write.status_code == 403
+    legacy_unlinked_name = c.put('/members/3', json={'name': 'Changed historical', 'instrument': 'changed too'})
+    assert legacy_unlinked_name.status_code == 403
+    same_name_and_other_field = c.put('/members/3', json={'name': 'Historical', 'instrument': 'Updated instrument'})
+    assert same_name_and_other_field.status_code == 200
+    # Band owners and platform administrators cannot use the v1 ID route to
+    # rename someone else's account-linked profile.
+    assert c.put('/members/2', headers=headers(1), json={'name': 'owner override'}).status_code == 403
+    with profiles.app_context():
+        db.session.get(AppUser, 4).is_platform_admin = True
+        db.session.commit()
+    assert c.put('/members/2', headers=headers(4), json={'name': 'superadmin override'}).status_code == 403
+    assert c.patch(BASE + '/me', headers=headers(4),
+                   json={'profile_revision': 0, 'name': 'superadmin override'}).status_code == 404
     with profiles.app_context():
         assert Member.query.filter_by(linked_user_id=2).one().name == 'Person2'
+        historical = Member.query.filter_by(name='Historical').one()
+        assert historical.instrument == 'Updated instrument'
     with profiles.app_context():
         band = db.session.get(Band, 1); band.member_roster_public = False; db.session.commit()
     assert c.get(BASE).status_code == 404
