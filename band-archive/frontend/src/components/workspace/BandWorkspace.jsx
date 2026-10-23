@@ -19,6 +19,7 @@ import { MemberProfileEditor, MemberProfileSummary } from './MemberProfile.jsx';
 import { BandDeleteAction } from './BandDeleteAction.jsx';
 import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
 import UploadCenter from '../common/UploadCenter.jsx';
+import MediaPlayer from '../common/MediaPlayer.jsx';
 import FileUpload from '../common/FileUpload.jsx';
 import { UploadContext } from '../../context/UploadContext.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
@@ -70,6 +71,12 @@ export const BandWorkspace = () => {
   const logoRefreshController = useRef(null);
   const [failedLogoKey, setFailedLogoKey] = useState('');
   const routeKey = workspaceIdentityKey(bandSlug, user?.id);
+
+  useEffect(() => {
+    if (!state.band || state.band.slug !== bandSlug) return undefined;
+    document.title = `${state.band.name} · Band Archive`;
+    return () => { document.title = 'Band Archive'; };
+  }, [bandSlug, pathname, state.band, state.band?.name, state.band?.slug]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -139,12 +146,13 @@ export const BandWorkspace = () => {
         <div className="workspace-actions">
           <UploadCenter />
           <BandSwitcher currentSlug={state.band.slug} />
-          <Link className="nav-btn workspace-account-link" to="/bands">내 계정</Link>
+          <Link className="nav-btn workspace-account-link" to="/account">내 계정</Link>
           {user ? <button className="nav-btn" onClick={async () => { await signOut(); navigate('/', { replace: true }); }}>로그아웃</button> : <button className="nav-btn" onClick={() => navigate('/login')}>로그인</button>}
         </div>
         <nav aria-label="밴드 공간">
           <NavLink end to={`/bands/${encodeURIComponent(state.band.slug)}`}>대시보드</NavLink>
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/songs`}>곡</NavLink>
+          <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/representative-media`}>대표 미디어</NavLink>
           <NavLink className={({ isActive }) => isActive || pathname.endsWith('/availability') ? 'active' : ''} to={`/bands/${encodeURIComponent(state.band.slug)}/rehearsals`}>합주</NavLink>
           {state.band.permissions?.can_view_roster && <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/members`}>멤버</NavLink>}
           <NavLink to={`/bands/${encodeURIComponent(state.band.slug)}/gallery`}>갤러리</NavLink>
@@ -204,6 +212,263 @@ export const RehearsalWorkspace = () => {
 export const AvailabilityWorkspace = () => {
   const { band, api, workspaceKey } = useWorkspace();
   return <AvailabilityCalendar key={workspaceKey} band={band} api={api} workspaceKey={workspaceKey} />;
+};
+
+const mediaPlayerFile = (media) => {
+  const playback = media?.playback || {};
+  const video = media?.file_type === 'video';
+  const audioUrl = video ? safeExternalHttpUrl(playback.audio_url) : undefined;
+  return {
+    id: media?.id,
+    type: media?.file_type,
+    name: media?.display_name || `${video ? '영상' : '음원'} #${media?.id}`,
+    url: video ? (playback.video_url || playback.url) : (playback.audio_url || playback.url),
+    audio_url: audioUrl,
+    transcoding_status: video && audioUrl ? 'completed' : media?.transcoding_status,
+    transcoding_error: media?.transcoding_error,
+  };
+};
+
+const mergeUniqueEntries = (previous, next) => {
+  const updates = new Map(next.map((entry) => [String(entry.id), entry]));
+  const merged = previous.map((entry) => updates.get(String(entry.id)) || entry);
+  const known = new Set(merged.map((entry) => String(entry.id)));
+  next.forEach((entry) => { if (!known.has(String(entry.id))) { known.add(String(entry.id)); merged.push(entry); } });
+  return merged;
+};
+
+const formatRepresentativeDate = (value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '등록일 정보 없음' : new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'Asia/Seoul' }).format(date);
+};
+
+export const RepresentativeMediaWorkspace = () => {
+  const { band, api, workspaceKey } = useWorkspace();
+  const [featured, setFeatured] = useState({ loading: true, error: '', media: [], pagination: null });
+  const [songs, setSongs] = useState({ loading: true, error: '', entries: [], pagination: null });
+  const [selectedSongId, setSelectedSongId] = useState('');
+  const [mutationError, setMutationError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const featuredVersion = useRef(0);
+  const songVersion = useRef(0);
+  const featuredController = useRef(null);
+  const songController = useRef(null);
+  const featuredOffsets = useRef(new Map());
+  const featuredStaleAttempts = useRef(new Set());
+
+  const loadFeatured = useCallback(async ({ offset = 0, append = false } = {}) => {
+    featuredController.current?.abort();
+    const controller = new AbortController();
+    featuredController.current = controller;
+    const version = ++featuredVersion.current;
+    setFeatured((previous) => ({ ...previous, loading: true, error: '' }));
+    try {
+      const response = await api.requestJson(bandWorkspacePaths.featuredMedia(band.id, { limit: 25, offset }), requestOptions(controller.signal));
+      if (version !== featuredVersion.current || controller.signal.aborted) return;
+      const page = Array.isArray(response?.media) ? response.media : [];
+      page.forEach((item) => featuredOffsets.current.set(String(item.id), offset));
+      setFeatured((previous) => ({ loading: false, error: '', media: append ? mergeUniqueEntries(previous.media, page) : page, pagination: response?.pagination ?? null }));
+    } catch {
+      if (version === featuredVersion.current && !controller.signal.aborted) setFeatured((previous) => ({ ...previous, loading: false, error: genericError }));
+    } finally {
+      if (featuredController.current === controller) featuredController.current = null;
+    }
+  }, [api, band.id]);
+
+  const loadSongs = useCallback(async ({ offset = 0, append = false } = {}) => {
+    songController.current?.abort();
+    const controller = new AbortController();
+    songController.current = controller;
+    const version = ++songVersion.current;
+    setSongs((previous) => ({ ...previous, loading: true, error: '' }));
+    try {
+      const response = await api.requestJson(bandWorkspacePaths.songs(band.id, { limit: PAGE_SIZE, offset }), requestOptions(controller.signal));
+      if (version !== songVersion.current || controller.signal.aborted) return;
+      const page = Array.isArray(response?.songs) ? response.songs : [];
+      setSongs((previous) => ({ loading: false, error: '', entries: append ? mergeUniqueEntries(previous.entries, page) : page, pagination: response?.pagination ?? null }));
+    } catch {
+      if (version === songVersion.current && !controller.signal.aborted) setSongs((previous) => ({ ...previous, loading: false, error: genericError }));
+    } finally {
+      if (songController.current === controller) songController.current = null;
+    }
+  }, [api, band.id]);
+
+  useEffect(() => {
+    featuredVersion.current += 1;
+    songVersion.current += 1;
+    loadFeatured();
+    loadSongs();
+    return () => {
+      featuredVersion.current += 1; songVersion.current += 1;
+      featuredController.current?.abort(); songController.current?.abort();
+      featuredController.current = null; songController.current = null;
+    };
+  }, [loadFeatured, loadSongs, workspaceKey]);
+
+  const canFeatureSongs = songs.entries.filter((song) => song.can_feature === true);
+  const unsetFeatured = async (item) => {
+    if (!item?.can_feature || !item.song_summary?.id || busy) return;
+    setBusy(true); setMutationError('');
+    try {
+      await api.requestJson(bandWorkspacePaths.songFeaturedMedia(band.id, item.song_summary.id), { method: 'DELETE', ...requestOptions() });
+      await loadFeatured();
+    } catch (error) {
+      setMutationError(error?.status === 403 ? '이 대표 미디어를 변경할 권한이 없습니다.' : '대표 미디어를 해제하지 못했습니다. 다시 시도해 주세요.');
+    } finally { setBusy(false); }
+  };
+
+  const refreshFeaturedPlayback = (item) => {
+    const offset = featuredOffsets.current.get(String(item.id)) ?? 0;
+    const currentUrl = item.playback?.video_url || item.playback?.audio_url || item.playback?.url || '';
+    if (!takeOneStaleRefresh(featuredStaleAttempts.current, `${offset}:${currentUrl}`, item.id)) return;
+    loadFeatured({ offset, append: true });
+  };
+
+  return <section className="workspace-page representative-media-page" aria-labelledby="representative-media-title">
+    <div className="workspace-page-heading"><div><h1 id="representative-media-title">대표 미디어</h1><p>곡별로 선택된 대표 영상 또는 음원을 확인하고 재생할 수 있습니다.</p></div>{canFeatureSongs.length > 0 && <Link className="secondary-btn" to={`/bands/${encodeURIComponent(band.slug)}/manage/representative-media`}>대표 미디어 관리</Link>}</div>
+    {mutationError && <p role="alert" className="workspace-error">{mutationError}</p>}
+    {featured.loading && featured.media.length === 0 ? <p aria-live="polite">대표 미디어를 불러오는 중입니다…</p> : featured.error && featured.media.length === 0 ? <ErrorState message={featured.error} retry={() => loadFeatured()} /> : featured.media.length === 0 ? <div className="workspace-empty"><p>등록된 대표 미디어가 없습니다.</p></div> : <div className="representative-media-grid">{featured.media.map((item) => <RepresentativeMediaCard key={item.id} item={item} busy={busy} loading={featured.loading} onUnset={unsetFeatured} onPlaybackError={refreshFeaturedPlayback} />)}</div>}
+    {featured.pagination?.has_more && <button className="secondary-btn" disabled={featured.loading} onClick={() => loadFeatured({ offset: featured.pagination?.next_offset ?? featured.media.length, append: true })}>{featured.loading ? '불러오는 중…' : '대표 미디어 더 불러오기'}</button>}
+    {featured.error && featured.media.length > 0 && <ErrorState message={featured.error} retry={() => loadFeatured()} />}
+    {songs.loading && songs.entries.length === 0 ? <p aria-live="polite">곡별 변경 권한을 확인하는 중입니다…</p> : songs.error && songs.entries.length === 0 ? <ErrorState message={songs.error} retry={() => loadSongs()} /> : canFeatureSongs.length > 0 ? <section className="representative-media-editor" aria-labelledby="representative-media-edit-title">
+      <h2 id="representative-media-edit-title">대표 미디어 선택</h2>
+      <p>곡을 선택한 뒤, 해당 곡에 등록된 영상이나 음원을 대표로 지정할 수 있습니다.</p>
+      <label htmlFor="representative-song-select">곡 선택</label>
+      <select id="representative-song-select" value={selectedSongId} onChange={(event) => { setMutationError(''); setSelectedSongId(event.target.value); }}>
+        <option value="">곡 선택…</option>
+        {canFeatureSongs.map((song) => <option key={song.id} value={song.id}>{song.title} · {song.artist}</option>)}
+      </select>
+      {songs.pagination?.has_more && <button type="button" className="secondary-btn" disabled={songs.loading} onClick={() => loadSongs({ offset: songs.pagination?.next_offset ?? songs.entries.length, append: true })}>{songs.loading ? '곡을 불러오는 중…' : '곡 더 불러오기'}</button>}
+      {selectedSongId && <FeaturedMediaEditor key={`${workspaceKey}:${selectedSongId}`} song={canFeatureSongs.find((song) => String(song.id) === selectedSongId)} band={band} api={api} onSaved={async () => { await loadFeatured(); setMutationError(''); }} onError={setMutationError} />}
+    </section> : !songs.loading && <p className="workspace-muted">대표 미디어를 지정할 수 있는 곡이 없습니다. 밴드 소유자 또는 플랫폼 superadmin만 지정할 수 있습니다.</p>}
+  </section>;
+};
+
+const RepresentativeMediaCard = ({ item, busy, loading, onUnset, onPlaybackError }) => {
+  const [playing, setPlaying] = useState(false);
+  return <article className="workspace-card representative-media-card">
+    <header><h2>{item.song_summary?.title || '곡 제목 없음'}</h2><p>{item.song_summary?.artist || '아티스트 정보 없음'}</p></header>
+    <p className="representative-media-meta"><span>{item.file_type === 'video' ? '영상' : '음원'}</span><span>{formatRepresentativeDate(item.created_at)}</span></p>
+    <p className="representative-media-name">{item.display_name || `${item.file_type === 'video' ? '영상' : '음원'} #${item.id}`}</p>
+    <button type="button" className="primary-btn" aria-expanded={playing} onClick={() => setPlaying((current) => !current)}>{playing ? '재생 닫기' : '재생'}</button>
+    {playing && <><MediaPlayer file={mediaPlayerFile(item)} preload="none" onPlaybackError={() => onPlaybackError(item)} /><button type="button" className="secondary-btn" disabled={loading} onClick={() => onPlaybackError(item)}>{loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></>}
+    {item.can_feature && <button type="button" className="secondary-btn" disabled={busy} onClick={() => onUnset(item)}>{busy ? '처리 중…' : '대표 미디어 해제'}</button>}
+  </article>;
+};
+
+export const FeaturedMediaEditor = ({ song, band, api, onSaved, onError, managementOnly = false }) => {
+  const [candidates, setCandidates] = useState({ loading: true, error: '', entries: [], pagination: null });
+  const [media, setMedia] = useState({ loading: true, error: '', entries: [], pagination: null });
+  const [previewId, setPreviewId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const requestVersions = useRef({ candidates: 0, media: 0 });
+  const requestControllers = useRef({ candidates: null, media: null });
+  const mediaOffsets = useRef(new Map());
+  const mediaStaleAttempts = useRef(new Set());
+  const managementMounted = useRef(false);
+
+  const requestPage = useCallback(async ({ kind, offset = 0, append = false } = {}) => {
+    if (managementOnly && !managementMounted.current) return;
+    requestControllers.current[kind]?.abort();
+    const controller = new AbortController();
+    requestControllers.current[kind] = controller;
+    const version = ++requestVersions.current[kind];
+    const setTarget = kind === 'candidates' ? setCandidates : setMedia;
+    const targetKey = kind === 'candidates' ? 'entries' : 'entries';
+    const path = kind === 'candidates'
+      ? bandWorkspacePaths.featuredMediaCandidates(band.id, song.id, { limit: PAGE_SIZE, offset })
+      : bandWorkspacePaths.songMedia(band.id, song.id, { limit: PAGE_SIZE, offset });
+    setTarget((previous) => ({ ...previous, loading: true, error: '' }));
+    try {
+      const response = await api.requestJson(path, requestOptions(controller.signal));
+      if (version !== requestVersions.current[kind] || controller.signal.aborted) return;
+      const entries = Array.isArray(response?.media) ? response.media : [];
+      if (kind === 'media') entries.forEach((entry) => mediaOffsets.current.set(String(entry.id), offset));
+      setTarget((previous) => ({ loading: false, error: '', entries: append ? mergeUniqueEntries(previous[targetKey], entries) : entries, pagination: response?.pagination ?? null }));
+    } catch (error) {
+      if (version === requestVersions.current[kind] && !controller.signal.aborted) {
+        const message = error?.status === 403
+          ? (kind === 'candidates' ? '대표 미디어를 지정할 권한이 없습니다.' : '이 미디어의 재생 정보를 볼 권한이 없습니다.')
+          : (kind === 'candidates' ? '대표 미디어 후보를 불러오지 못했습니다.' : '재생 미디어 정보를 불러오지 못했습니다.');
+        setTarget((previous) => ({ ...previous, loading: false, error: message }));
+      }
+    } finally {
+      if (requestControllers.current[kind] === controller) requestControllers.current[kind] = null;
+    }
+  }, [api, band.id, song.id, managementOnly]);
+
+  useEffect(() => {
+    const activeVersions = requestVersions.current;
+    const activeControllers = requestControllers.current;
+    managementMounted.current = true;
+    requestPage({ kind: 'candidates' });
+    if (!managementOnly) requestPage({ kind: 'media' });
+    return () => {
+      managementMounted.current = false;
+      activeVersions.candidates += 1; activeVersions.media += 1;
+      activeControllers.candidates?.abort(); activeControllers.media?.abort();
+      activeControllers.candidates = null; activeControllers.media = null;
+    };
+  }, [managementOnly, requestPage]);
+
+  const mediaById = new Map(media.entries.map((entry) => [String(entry.id), entry]));
+  const choose = async (candidate) => {
+    if ((managementOnly && !managementMounted.current) || busyId || candidate.can_feature !== true) return;
+    setBusyId(candidate.id); onError('');
+    try {
+      await api.requestJson(bandWorkspacePaths.songFeaturedMedia(band.id, song.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ media_id: Number(candidate.id) }) });
+      if (managementOnly && !managementMounted.current) return;
+      await requestPage({ kind: 'candidates' });
+      if (managementOnly && !managementMounted.current) return;
+      await onSaved();
+    } catch (error) {
+      if (managementOnly && !managementMounted.current) return;
+      onError(error?.status === 403 ? '대표 미디어를 지정할 권한이 없습니다.' : '대표 미디어를 지정하지 못했습니다. 다시 시도해 주세요.');
+    } finally { if (!managementOnly || managementMounted.current) setBusyId(null); }
+  };
+
+  const unset = async (candidate) => {
+    if (!managementOnly || !managementMounted.current || busyId || !candidate?.is_featured) return;
+    setBusyId(candidate.id); onError('');
+    try {
+      await api.requestJson(bandWorkspacePaths.songFeaturedMedia(band.id, song.id), { method: 'DELETE' });
+      if (!managementMounted.current) return;
+      await requestPage({ kind: 'candidates' });
+      if (!managementMounted.current) return;
+      await onSaved();
+    } catch (error) {
+      if (!managementMounted.current) return;
+      onError(error?.status === 403 ? '대표 미디어를 해제할 권한이 없습니다.' : '대표 미디어를 해제하지 못했습니다. 다시 시도해 주세요.');
+    } finally { if (managementMounted.current) setBusyId(null); }
+  };
+
+  const refreshCandidatePlayback = (candidate, currentMedia) => {
+    const offset = mediaOffsets.current.get(String(candidate.id)) ?? 0;
+    const playback = currentMedia?.playback || {};
+    const url = playback.video_url || playback.audio_url || playback.url || '';
+    if (!takeOneStaleRefresh(mediaStaleAttempts.current, `${offset}:${url}`, candidate.id)) return;
+    requestPage({ kind: 'media', offset });
+  };
+
+  return <div className="representative-candidates">
+    <h3>{song?.title || '선택한 곡'}의 후보</h3>
+    {candidates.loading && candidates.entries.length === 0 ? <p aria-live="polite">후보를 불러오는 중입니다…</p> : candidates.error && candidates.entries.length === 0 ? <ErrorState message={candidates.error} retry={() => requestPage({ kind: 'candidates' })} /> : candidates.entries.length === 0 ? <p className="workspace-muted">대표로 지정할 영상이나 음원이 없습니다.</p> : <div className="representative-candidate-list">{candidates.entries.map((candidate) => {
+      const playableMedia = mediaById.get(String(candidate.id));
+      return <article className="representative-candidate" key={candidate.id}>
+        <div><strong>{candidate.display_name || `${candidate.file_type === 'video' ? '영상' : '음원'} #${candidate.id}`}</strong><span>{candidate.file_type === 'video' ? '영상' : '음원'}{candidate.is_featured ? ' · 현재 대표' : ''}</span><small>{formatRepresentativeDate(candidate.created_at)}</small></div>
+        {playableMedia && <button type="button" className="secondary-btn" aria-expanded={previewId === candidate.id} onClick={() => setPreviewId(previewId === candidate.id ? null : candidate.id)}>{previewId === candidate.id ? '미리보기 닫기' : '재생 미리보기'}</button>}
+        {managementOnly && candidate.is_featured
+          ? <button type="button" className="secondary-btn" disabled={Boolean(busyId)} onClick={() => unset(candidate)}>{busyId === candidate.id ? '해제 중…' : '대표 해제'}</button>
+          : <button type="button" className={candidate.is_featured ? 'secondary-btn' : 'primary-btn'} disabled={Boolean(busyId) || candidate.is_featured} onClick={() => choose(candidate)}>{busyId === candidate.id ? '저장 중…' : candidate.is_featured ? '현재 대표 미디어' : '대표로 지정'}</button>}
+        {!managementOnly && previewId === candidate.id && playableMedia && <div className="representative-preview"><MediaPlayer file={mediaPlayerFile(playableMedia)} preload="none" onPlaybackError={() => refreshCandidatePlayback(candidate, playableMedia)} /><button type="button" className="secondary-btn" disabled={media.loading} onClick={() => refreshCandidatePlayback(candidate, playableMedia)}>{media.loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></div>}
+        {!managementOnly && previewId === candidate.id && !playableMedia && media.error && <p className="workspace-muted" role="status">{media.error}</p>}
+      </article>;
+    })}</div>}
+    {candidates.pagination?.has_more && <button type="button" className="secondary-btn" disabled={candidates.loading} onClick={() => requestPage({ kind: 'candidates', offset: candidates.pagination?.next_offset ?? candidates.entries.length, append: true })}>{candidates.loading ? '후보를 불러오는 중…' : '후보 더 불러오기'}</button>}
+    {candidates.error && candidates.entries.length > 0 && <ErrorState message={candidates.error} retry={() => requestPage({ kind: 'candidates' })} />}
+    {!managementOnly && (media.loading && media.entries.length === 0 ? <p aria-live="polite">재생 정보를 확인하는 중입니다…</p> : media.error && media.entries.length === 0 ? <p className="workspace-muted" role="status">{media.error} 후보 지정은 계속할 수 있습니다.</p> : null)}
+    {!managementOnly && media.pagination?.has_more && <button type="button" className="secondary-btn" disabled={media.loading} onClick={() => requestPage({ kind: 'media', offset: media.pagination?.next_offset ?? media.entries.length, append: true })}>{media.loading ? '재생 정보를 불러오는 중…' : '재생 정보 더 불러오기'}</button>}
+  </div>;
 };
 
 const ContentWorkspace = ({ kind }) => {

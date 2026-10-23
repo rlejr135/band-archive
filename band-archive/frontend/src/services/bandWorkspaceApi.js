@@ -4,6 +4,7 @@ const bandBase = (bandId) => `/api/v2/bands/${Number(bandId)}`;
 
 export const bandWorkspacePaths = {
   bandBySlug: (slug) => `/api/v2/bands/by-slug/${encodeURIComponent(slug)}`,
+  representativeMediaManagement: (slug, page) => `/api/v2/bands/by-slug/${encodeURIComponent(slug)}/manage/representative-media${pageQuery(page)}`,
   dashboard: (bandId, { month, limit = 25, offset = 0 } = {}) => `${bandBase(bandId)}/dashboard?month=${encodeURIComponent(month)}&limit=${limit}&offset=${offset}`,
   songs: (bandId, page) => `${bandBase(bandId)}/songs${pageQuery(page)}`,
   rehearsals: (bandId, page) => `${bandBase(bandId)}/rehearsals${pageQuery(page)}`,
@@ -11,6 +12,9 @@ export const bandWorkspacePaths = {
   song: (bandId, songId) => `${bandBase(bandId)}/songs/${Number(songId)}`,
   rehearsal: (bandId, rehearsalId) => `${bandBase(bandId)}/rehearsals/${Number(rehearsalId)}`,
   songMedia: (bandId, songId, page) => `${bandBase(bandId)}/songs/${Number(songId)}/media${pageQuery(page)}`,
+  featuredMedia: (bandId, page) => `${bandBase(bandId)}/featured-media${pageQuery(page)}`,
+  featuredMediaCandidates: (bandId, songId, page) => `${bandBase(bandId)}/songs/${Number(songId)}/featured-media/candidates${pageQuery(page)}`,
+  songFeaturedMedia: (bandId, songId) => `${bandBase(bandId)}/songs/${Number(songId)}/featured-media`,
   rehearsalMedia: (bandId, rehearsalId, page) => `${bandBase(bandId)}/rehearsals/${Number(rehearsalId)}/media${pageQuery(page)}`,
   mediaVote: (bandId, mediaId) => `${bandBase(bandId)}/media/${Number(mediaId)}/vote`,
   mediaComments: (bandId, mediaId, page) => `${bandBase(bandId)}/media/${Number(mediaId)}/comments${pageQuery(page)}`,

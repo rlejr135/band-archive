@@ -13,10 +13,11 @@ Object.assign(globalThis, { window: dom.window, document: dom.window.document, H
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
+const publicIntroduction = { introduction: { band: { id: 7, slug: 'public', name: 'Public', description: '공개 밴드 소개' }, viewer: { can_open_workspace: false, membership_status: null }, featured_gallery: null, stats: { total_songs: 0 }, song_count_scope: 'PUBLIC', announcement: null } };
 const deferred = () => { let resolve; let reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const user = userEvent.setup({ document: dom.window.document });
-let vite; let onboarding; let auth; let bands;
-const load = async () => { if (onboarding) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
+let vite; let onboarding; let introduction; let auth; let bands;
+const load = async () => { if (onboarding) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); onboarding = await vite.ssrLoadModule('/src/components/bands/BandOnboarding.jsx'); introduction = await vite.ssrLoadModule('/src/components/bands/BandIntroduction.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
 const account = (id = 'u1') => ({ user: id ? { id } : null, getAccessToken: async () => id, refreshSession: async () => id, loading: false });
 const Login = () => createElement('p', null, `login:${useLocation().search}`);
@@ -29,6 +30,7 @@ const App = ({ entry, authValue = account(), manage = false, discover = false, c
   return createElement(auth.AuthContext.Provider, { value: authValue }, discover
     ? createElement(bands.BandProvider, null, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null,
       createElement(Route, { path: '/bands/discover', element: createElement(onboarding.DiscoverBandsPage) }),
+      createElement(Route, { path: '/bands/:bandSlug/join', element: createElement(introduction.BandIntroductionRoute, { joinMode: true }) }),
       createElement(Route, { path: '/login', element: createElement(Login) }))))
     : createElement(bands.BandContext.Provider, { value: bandContextValue }, createElement(MemoryRouter, { initialEntries: [entry] }, manage && createElement(Go, { target: entry }), routes)));
 };
@@ -97,8 +99,8 @@ test('visitor discover preserves a safe login return and join becomes pending on
   await load(); const previous = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, request = {}) => { calls.push([String(url), request]); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
   try { const visitor = render(createElement(App, { entry: '/bands/discover', authValue: account(null), discover: true })); await visitor.findByText('Public'); await userEvent.click(visitor.getByRole('button', { name: '로그인 후 가입 요청' })); await visitor.findByText('login:?returnTo=%2Fbands%2Fdiscover'); assert.ok(calls.every(([url]) => !url.includes('invite'))); visitor.unmount();
-    let joined = 0; let membershipReads = 0; const joinBodies = []; globalThis.fetch = async (url, options = {}) => { if (String(url).endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (String(url).includes('join-requests')) { joined += 1; joinBodies.push(JSON.parse(options.body)); return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
-    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); assert.equal(joined, 0); assert.equal(member.getByRole('button', { name: '가입 요청 보내기' }).disabled, true); await user.type(member.getByLabelText('밴드에서 사용할 이름 (필수)'), '멤버 이름'); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); assert.deepEqual(joinBodies[0], { name: '멤버 이름', introduction: '' }); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
+    let joined = 0; let membershipReads = 0; const joinBodies = []; globalThis.fetch = async (url, options = {}) => { const path = String(url); if (path.endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (path.includes('join-requests')) { joined += 1; joinBodies.push(JSON.parse(options.body)); return response({ membership: { id: 1 }, created: true }, 201); } if (path.endsWith('/introduction')) return response(publicIntroduction); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
+    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); await member.findByLabelText('밴드에서 사용할 이름 (필수)'); assert.equal(joined, 0); assert.equal(member.getByRole('button', { name: '가입 요청 보내기' }).disabled, true); await user.type(member.getByLabelText('밴드에서 사용할 이름 (필수)'), '멤버 이름'); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); assert.deepEqual(joinBodies[0], { name: '멤버 이름', introduction: '' }); await member.findByText('가입 요청을 보냈습니다. 승인 대기 중입니다.');
   } finally { globalThis.fetch = previous; }
 });
 
@@ -124,6 +126,7 @@ test('join introduction is optional plain text, bounded to 300 code points, trim
   globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
     if (String(url).includes('join-requests')) { writes.push(JSON.parse(options.body)); return pending.promise; }
+    if (String(url).endsWith('/introduction')) return response(publicIntroduction);
     return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } });
   };
   try {
@@ -151,6 +154,7 @@ test('join account switch clears draft and ignores the previous account response
   globalThis.fetch = async (url) => {
     if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
     if (String(url).includes('join-requests')) { writes += 1; return pending.promise; }
+    if (String(url).endsWith('/introduction')) return response(publicIntroduction);
     return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } });
   };
   try {
@@ -160,12 +164,12 @@ test('join account switch clears draft and ignores the previous account response
     await userEvent.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
     await userEvent.type(view.getByLabelText('기타 악기·역할 직접 입력'), 'private position');
     await userEvent.type(view.getByLabelText('간단한 자기소개 (선택)'), 'private draft'); await userEvent.click(view.getByRole('button', { name: '가입 요청 보내기' }));
-    view.rerender(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('b') }));
+    view.rerender(createElement(App, { entry: '/bands/public/join', discover: true, authValue: account('b') }));
     assert.equal(view.queryByDisplayValue('private draft'), null);
     assert.equal(view.queryByDisplayValue('private name'), null);
     assert.equal(view.queryByDisplayValue('private position'), null);
     await act(async () => pending.resolve(response({}, 400)));
-    await view.findByRole('button', { name: '가입 요청' }); assert.equal(view.queryByRole('alert'), null); assert.equal(writes, 1);
+    await view.findByLabelText('밴드에서 사용할 이름 (필수)'); assert.equal(view.queryByRole('alert'), null); assert.equal(writes, 1);
   } finally { globalThis.fetch = previous; }
 });
 
@@ -193,11 +197,12 @@ test('required member name is bounded, retained after a failed request and clear
   globalThis.fetch = async (url, options = {}) => {
     if (String(url).endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
     if (String(url).includes('join-requests')) { writes.push(JSON.parse(options.body)); return response({}, 400); }
+    if (String(url).endsWith('/introduction')) { const isOther = String(url).includes('/other/'); return response({ introduction: { ...publicIntroduction.introduction, band: { ...publicIntroduction.introduction.band, id: isOther ? 8 : 7, slug: isOther ? 'other' : 'public', name: isOther ? 'Other' : 'Public' } } }); }
     return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }, { id: 8, slug: 'other', name: 'Other' }], pagination: { total: 2, has_more: false } });
   };
   try {
     const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
-    await view.findAllByRole('button', { name: '가입 요청' }); await user.click(view.getAllByRole('button', { name: '가입 요청' })[0]);
+    await view.findAllByRole('button', { name: '가입 요청' }); await user.click(view.getAllByRole('button', { name: '가입 요청' })[0]); await view.findByLabelText('밴드에서 사용할 이름 (필수)');
     const name = view.getByLabelText('밴드에서 사용할 이름 (필수)'); const send = view.getByRole('button', { name: '가입 요청 보내기' });
     assert.equal(view.getByText('승인 후 멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요.').id, 'join-name-help');
     assert.equal(view.queryByText(/기존에 연결된 멤버 프로필이 있다면 이름은 유지됩니다/), null);
@@ -207,7 +212,7 @@ test('required member name is bounded, retained after a failed request and clear
     await user.type(name, '  무대 이름  '); await user.click(send); await view.findByRole('alert');
     assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').value, '  무대 이름  '); assert.equal(send.disabled, false);
     assert.deepEqual(writes, [{ name: '무대 이름', introduction: '' }]);
-    await user.click(view.getAllByRole('button', { name: '가입 요청' })[1]);
+    await user.click(view.getByRole('link', { name: '취소' })); await view.findAllByRole('button', { name: '가입 요청', exact: true }); await user.click(view.getAllByRole('button', { name: '가입 요청', exact: true })[1]); await view.findByLabelText('밴드에서 사용할 이름 (필수)');
     assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').value, ''); assert.equal(view.queryByRole('alert'), null);
   } finally { globalThis.fetch = previous; }
 });
@@ -490,7 +495,7 @@ test('management return control is a keyboard-focusable canonical RouterLink', a
   finally { globalThis.fetch = previous; }
 });
 
-test('owner management page links to the isolated logo management route only with server permission', async () => {
+test('owner management page links to logo only and does not infer representative permission from its management role', async () => {
   await load(); const previous = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const path = String(url);
@@ -504,6 +509,7 @@ test('owner management page links to the isolated logo management route only wit
     const view = render(createElement(App, { entry: '/bands/logo-owner/manage', manage: true }));
     const link = await view.findByRole('link', { name: '로고 관리' });
     assert.equal(link.getAttribute('href'), '/bands/logo-owner/manage/logo');
+    assert.equal(view.queryByRole('link', { name: '대표 미디어 관리' }), null);
   } finally { globalThis.fetch = previous; }
 });
 

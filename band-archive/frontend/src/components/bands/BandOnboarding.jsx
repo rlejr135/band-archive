@@ -7,9 +7,7 @@ import { createSubmissionGuard } from '../../services/authSubmission.js';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
 import { formatInviteCreatedAt } from '../../services/bandDateTime.js';
 import { inviteManagerPath } from '../../services/inviteLinks.js';
-import { normalizedJoinName, validJoinName } from '../../services/joinName.js';
 import { AnnouncementEditor } from '../workspace/BandWorkspace.jsx';
-import MemberPositionPicker from '../workspace/MemberPositionPicker.jsx';
 import { memberPositionLabels } from '../workspace/memberPositions.js';
 import { MemberRemovalButton } from './MemberRemoval.jsx';
 import { membershipName } from '../../services/memberManagement.js';
@@ -43,22 +41,12 @@ export const DiscoverBandsPage = () => {
 
 const DiscoverBandsContent = () => {
   const { user } = useAuth();
-  const { activeBands, pendingMemberships, bandsLoaded, reload: reloadMemberships } = useBands();
+  const { activeBands, pendingMemberships, bandsLoaded } = useBands();
   const api = useApi();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [state, setState] = useState({ loading: true, bands: [], pagination: { has_more: false, total: 0 } });
-  const [joining, setJoining] = useState(new Set());
-  const [requestBand, setRequestBand] = useState(null);
-  const [name, setName] = useState('');
-  const [introduction, setIntroduction] = useState('');
-  const [positions, setPositions] = useState([]);
-  const [customPosition, setCustomPosition] = useState('');
-  const joinGuard = useRef(new Set());
-  const joinController = useRef(null);
-  const current = useRef(true);
-  useEffect(() => { current.current = true; return () => { current.current = false; joinController.current?.abort(); }; }, []);
   const [error, setError] = useState('');
   const pageSize = 20;
 
@@ -84,24 +72,8 @@ const DiscoverBandsContent = () => {
 
   const openJoin = (band) => {
     if (!user) { navigate(`/login?returnTo=${encodeURIComponent('/bands/discover')}`); return; }
-    setRequestBand(band); setName(''); setIntroduction(''); setPositions([]); setCustomPosition(''); setError('');
-  };
-  const join = async (event) => {
-    event.preventDefault();
-    const band = requestBand;
-    if (!band || !user || !validJoinName(name) || Array.from(introduction.trim()).length > 300) return;
-    const bandId = Number(band.id);
-    if (joinGuard.current.has(bandId) || own.pending.has(bandId) || own.active.has(bandId)) return;
-    joinGuard.current.add(bandId);
-    const controller = new AbortController(); joinController.current = controller;
-    setJoining((previous) => new Set(previous).add(bandId)); setError('');
-    try {
-      const requestProfile = positions.length ? { positions, ...(positions.includes('OTHER') ? { custom_position: customPosition } : {}) } : {};
-      const result = await api.requestJson(`/api/v2/bands/${bandId}/join-requests`, requestOptions('POST', { name: normalizedJoinName(name), introduction: introduction.trim(), ...requestProfile }, controller.signal));
-      if (!current.current) return;
-      if (result?.created || result?.membership) { setRequestBand(null); setName(''); setIntroduction(''); setPositions([]); setCustomPosition(''); await reloadMemberships(); }
-    } catch { if (current.current) setError(genericFailure); }
-    finally { if (joinController.current === controller) joinController.current = null; joinGuard.current.delete(bandId); if (current.current) setJoining((previous) => { const next = new Set(previous); next.delete(bandId); return next; }); }
+    if (!band?.slug) return;
+    navigate(`${safeBandPath(band.slug)}/join`);
   };
 
   const submitSearch = (event) => { event.preventDefault(); setPage(0); setQuery(event.currentTarget.elements.search.value.trim()); };
@@ -109,14 +81,10 @@ const DiscoverBandsContent = () => {
     <Link className="bands-return-link discover-bands-return-link" to="/bands"><span aria-hidden="true">←</span> 내 밴드</Link><h2 id="discover-bands-title">공개 밴드 찾기</h2>
     <form onSubmit={submitSearch} className="bands-form"><label>밴드 검색<input name="search" aria-label="밴드 검색" defaultValue={query} /></label><button type="submit" className="secondary-btn">검색</button></form>
     {error && <p role="alert" className="auth-error">{error}</p>}
-    {requestBand && <section className="bands-panel" aria-labelledby="join-introduction-title"><h3 id="join-introduction-title">{requestBand.name} 가입 요청</h3><form className="bands-form" onSubmit={join} aria-busy={joining.has(Number(requestBand.id))}>
-      <label htmlFor="join-name">밴드에서 사용할 이름 (필수)<input id="join-name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={100} autoComplete="name" disabled={joining.has(Number(requestBand.id))} aria-describedby="join-name-help" /></label>
-      <p id="join-name-help" className="bands-help">승인 후 멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요.</p>
-      <label htmlFor="join-introduction">간단한 자기소개 (선택)<textarea id="join-introduction" value={introduction} onChange={(event) => setIntroduction(event.target.value)} disabled={joining.has(Number(requestBand.id))} aria-describedby="join-introduction-help" /></label><p id="join-introduction-help" className="bands-help">밴드 관리자에게 전할 소개를 300자 이내로 적어 주세요. 전화번호·주소 등 민감한 정보는 적지 마세요. 가입 심사에만 사용하며 승인·거절 시 삭제합니다. {Array.from(introduction.trim()).length} / 300자</p><MemberPositionPicker positions={positions} customPosition={customPosition} onChange={(nextPositions, nextCustom) => { setPositions(nextPositions); setCustomPosition(nextCustom); }} disabled={joining.has(Number(requestBand.id))} idPrefix="join-position" /><p className="bands-help">포지션은 선택 사항이며, 가입 후 밴드 멤버 프로필에서 본인이 변경할 수 있습니다. 멤버 명단 공개 설정에 따라 비로그인 방문자에게도 보일 수 있습니다. 재가입 시 선택하지 않으면 기존 포지션이 유지됩니다.</p><div className="band-actions"><button className="primary-btn" type="submit" disabled={joining.has(Number(requestBand.id)) || !validJoinName(name) || Array.from(introduction.trim()).length > 300}>{joining.has(Number(requestBand.id)) ? '요청 중…' : '가입 요청 보내기'}</button><button className="secondary-btn" type="button" disabled={joining.has(Number(requestBand.id))} onClick={() => { setRequestBand(null); setName(''); setIntroduction(''); setPositions([]); setCustomPosition(''); }}>취소</button></div></form></section>}
     {state.loading ? <p aria-live="polite">공개 밴드를 불러오는 중입니다…</p> : <>
       {state.bands.length === 0 ? <p className="bands-help">조건에 맞는 공개 밴드가 없습니다.</p> : <ul className="band-list">{state.bands.map((band) => {
         const id = Number(band.id); const active = own.active.has(id); const pending = own.pending.has(id);
-        return <li key={id}><div><strong>{band.name}</strong><p className="bands-help">{band.description || '공개된 밴드 공간입니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>공개 공간 보기</button>{active ? <button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>작업 공간 열기</button> : <button type="button" className="secondary-btn" disabled={(Boolean(user) && !bandsLoaded) || pending || joining.size > 0} onClick={() => openJoin(band)}>{pending ? '승인 대기 중' : joining.has(id) ? '요청 중…' : user && !bandsLoaded ? '멤버십 확인 중…' : user ? '가입 요청' : '로그인 후 가입 요청'}</button>}</div></li>;
+        return <li key={id}><div><strong>{band.name}</strong><p className="bands-help">{band.description || '공개된 밴드 공간입니다.'}</p></div><div className="band-actions"><button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>공개 공간 보기</button>{active ? <button type="button" className="secondary-btn" onClick={() => navigate(safeBandPath(band.slug))}>작업 공간 열기</button> : <button type="button" className="secondary-btn" disabled={(Boolean(user) && !bandsLoaded) || pending} onClick={() => openJoin(band)}>{pending ? '승인 대기 중' : user && !bandsLoaded ? '멤버십 확인 중…' : user ? '가입 요청' : '로그인 후 가입 요청'}</button>}</div></li>;
       })}</ul>}
       <nav className="bands-pagination" aria-label="공개 밴드 페이지"><button type="button" className="secondary-btn" disabled={page === 0} onClick={() => setPage((value) => value - 1)}>이전</button><span>{state.pagination.total}개 중 {page + 1}페이지</span><button type="button" className="secondary-btn" disabled={!state.pagination.has_more} onClick={() => setPage((value) => value + 1)}>다음</button></nav>
     </>}

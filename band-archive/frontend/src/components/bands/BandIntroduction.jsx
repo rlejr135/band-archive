@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandIntroductionPath } from '../../services/bandIntroductionApi.js';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
+import { BandJoinRequest } from './BandJoinRequest.jsx';
 import './BandIntroduction.css';
 import './BandsPage.css';
 
@@ -73,7 +74,7 @@ export const BandIntroduction = ({ introduction, photoScope = '', onRefreshPhoto
   </main>;
 };
 
-export const BandIntroductionRoute = () => {
+export const BandIntroductionRoute = ({ joinMode = false }) => {
   const { bandSlug = '' } = useParams();
   const { user, getAccessToken, refreshSession } = useAuth();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
@@ -147,7 +148,9 @@ export const BandIntroductionRoute = () => {
   if (state.identity !== identity || state.loading) return <main className="band-introduction-page" aria-live="polite"><p>밴드 소개를 불러오는 중입니다…</p></main>;
   if (state.error || !state.introduction) return <main className="band-introduction-page" aria-labelledby="band-introduction-error-title"><h1 id="band-introduction-error-title">밴드 소개</h1><p role="alert">{state.error || '밴드 소개를 불러오지 못했습니다.'}</p><Link className="bands-return-link" to="/bands/discover"><span aria-hidden="true">←</span> 공개 밴드 찾기</Link></main>;
   return <BandIntroduction introduction={state.introduction} photoScope={identity} onRefreshPhoto={refreshPhoto} photoRefreshPending={photoRefreshPending} failedPhotoKey={failedPhotoKey}>
-    <IntroductionActions band={state.introduction.band} viewer={state.introduction.viewer} />
+    {joinMode
+      ? <BandJoinRequest key={`${identity}:${state.introduction.band.id}`} band={state.introduction.band} viewer={state.introduction.viewer} />
+      : <IntroductionActions band={state.introduction.band} viewer={state.introduction.viewer} />}
   </BandIntroduction>;
 };
 

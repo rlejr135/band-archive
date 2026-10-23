@@ -1,6 +1,13 @@
 .bands-shell { min-height: 100vh; padding: 0 clamp(14px, 4vw, 52px) 48px; background: var(--color-background); color: var(--color-text); }
 .bands-header { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 18px; max-width: 1160px; margin: 0 auto; border-bottom: 1px solid var(--color-border); border-bottom-color: color-mix(in srgb, var(--color-border) 55%, transparent); }
 .bands-brand { flex: 0 0 auto; color: var(--color-text); font-weight: 700; text-decoration: none; letter-spacing: -.03em; }
+.bands-brand { display: inline-flex; align-items: center; gap: 9px; }
+.brand-mark { width: 30px; height: 30px; display: inline-grid; place-items: center; border-radius: 10px; color: var(--color-on-accent); background: var(--color-accent); }
+.brand-mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.5; }
+.account-settings-link { width: 38px; height: 38px; display: inline-grid; flex: 0 0 auto; place-items: center; border: 1px solid var(--color-border); border-radius: 50%; color: var(--color-text-muted); background: var(--color-surface); }
+.account-settings-link:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.account-settings-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
+.account-settings-link svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
 .bands-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 18px; }
 .bands-header .band-switcher { min-width: 160px; }
 .bands-header .band-switcher select { max-width: 220px; color: var(--color-text); background: var(--color-surface-raised); border-color: var(--color-border); }
@@ -101,6 +108,14 @@
 .bands-return-link:hover { border-color: var(--color-accent-hover); background: var(--color-surface-raised); color: var(--color-accent); }
 .bands-return-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
 .bands-return-link > span { color: var(--color-accent); font-size: 1.1em; }
+.band-join-request { margin-top: 16px; padding: clamp(17px, 3vw, 24px); border: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent); border-radius: var(--radius-md); background: var(--color-surface); }
+.band-join-request h2 { margin: 0; color: var(--color-text); font-size: 19px; }
+.band-join-request > .bands-help { margin: 7px 0 16px; }
+.band-join-request .bands-form { max-width: 100%; }
+.band-join-request .bands-form > .bands-help { margin: -7px 0 0; }
+.band-join-request .bands-form label { color: var(--color-text-muted); font-size: 12px; }
+.band-join-request .bands-form input,.band-join-request .bands-form textarea { padding: 10px 12px; border-color: var(--color-border); border-radius: var(--radius-default); color: var(--color-text); background: var(--color-background); font: inherit; }
+.band-join-request .band-actions { margin-top: 4px; }
 .discover-bands-return-link { margin-bottom: 18px; }
 .bands-page.manage-page > .bands-panel { margin-top: 20px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); }
 .bands-page.manage-page > .bands-panel h3 { margin: 0 0 12px; color: var(--color-accent); font-size: 1.05rem; }

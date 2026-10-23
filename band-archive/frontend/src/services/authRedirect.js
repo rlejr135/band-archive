@@ -8,14 +8,14 @@ const hasControlCharacter = (value) => [...value].some((character) => {
 // A return URL is navigation data, not an external URL.  Keep it on this
 // origin so auth links cannot become an open redirect.
 export const safeReturnPath = (value, origin = globalThis.location?.origin || 'http://localhost') => {
-  const fallback = '/bands';
+  const fallback = '/';
   if (typeof value !== 'string' || value !== value.trim() || value.length > 2048 ||
     !value.startsWith('/') || value.includes('\\') || value.includes('%') || value.includes('?') ||
     value.includes('#') || hasControlCharacter(value)) return fallback;
   try {
     const url = new URL(value, origin);
     const pathname = url.pathname;
-    if (url.origin !== origin || pathname.includes('//') || !(pathname === '/bands' || pathname.startsWith('/bands/'))) {
+    if (url.origin !== origin || pathname.includes('//') || !(pathname === '/' || pathname === '/account' || pathname === '/bands' || pathname.startsWith('/bands/'))) {
       return fallback;
     }
     return pathname;

@@ -53,7 +53,7 @@ test('anonymous browser routes are gated before discover or workspace data can m
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url) => { calls.push(String(url)); throw new Error('private route should not fetch'); };
   try {
-    for (const path of ['/bands/discover', '/bands/quiet-lantern/songs', '/bands/quiet-lantern/manage/logo']) {
+    for (const path of ['/bands/discover', '/bands/quiet-lantern/songs', '/bands/quiet-lantern/manage/logo', '/bands/private-archive/manage/representative-media']) {
       const view = renderRoutes(path, account());
       await view.findByRole('heading', { name: '로그인' });
       await waitFor(() => assert.match(view.getByTestId('route').textContent, /^\/login\?/));
@@ -62,6 +62,28 @@ test('anonymous browser routes are gated before discover or workspace data can m
       view.unmount();
     }
     assert.deepEqual(calls, []);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('private-band representative media management route uses its narrow server catalog without resolving workspace membership', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url) => {
+    const path = String(url); calls.push(path);
+    if (path.endsWith('/api/v2/bands')) return response({ bands: [], pending_memberships: [] });
+    if (path.includes('/api/v2/bands/by-slug/private-archive/manage/representative-media?')) return response({
+      band: { id: 812, slug: 'private-archive', name: '비공개 아카이브', can_feature: true },
+      songs: [{ id: 923, title: '숨은 파도', artist: '아카이브 밴드', can_feature: true }],
+      pagination: { limit: 20, offset: 0, total: 1, has_more: false, next_offset: null },
+    });
+    throw new Error(`unexpected route read ${path}`);
+  };
+  try {
+    const view = renderRoutes('/bands/private-archive/manage/representative-media', account('platform-operator'));
+    await view.findByRole('heading', { name: '대표 미디어 관리' });
+    await view.findByRole('option', { name: '숨은 파도 · 아카이브 밴드' });
+    assert.ok(view.getByRole('link', { name: '계정과 밴드' }));
+    assert.equal(calls.some((path) => path.includes('/api/v2/bands/by-slug/private-archive') && !path.includes('/manage/representative-media')), false);
+    assert.equal(calls.some((path) => /\/api\/v2\/bands\/\d+\/(?:songs|featured-media)/.test(path)), false);
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -81,16 +103,35 @@ test('platform request route requires login and denies an authenticated non-admi
   } finally { globalThis.fetch = previousFetch; }
 });
 
-test('authenticated root opens the account hub with one bands request and no profile or claim calls', async () => {
+test('authenticated root opens the portal while account data remains outside its content', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url) => { calls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
   try {
     const view = renderRoutes('/', account('member-1'), true);
-    await view.findByText('내 밴드');
+    await view.findByRole('heading', { name: /오늘은 어떤 음악을 함께 만들어 볼까요/ });
     assert.equal(calls.filter((url) => url.endsWith('/api/v2/bands')).length, 1);
-    assert.ok(calls.some((url) => url.endsWith('/api/v2/me')));
+    assert.equal(calls.some((url) => url.endsWith('/api/v2/me')), false);
     assert.equal(calls.some((url) => url.includes('legacy-ownership-claim')), false);
-    assert.equal(view.queryByText(/소유권/), null);
+    assert.equal(view.queryByRole('heading', { name: '계정과 밴드 관리' }), null);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('guide is public and community writing actions announce the unavailable feature without making requests', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  globalThis.fetch = async (url, options = {}) => { calls.push([String(url), options]); return response({ bands: [], pending_memberships: [] }); };
+  try {
+    const guide = renderRoutes('/guide', account());
+    await guide.findByRole('heading', { name: '계정을 만들고 이메일을 확인해요' });
+    assert.ok(guide.getByText(/페이지를 닫거나 이동해도 전송이 계속된다고 보장되지 않으니/));
+    assert.ok(guide.getByText(/멤버십 및 서버가 확인한 권한/));
+    guide.unmount();
+
+    const board = renderRoutes('/community/recruiting', account('member-1'));
+    await board.findByRole('heading', { name: '밴드 구인구직' });
+    fireEvent.click(board.getByRole('button', { name: '글쓰기' }));
+    assert.equal(board.getAllByRole('status').some((item) => item.textContent.includes('준비중입니다!')), true);
+    assert.equal(board.queryByRole('textbox'), null);
+    assert.equal(calls.some(([, options]) => options.method && options.method !== 'GET'), false);
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -104,7 +145,7 @@ test('band choice selects the membership and navigates to its slug in the same a
     await view.getByRole('button', { name: /Moon Archive.*소유자/ }).click();
     await waitFor(() => assert.equal(view.getByTestId('route').textContent, '/bands/moon-archive'));
     assert.equal(window.localStorage.getItem('band-archive.selected-band:member-1'), '12');
-    assert.ok(calls.some((url) => url.includes('/api/v2/bands/by-slug/moon-archive')));
+    await waitFor(() => assert.ok(calls.some((url) => url.includes('/api/v2/bands/by-slug/moon-archive'))));
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -179,7 +220,7 @@ test('legacy routes go to the landing, while the singular band alias retains onl
     globalThis.fetch = async (url) => { previousCalls.push(String(url)); return response({ bands: [], pending_memberships: [] }); };
     const unknownWorkspace = renderRoutes('/bands/quiet-lantern/not-a-tab', account('member-1'));
     await unknownWorkspace.findByText('내 밴드');
-    assert.equal(unknownWorkspace.getByTestId('route').textContent, '/bands');
+    assert.equal(unknownWorkspace.getByTestId('route').textContent, '/account');
     unknownWorkspace.unmount();
   } finally { globalThis.fetch = previousFetch; }
 });

@@ -13,7 +13,7 @@ import './AuthPages.css';
 const authFailure = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
 
 const appOrigin = () => window.location.origin;
-const returnFromSearch = (searchParams) => safeAuthReturnPath(searchParams.get('returnTo')) || '/bands';
+const returnFromSearch = (searchParams) => safeAuthReturnPath(searchParams.get('returnTo')) || '/';
 
 const useAuthChallenge = () => {
   const policy = useServicePolicy();
@@ -193,7 +193,7 @@ export const VerifyEmailPage = () => {
   return (
     <AuthFrame title="이메일 확인">
       {loading ? <p>확인 상태를 불러오는 중입니다…</p> : user ? <><p className="auth-success" role="status">이메일 확인이 완료되었습니다. {inviteContext ? '초대를 계속할 수 있습니다.' : '밴드를 선택해 계속하세요.'}</p>{inviteContext && <p><Link className="primary-btn" to={inviteContinuationPath}>초대받은 밴드 확인하기</Link></p>}</> : inviteContext ? <p className="auth-success" role="status">이메일 인증을 완료했다면 로그인해 초대를 이어가세요. 아직 인증하지 않았다면 확인 메일의 링크를 먼저 열어 주세요.</p> : <p>확인 메일의 링크를 열어 이메일 인증을 완료해 주세요.</p>}
-      <p><Link to={inviteContext ? `/login?returnTo=${encodeURIComponent(inviteContinuationPath)}` : '/login'}>{inviteContext ? '로그인 후 초대 이어가기' : '로그인'}</Link>{!inviteContext && <> · <Link to="/bands">밴드 선택</Link></>}</p>
+      <p><Link to={inviteContext ? `/login?returnTo=${encodeURIComponent(inviteContinuationPath)}` : '/login'}>{inviteContext ? '로그인 후 초대 이어가기' : '로그인'}</Link>{!inviteContext && <> · <Link to="/account">계정과 밴드</Link></>}</p>
     </AuthFrame>
   );
 };

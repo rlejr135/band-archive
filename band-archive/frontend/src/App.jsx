@@ -1,32 +1,37 @@
-import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import { BandProvider } from './context/BandContext.jsx';
 import { UploadProvider } from './context/UploadContext.jsx';
-import { ServicePolicyProvider, useServicePolicy } from './context/ServicePolicyContext.jsx';
+import { ServicePolicyProvider } from './context/ServicePolicyContext.jsx';
 import { PolicyPage, PolicyLinks } from './components/auth/PolicyPages.jsx';
 import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages.jsx';
 import { BandsPage } from './components/bands/BandsPage.jsx';
+import { PortalPage } from './components/home/PortalPage.jsx';
+import { GuidePage } from './components/home/GuidePage.jsx';
+import { CommunityBoardPage } from './components/community/CommunityBoardPage.jsx';
 import { BandIntroductionRoute } from './components/bands/BandIntroduction.jsx';
 import { InviteLinkRoute, InviteContinueRoute } from './components/bands/InviteLink.jsx';
 import { BandCreationRequestsAdminRoute } from './components/bands/BandCreationRequestsAdmin.jsx';
 import { BandLogoManagementRoute } from './components/bands/BandLogoManagement.jsx';
+import { RepresentativeMediaManagementRoute } from './components/bands/RepresentativeMediaManagement.jsx';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
 import RequireAuth from './components/layout/RequireAuth.jsx';
-import { AvailabilityWorkspace, BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
+import { AvailabilityWorkspace, BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, RepresentativeMediaWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
 import './App.css';
 import './components/bands/BandsPage.css';
 import './components/home/WelcomeLanding.css';
+import './components/home/Portal.css';
 
 const WelcomeLanding = ({ authRoute = false }) => {
-  const { config: serviceConfig } = useServicePolicy();
-  const serviceName = serviceConfig?.service?.name || '밴드 아카이브';
+  const serviceName = 'Band Archive';
   const { user, loading } = useAuth();
   if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
-  if (user && !authRoute) return <Navigate to="/bands" replace />;
+  if (user && !authRoute) return <Navigate to="/portal" replace />;
 
   return <main className="welcome-page">
     <header className="welcome-header">
-      <Link className="welcome-brand" to="/" aria-label={`${serviceName} 홈`}><span className="welcome-brand-mark">B</span><span>{serviceName} <small>YOUR MUSIC, TOGETHER</small></span></Link>
+      <Link className="welcome-brand" to="/" aria-label={`${serviceName} 홈`}><span className="welcome-brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 24V8h8a5 5 0 0 1 3.5 8.6A5 5 0 0 1 17 26H8m5-13h3a2 2 0 1 0 0-4h-3m0 12h4a2 2 0 1 0 0-4h-4" /></svg></span><span>{serviceName} <small>YOUR MUSIC, TOGETHER</small></span></Link>
       <a className="welcome-header-link" href="#login">로그인</a>
     </header>
     <section className="welcome-hero">
@@ -60,13 +65,13 @@ const WelcomeLanding = ({ authRoute = false }) => {
 const RootRoute = () => {
   const { user, loading } = useAuth();
   if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
-  return user ? <Navigate to="/bands" replace /> : <WelcomeLanding />;
+  return user ? <Navigate to="/portal" replace /> : <WelcomeLanding />;
 };
 
 const LegacyRoute = () => {
   const { user, loading } = useAuth();
   if (loading) return <main className="home-loading" aria-live="polite">로그인 상태를 확인하고 있습니다…</main>;
-  return user ? <Navigate to="/bands" replace /> : <Navigate to="/" replace />;
+  return user ? <Navigate to="/portal" replace /> : <Navigate to="/" replace />;
 };
 
 const BandAliasRedirect = () => {
@@ -75,7 +80,16 @@ const BandAliasRedirect = () => {
   return <Navigate to={`/bands/${encodeURIComponent(bandSlug)}${suffix}`} replace />;
 };
 
-export const AppRoutes = () => <Routes>
+const RouteTitle = () => {
+  const location = useLocation();
+  useEffect(() => {
+    const isWorkspace = /^\/bands\/(?!discover(?:\/|$)|request(?:\/|$))[^/]+(?:\/(?:songs|rehearsals|availability|members(?:\/[^/]+)?|gallery|suggestions|representative-media))?\/?$/.test(location.pathname);
+    if (!isWorkspace) document.title = 'Band Archive';
+  }, [location.pathname]);
+  return null;
+};
+
+export const AppRoutes = () => <><RouteTitle /><Routes>
   <Route path="/" element={<RootRoute />} />
   <Route path="/login" element={<WelcomeLanding authRoute />} />
   <Route path="/signup" element={<SignupPage />} />
@@ -88,16 +102,23 @@ export const AppRoutes = () => <Routes>
   <Route path="/forgot-password" element={<ForgotPasswordPage />} />
   <Route path="/reset-password" element={<ResetPasswordPage />} />
   <Route path="/band/:bandSlug/*" element={<BandAliasRedirect />} />
-  <Route path="/bands" element={<RequireAuth><BandsPage /></RequireAuth>} />
+  <Route path="/portal" element={<RequireAuth><PortalPage /></RequireAuth>} />
+  <Route path="/account" element={<RequireAuth><BandsPage /></RequireAuth>} />
+  <Route path="/bands" element={<RequireAuth><Navigate to="/account" replace /></RequireAuth>} />
+  <Route path="/guide" element={<GuidePage />} />
+  <Route path="/community/:board" element={<RequireAuth><CommunityBoardPage /></RequireAuth>} />
+  <Route path="/bands/:bandSlug/join" element={<RequireAuth><BandIntroductionRoute joinMode /></RequireAuth>} />
   <Route path="/bands/:bandSlug/about" element={<BandIntroductionRoute />} />
   <Route path="/bands/discover" element={<RequireAuth><DiscoverBandsPage /></RequireAuth>} />
   <Route path="/bands/request" element={<RequireAuth><BandCreationRequestPage /></RequireAuth>} />
   <Route path="/platform/band-requests" element={<RequireAuth><BandCreationRequestsAdminRoute /></RequireAuth>} />
   <Route path="/bands/:bandSlug/manage/logo" element={<RequireAuth><BandLogoManagementRoute /></RequireAuth>} />
+  <Route path="/bands/:bandSlug/manage/representative-media" element={<RequireAuth><RepresentativeMediaManagementRoute /></RequireAuth>} />
   <Route path="/bands/:bandSlug/manage" element={<RequireAuth><BandManageRoute /></RequireAuth>} />
   <Route path="/bands/:bandSlug" element={<RequireAuth><BandWorkspaceRoute /></RequireAuth>}>
     <Route index element={<BandDashboard />} />
     <Route path="songs" element={<SongWorkspace />} />
+    <Route path="representative-media" element={<RepresentativeMediaWorkspace />} />
     <Route path="rehearsals" element={<RehearsalWorkspace />} />
     <Route path="availability" element={<AvailabilityWorkspace />} />
     <Route path="members" element={<MembersWorkspace />} />
@@ -105,9 +126,9 @@ export const AppRoutes = () => <Routes>
     <Route path="gallery" element={<GalleryWorkspace />} />
     <Route path="suggestions" element={<SuggestionsWorkspace />} />
   </Route>
-  <Route path="/bands/*" element={<RequireAuth><Navigate to="/bands" replace /></RequireAuth>} />
+  <Route path="/bands/*" element={<RequireAuth><Navigate to="/account" replace /></RequireAuth>} />
   <Route path="*" element={<LegacyRoute />} />
-</Routes>;
+</Routes></>;
 
 function App() {
   return <ServicePolicyProvider><AuthProvider><BandProvider><UploadProvider><AppRoutes /></UploadProvider></BandProvider></AuthProvider></ServicePolicyProvider>;

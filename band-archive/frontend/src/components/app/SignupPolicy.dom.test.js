@@ -131,7 +131,8 @@ test('email verification preserves the fixed invite return only while an opaque 
     inviteService.clearInviteResumeContext();
     const ordinary = render(tree(pages.VerifyEmailPage));
     assert.equal(ordinary.getByRole('link', { name: '로그인' }).getAttribute('href'), '/login');
-    assert.ok(ordinary.getByRole('link', { name: '밴드 선택' }));
+    const accountLink = ordinary.getByRole('link', { name: '계정과 밴드' });
+    assert.equal(accountLink.getAttribute('href'), '/account');
   } finally { inviteService.resetInviteUrlContextForTests(); }
 });
 
