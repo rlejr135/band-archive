@@ -147,6 +147,26 @@ test('dashboard section actions share button styling and keep member-only schedu
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('dashboard consistently labels types on upcoming rehearsals, month calendar and selected-day summaries', async () => {
+  await load(); const previousFetch = globalThis.fetch; const month = monthForTest();
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes('/by-slug/rehearsal-types')) return response({ band: { id: 401, slug: 'rehearsal-types', name: '유형 밴드', membership: null } });
+    if (value.includes('/bands/401/dashboard?')) return response({ dashboard: dashboardData(month, {
+      month_rehearsals: { items: [{ id: 603, title: '추가 합주', date: `${month}-14`, rehearsal_type: 'EXTRA', songs: [] }], pagination: { total: 1, has_more: false } },
+      upcoming_rehearsals: [{ id: 704, title: '공연', date: `${month}-20`, rehearsal_type: 'LIVE', songs: [] }],
+    }) });
+    return response({});
+  };
+  try {
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/rehearsal-types' }));
+    await view.findByText('공연'); assert.equal(view.getByText('라이브공연').getAttribute('data-rehearsal-type'), 'LIVE');
+    await selectCalendarDay(view, 14);
+    assert.equal(view.getByText('추가합주').getAttribute('data-rehearsal-type'), 'EXTRA');
+    assert.ok(view.getByLabelText('1개 합주: 추가합주'));
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('empty upcoming card has exactly one prominent scheduling link in its centered body for active members', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => String(url).includes('/by-slug/empty-band')

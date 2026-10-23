@@ -78,6 +78,7 @@ export const rehearsalPayload = (value) => ({
   location: value.location,
   memo: value.memo,
   color: value.color,
+  ...(value.rehearsal_type ? { rehearsal_type: value.rehearsal_type } : {}),
   visibility: value.visibility,
   song_ids: (value.song_ids || []).map(Number).filter(Number.isInteger),
 });

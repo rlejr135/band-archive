@@ -43,7 +43,7 @@ test('unknown candidate creation result blocks blind retry rather than making du
   try {
     const view = render(app()); const title = await view.findByLabelText('제목'); await userEvent.type(title, '다음 합주'); fireEvent.submit(title.closest('form'));
     await view.findByText(/중복 생성을 막기 위해 다시 저장하지 않습니다/); const button = view.getByRole('button', { name: '저장', exact: true }); assert.equal(button.disabled, true);
-    await act(async () => { fireEvent.submit(title.closest('form')); }); assert.equal(mock.calls.filter(({ options }) => options.method === 'POST').length, 1);
+    await act(async () => { fireEvent.submit(title.closest('form')); }); assert.equal(mock.calls.filter(({ options }) => options.method === 'POST').length, 1); assert.equal(JSON.parse(mock.calls.find(({ options }) => options.method === 'POST').options.body).rehearsal_type, 'REGULAR');
     assert.equal(view.getByRole('button', { name: '취소', exact: true }).disabled, false);
   } finally { mock.restore(); }
 });

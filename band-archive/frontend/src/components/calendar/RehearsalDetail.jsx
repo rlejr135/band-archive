@@ -6,6 +6,7 @@ import { getMediaIcon } from '../../services/mediaPresentation';
 import { getUploadStatusLabel, isUploadCancellable, isUploadInProgress, isUploadRetryable, isAudioProcessingRetryable } from '../../services/uploadPresentation';
 import { getRehearsalUploadPlan } from '../../services/rehearsalUploadQueue';
 import MediaDiscussion from '../common/MediaDiscussion';
+import RehearsalTypeBadge from './RehearsalTypeBadge.jsx';
 import './RehearsalDetail.css';
 
 const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
@@ -232,6 +233,7 @@ const RehearsalDetail = ({ date, rehearsals, onEdit, onDelete, onAdd }) => {
                   style={{ backgroundColor: r.color || '#ffd32a' }}
                 />
                 <span className="detail-title">{r.title}</span>
+                <RehearsalTypeBadge type={r.rehearsal_type} />
                 {r.time && <span className="detail-time">{r.time}</span>}
               </div>
 

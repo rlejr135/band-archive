@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Calendar from 'react-calendar';
+import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
+import { rehearsalTypeLabel } from '../../services/rehearsalTypes.js';
 import { Link } from 'react-router-dom';
 import 'react-calendar/dist/Calendar.css';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
@@ -59,6 +61,7 @@ const RehearsalSummary = ({ band, rehearsal, compact = false }) => {
   return <article className={compact ? 'activity-rehearsal activity-rehearsal-compact' : 'activity-rehearsal'}>
     <div className="activity-rehearsal-heading">
       <strong>{href ? <Link to={href}>{rehearsal.title || '합주'}</Link> : rehearsal.title || '합주'}</strong>
+      <RehearsalTypeBadge type={rehearsal.rehearsal_type} />
       <span>{dateLabel}{rehearsal.time ? ` · ${rehearsal.time}` : ''}</span>
     </div>
     {rehearsal.location && <span className="activity-muted">{rehearsal.location}</span>}
@@ -222,7 +225,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
   const tileContent = ({ date, view }) => {
     if (view !== 'month') return null;
     const rows = rehearsalsForDate(monthItems, dateKey(date));
-    return rows.length ? <span className="activity-calendar-dot" aria-label={`${rows.length}개 합주`} /> : null;
+    return rows.length ? <span className="activity-calendar-dot" aria-label={`${rows.length}개 합주: ${rows.map((row) => rehearsalTypeLabel(row.rehearsal_type)).join(', ')}`} /> : null;
   };
 
   const practiceSongs = Array.isArray(dashboard?.practice_songs) ? dashboard.practice_songs.slice(0, 5) : [];

@@ -31,7 +31,16 @@ test('write payloads never carry client-provided tenant or creator identity', ()
   assert.equal('band_id' in song, false);
   assert.equal('created_by_membership_id' in song, false);
   assert.deepEqual(rehearsal.song_ids, [2]);
+  assert.equal('rehearsal_type' in rehearsal, false);
   assert.equal('band_id' in rehearsal, false);
+});
+
+test('rehearsal payload carries an explicitly selected type without adding it to legacy or unchanged drafts', () => {
+  const original = { title: '합주', date: '2026-09-27', song_ids: [] };
+  assert.equal('rehearsal_type' in rehearsalPayload(original), false);
+  assert.equal('rehearsal_type' in rehearsalPayload({ ...original, rehearsal_type: undefined }), false);
+  assert.equal(rehearsalPayload({ ...original, rehearsal_type: 'REGULAR' }).rehearsal_type, 'REGULAR');
+  assert.equal(rehearsalPayload({ ...original, rehearsal_type: 'LIVE' }).rehearsal_type, 'LIVE');
 });
 
 test('media engagement payloads are account-owned and tenant-free', () => {

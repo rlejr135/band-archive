@@ -280,11 +280,59 @@ test('rehearsal DOM create sends only allowed same-band fields and song ids', as
   const placeRequests = [];
   globalThis.fetch = async (url, options = {}) => { if (url.includes('/by-slug/practice')) return response({ band: { id: 10, slug: 'practice', name: 'Practice', default_visibility: 'MEMBERS', membership: { id: 10, role: 'member' } } }); if (url.includes('/search-places?')) { placeRequests.push({ url, auth: options.headers.Authorization, signal: options.signal }); return response([{ title: '<script>연습실</script>', address: '서울 마포구', roadAddress: '서울 마포구 와우산로' }]); } if (url.includes('/rehearsals') && options.method === 'POST') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }, 201); } if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { total: 0, has_more: false } }); if (url.includes('/songs?')) return response({ songs: [{ id: 31, title: '같은 밴드 곡', artist: '밴드' }], pagination: { total: 1, has_more: false } }); return response({}); };
   const member = { user: { id: 'member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
-  const view = render(createElement(App, { entry: '/bands/practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); await userEvent.type(view.getByLabelText('제목'), '9월 합주'); await userEvent.type(view.getByLabelText('날짜'), '2026-09-27'); await userEvent.click(view.getByLabelText(/같은 밴드 곡/));
+  const view = render(createElement(App, { entry: '/bands/practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); assert.equal(view.getByLabelText('합주 유형').value, 'REGULAR'); await userEvent.type(view.getByLabelText('제목'), '9월 합주'); await userEvent.type(view.getByLabelText('날짜'), '2026-09-27'); await userEvent.click(view.getByLabelText(/같은 밴드 곡/));
   const placeSearch = view.getByLabelText('밴드 장소 검색'); assert.equal(placeSearch.maxLength, 100); await userEvent.type(placeSearch, '홍대'); fireEvent.keyDown(placeSearch, { key: 'Enter' }); assert.equal(writes.length, 0, 'Enter in the search input does not submit the rehearsal form'); await new Promise((resolve) => setTimeout(resolve, 200)); assert.equal(placeRequests.length, 0, 'search waits for the debounce interval');
   const result = await view.findByRole('button', { name: /연습실/ }); assert.equal(placeRequests.length, 1); assert.equal(new URL(placeRequests[0].url).pathname + new URL(placeRequests[0].url).search, '/api/v2/bands/10/search-places?query=%ED%99%8D%EB%8C%80'); assert.equal(placeRequests[0].auth, 'Bearer token'); await userEvent.click(result);
   assert.equal(view.getByLabelText('장소').maxLength, 200); assert.equal(view.getByLabelText('장소').value, '<script>연습실</script> (서울 마포구 와우산로)'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
-  assert.deepEqual(writes[0].song_ids, [31]); assert.equal(writes[0].visibility, 'MEMBERS'); assert.equal(writes[0].location, '<script>연습실</script> (서울 마포구 와우산로)'); assert.equal('latitude' in writes[0], false); assert.equal('longitude' in writes[0], false); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+  assert.deepEqual(writes[0].song_ids, [31]); assert.equal(writes[0].visibility, 'MEMBERS'); assert.equal(writes[0].rehearsal_type, 'REGULAR'); assert.equal(writes[0].location, '<script>연습실</script> (서울 마포구 와우산로)'); assert.equal('latitude' in writes[0], false); assert.equal('longitude' in writes[0], false); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+});
+
+test('the v2 rehearsal type draft resets when changing bands or accounts', async () => {
+  await load(); const previousFetch = globalThis.fetch; let navigate;
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/')) { const slug = String(url).split('/').at(-1); return response({ band: { id: slug === 'type-a' ? 101 : 102, slug, name: slug.toUpperCase(), default_visibility: 'MEMBERS', membership: { id: slug === 'type-a' ? 101 : 102, role: 'member' } } }); }
+    if (url.includes('/rehearsals?')) return response({ rehearsals: [], pagination: { has_more: false } });
+    if (url.includes('/songs?')) return response({ songs: [] });
+    return response({});
+  };
+  const Go = () => { navigate = useNavigate(); return null; };
+  const tree = (authValue) => createElement(
+    policies.ServicePolicyContext.Provider, { value: { config: { policies: { upload: { enabled: false } } } } },
+    createElement(auth.AuthContext.Provider, { value: authValue },
+      createElement(bands.BandContext.Provider, { value: { activeBands: [] } },
+        createElement(MemoryRouter, { initialEntries: ['/bands/type-a/rehearsals'] },
+          createElement(Go),
+          createElement(Routes, null,
+            createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
+              createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  const member = (id) => ({ user: { id }, getAccessToken: async () => id, refreshSession: async () => id, signOut: async () => {} });
+  try {
+    const view = render(tree(member('account-a'))); await view.findByText('TYPE-A'); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); fireEvent.change(view.getByLabelText('합주 유형'), { target: { value: 'LIVE' } });
+    await act(async () => navigate('/bands/type-b/rehearsals')); await view.findByText('TYPE-B'); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); assert.equal(view.getByLabelText('합주 유형').value, 'REGULAR'); fireEvent.change(view.getByLabelText('합주 유형'), { target: { value: 'LIVE' } });
+    view.rerender(tree(member('account-b'))); await view.findByText('TYPE-B'); assert.equal(view.queryByLabelText('합주 유형'), null); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); assert.equal(view.getByLabelText('합주 유형').value, 'REGULAR');
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('the v2 rehearsal form sends a member-selected LIVE type on create', async () => {
+  await load(); const previousFetch = globalThis.fetch; const writes = [];
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.includes('/by-slug/live-create')) return response({ band: { id: 104, slug: 'live-create', name: '공연 밴드', membership: { id: 104, role: 'member' } } });
+    if (String(url).includes('/rehearsals') && options.method === 'POST') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }, 201); }
+    if (String(url).includes('/rehearsals?')) return response({ rehearsals: [], pagination: { has_more: false } });
+    if (String(url).includes('/songs?')) return response({ songs: [] });
+    return response({});
+  };
+  const member = { user: { id: 'live-member' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+  try {
+    const view = render(createElement(App, { entry: '/bands/live-create/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true })); await view.findByRole('button', { name: '합주 추가' }); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); fireEvent.change(view.getByLabelText('합주 유형'), { target: { value: 'LIVE' } }); await userEvent.type(view.getByLabelText('제목'), '라이브 공연'); await userEvent.type(view.getByLabelText('날짜'), '2026-11-20'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1)); assert.equal(writes[0].rehearsal_type, 'LIVE'); assert.equal(writes[0].title, '라이브 공연'); view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test('place search treats permission denial as terminal, hides stale results, and keeps manual entry usable', async () => {
@@ -451,18 +499,22 @@ test('rejected PATCH remains retryable while delete permission denial disables t
 });
 
 test('rehearsal edit uses the current band song choices and an identity-free PATCH payload', async () => {
-  await load(); const previousFetch = globalThis.fetch; const writes = [];
+  await load(); const previousFetch = globalThis.fetch; const writes = []; let currentType;
   globalThis.fetch = async (url, options = {}) => {
     if (url.includes('/by-slug/edit-practice')) return response({ band: { id: 70, slug: 'edit-practice', name: '합주 밴드', default_visibility: 'MEMBERS', membership: { id: 70, role: 'member' } } });
-    if (url.endsWith('/rehearsals/71') && options.method === 'PATCH') { writes.push(JSON.parse(options.body)); return response({ rehearsal: {} }); }
-    if (url.includes('/rehearsals?')) return response({ rehearsals: [{ id: 71, title: '이전 합주', date: '2026-09-20', visibility: 'PUBLIC', can_edit: true, songs: [{ id: 72, title: '이전 밴드 곡' }] }], pagination: { has_more: false } });
+    if (url.endsWith('/rehearsals/71') && options.method === 'PATCH') { const body = JSON.parse(options.body); writes.push(body); if ('rehearsal_type' in body) currentType = body.rehearsal_type; return response({ rehearsal: {} }); }
+    if (url.includes('/rehearsals?')) return response({ rehearsals: [{ id: 71, title: '이전 합주', date: '2026-09-20', visibility: 'PUBLIC', can_edit: true, ...(currentType ? { rehearsal_type: currentType } : {}), songs: [{ id: 72, title: '이전 밴드 곡' }] }], pagination: { has_more: false } });
     if (url.includes('/songs?')) return response({ songs: [{ id: 72, title: '이전 밴드 곡', artist: '밴드' }, { id: 73, title: '현재 밴드 곡', artist: '밴드' }], pagination: { has_more: false } });
     if (url.includes('/rehearsals/71/media?')) return response({ media: [], pagination: { has_more: false } });
     return response({});
   };
   const member = { user: { id: 'editor' }, getAccessToken: async () => 'editor', refreshSession: async () => 'editor', signOut: async () => {} }; const view = render(createElement(App, { entry: '/bands/edit-practice/rehearsals', authValue: member, bandValue: { activeBands: [] }, rehearsals: true }));
-  await view.findByText('이전 합주'); await userEvent.click(view.getByText('이전 합주')); await userEvent.click(view.getByRole('button', { name: '수정' })); await view.findByLabelText(/현재 밴드 곡/); await userEvent.click(view.getByLabelText(/이전 밴드 곡/)); await userEvent.click(view.getByLabelText(/현재 밴드 곡/)); await userEvent.type(view.getByLabelText('제목'), ' 수정'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
-  assert.deepEqual(writes[0], { title: '이전 합주 수정', date: '2026-09-20', start_date: null, end_date: null, time: '', location: '', memo: '', color: '', visibility: 'PUBLIC', song_ids: [73] }); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false); view.unmount(); globalThis.fetch = previousFetch;
+  await view.findByText('이전 합주'); assert.equal(view.getByText('미분류').dataset.rehearsalType, 'UNCLASSIFIED'); await userEvent.click(view.getByText('이전 합주')); assert.equal((await view.findAllByText('미분류', { selector: '.rehearsal-type-badge' })).length, 2); await userEvent.click(view.getByRole('button', { name: '수정' })); await view.findByLabelText(/현재 밴드 곡/); assert.equal(view.getByLabelText('합주 유형').value, 'UNCLASSIFIED'); await userEvent.click(view.getByLabelText(/이전 밴드 곡/)); await userEvent.click(view.getByLabelText(/현재 밴드 곡/)); await userEvent.type(view.getByLabelText('제목'), ' 수정'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 1));
+  assert.deepEqual(writes[0], { title: '이전 합주 수정', date: '2026-09-20', start_date: null, end_date: null, time: '', location: '', memo: '', color: '', visibility: 'PUBLIC', song_ids: [73] }); assert.equal('rehearsal_type' in writes[0], false); assert.equal('band_id' in writes[0], false); assert.equal('created_by_membership_id' in writes[0], false);
+  await view.findByText('이전 합주'); await userEvent.click(view.getByText('이전 합주')); await userEvent.click(view.getByRole('button', { name: '수정' })); fireEvent.change(view.getByLabelText('합주 유형'), { target: { value: 'LIVE' } }); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 2)); assert.equal(writes[1].rehearsal_type, 'LIVE');
+  await waitFor(() => assert.equal(view.getByText('라이브공연', { selector: '.rehearsal-type-badge' }).dataset.rehearsalType, 'LIVE')); await userEvent.click(view.getByText('이전 합주')); await userEvent.click(view.getByRole('button', { name: '수정' })); assert.equal(view.getByLabelText('합주 유형').value, 'LIVE'); await userEvent.type(view.getByLabelText('제목'), ' 유지'); await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.equal(writes.length, 3)); assert.equal('rehearsal_type' in writes[2], false);
+  await userEvent.click(view.getByText('이전 합주')); await userEvent.click(view.getByRole('button', { name: '수정' })); assert.equal(view.getByLabelText('합주 유형').value, 'LIVE'); await userEvent.type(view.getByLabelText('제목'), ' 초안'); await userEvent.click(view.getByRole('button', { name: '합주 추가' })); assert.equal(view.getByLabelText('합주 유형').value, 'REGULAR'); assert.equal(view.getByLabelText('제목').value, ''); assert.equal(view.getByLabelText('날짜').value, '');
+  view.unmount(); globalThis.fetch = previousFetch;
 });
 
 test('media pagination renders the next offset without duplicate media and bounds each playback refresh', async () => {

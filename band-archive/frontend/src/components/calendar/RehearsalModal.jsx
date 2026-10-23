@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createRehearsal, updateRehearsal } from '../../services/rehearsalApi';
+import { normalizeRehearsalType, REHEARSAL_TYPES } from '../../services/rehearsalTypes.js';
 import LocationPicker from './LocationPicker';
 import './RehearsalModal.css';
 
@@ -26,6 +27,9 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
   const [showMap, setShowMap] = useState(false);
   const [memo, setMemo] = useState('');
   const [color, setColor] = useState('#ffd32a');
+  const initialType = isEdit ? normalizeRehearsalType(rehearsal?.rehearsal_type) : 'REGULAR';
+  const [rehearsalType, setRehearsalType] = useState(initialType);
+  const [originalRehearsalType, setOriginalRehearsalType] = useState(initialType);
   const [selectedSongIds, setSelectedSongIds] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -40,6 +44,9 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       setLongitude(rehearsal.longitude || null);
       setMemo(rehearsal.memo || '');
       setColor(rehearsal.color || '#ffd32a');
+      const originalType = normalizeRehearsalType(rehearsal.rehearsal_type);
+      setRehearsalType(originalType);
+      setOriginalRehearsalType(originalType);
       setSelectedSongIds(rehearsal.songs?.map((s) => s.id) || []);
       if (rehearsal.start_date && rehearsal.end_date) {
         setUsePeriod(true);
@@ -48,6 +55,8 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       }
     } else {
       setDate(toDateStr(defaultDate));
+      setRehearsalType('REGULAR');
+      setOriginalRehearsalType('REGULAR');
     }
   }, [rehearsal, defaultDate, isEdit]);
 
@@ -83,6 +92,7 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
       color,
       song_ids: selectedSongIds,
     };
+    if (!isEdit || rehearsalType !== originalRehearsalType) data.rehearsal_type = rehearsalType;
 
     setSaving(true);
     try {
@@ -92,7 +102,7 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
         await createRehearsal(data);
       }
       onSave();
-    } catch (err) {
+    } catch {
       setError('저장에 실패했습니다');
     } finally {
       setSaving(false);
@@ -111,8 +121,9 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
           <div className="modal-body">
             {/* 제목 */}
             <div className="form-group">
-              <label>제목 *</label>
+              <label htmlFor="rehearsal-title">제목 *</label>
               <input
+                id="rehearsal-title"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -123,12 +134,21 @@ const RehearsalModal = ({ rehearsal, songs, defaultDate, onClose, onSave }) => {
 
             {/* 날짜 */}
             <div className="form-group">
-              <label>날짜 *</label>
+              <label htmlFor="rehearsal-date">날짜 *</label>
               <input
+                id="rehearsal-date"
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
               />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="rehearsal-type">합주 유형</label>
+              <select id="rehearsal-type" value={rehearsalType} onChange={(event) => setRehearsalType(event.target.value)}>
+                {REHEARSAL_TYPES.map(([value, label]) => <option key={value} value={value}>{value === 'UNCLASSIFIED' ? `${label} (유형을 선택해 주세요)` : label}</option>)}
+              </select>
+              {rehearsalType === 'UNCLASSIFIED' && <small className="rehearsal-type-hint">기존 일정의 유형은 추정하지 않았습니다. 실제 유형을 선택해 주세요.</small>}
             </div>
 
             {/* 기간 토글 */}

@@ -27,6 +27,7 @@
 .rehearsal-modal .form-group input[type="text"],
 .rehearsal-modal .form-group input[type="date"],
 .rehearsal-modal .form-group input[type="time"],
+.rehearsal-modal .form-group select,
 .rehearsal-modal .form-group textarea {
   width: 100%;
   padding: 10px 12px;
@@ -41,6 +42,7 @@
 }
 
 .rehearsal-modal .form-group input:focus,
+.rehearsal-modal .form-group select:focus,
 .rehearsal-modal .form-group textarea:focus {
   outline: none;
   border-color: var(--primary-color);
@@ -57,6 +59,8 @@
 .rehearsal-modal .form-group input[type="time"] {
   color-scheme: dark;
 }
+
+.rehearsal-modal .rehearsal-type-hint { color: var(--text-secondary); font-size: .82rem; }
 
 /* ── Form Row (side by side, scoped) ── */
 .rehearsal-modal .form-row {

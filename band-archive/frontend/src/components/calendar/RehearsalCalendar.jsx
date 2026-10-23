@@ -4,6 +4,7 @@ import { fetchRehearsals } from '../../services/rehearsalApi';
 import { useSongs } from '../../context/SongContext';
 import RehearsalDetail from './RehearsalDetail';
 import RehearsalModal from './RehearsalModal';
+import { rehearsalTypeLabel } from '../../services/rehearsalTypes.js';
 import 'react-calendar/dist/Calendar.css';
 import './RehearsalCalendar.css';
 
@@ -27,6 +28,8 @@ const RehearsalCalendar = () => {
   }, []);
 
   useEffect(() => {
+    // This starts an async read whose state updates occur after the request resolves.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadRehearsals(activeMonth);
   }, [activeMonth, loadRehearsals]);
 
@@ -87,6 +90,8 @@ const RehearsalCalendar = () => {
             key={r.id}
             className="rehearsal-dot"
             style={{ backgroundColor: r.color || '#ffd32a' }}
+            aria-label={`${rehearsalTypeLabel(r.rehearsal_type)}: ${r.title || '합주'}`}
+            title={`${rehearsalTypeLabel(r.rehearsal_type)}: ${r.title || '합주'}`}
           />
         ))}
       </div>
