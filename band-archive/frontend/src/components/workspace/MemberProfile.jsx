@@ -1,15 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
 import { normalizedJoinName, validJoinName } from '../../services/joinName.js';
+import MemberPositionPicker from './MemberPositionPicker.jsx';
+import { memberPositionLabels } from './memberPositions.js';
 import './MemberProfile.css';
 
-const MEMBER_POSITIONS = [
-  ['VOCAL', '보컬'], ['GUITAR', '기타'], ['BASS', '베이스'],
-  ['DRUMS', '드럼'], ['KEYBOARD', '키보드'], ['OTHER', '기타 악기·역할'],
-];
-
 export const MemberProfileSummary = ({ member, compact = false }) => {
-  const labels = MEMBER_POSITIONS.filter(([key]) => member.positions?.includes(key)).map(([key, label]) => key === 'OTHER' && member.custom_position ? member.custom_position : label);
+  const labels = memberPositionLabels(member.positions, member.custom_position);
   return <div className="member-profile-summary">
     <div className="member-position-tags" aria-label="포지션">{labels.length ? labels.map((label, index) => <span key={index}>{label}</span>) : <span>{member.instrument || '포지션 미설정'}</span>}</div>
     <p className={compact ? 'member-biography member-biography-compact' : 'member-biography'}>{member.biography || (member.is_self ? '소개를 작성해 주세요.' : '아직 등록한 소개가 없습니다.')}</p>
@@ -53,10 +50,7 @@ export const MemberProfileEditor = ({ band, api, expectedMemberId, onSaved, onCa
     return () => { controller.abort(); request.current?.abort(); };
   }, [api, path, reload, band.id, expectedMemberId]);
   const retryRead = () => { setProfile(null); setLoading(true); setError(''); setReload((value) => value + 1); };
-  const changePosition = (key) => setProfile((previous) => {
-    const positions = previous.positions.includes(key) ? previous.positions.filter((item) => item !== key) : [...previous.positions, key];
-    return { ...previous, positions, custom_position: positions.includes('OTHER') ? previous.custom_position : '' };
-  });
+  const changePositions = (positions, custom_position) => setProfile((previous) => ({ ...previous, positions, custom_position }));
   const save = async (event) => {
     event.preventDefault();
     if (flight.current || conflict || !profile || !validJoinName(profile.name)) return;
@@ -93,9 +87,8 @@ export const MemberProfileEditor = ({ band, api, expectedMemberId, onSaved, onCa
       {nameError && <p id="member-band-name-error" className="workspace-error" role="alert">{nameError}</p>}
       <label htmlFor="member-biography">간단한 소개<textarea id="member-biography" maxLength={300} value={profile.biography} onChange={(event) => setProfile((previous) => ({ ...previous, biography: event.target.value }))} aria-describedby="member-biography-count" /></label>
       <small id="member-biography-count">{Array.from(profile.biography).length}/300자 · 가입 심사 때 작성한 소개와는 별개입니다.</small>
-      <fieldset><legend>포지션 · 여러 개 선택 가능</legend><div className="member-position-options">{MEMBER_POSITIONS.map(([key, label]) => <label className="check-row" key={key}><input type="checkbox" checked={profile.positions.includes(key)} onChange={() => changePosition(key)} />{label}</label>)}</div></fieldset>
+      <MemberPositionPicker positions={profile.positions} customPosition={profile.custom_position} onChange={changePositions} idPrefix="member-profile-position" />
       {!original.current?.positions?.length && original.current?.instrument && <p className="workspace-muted">기존 포지션 표기: {original.current.instrument}. 새 포지션을 선택하면 이 표기가 변경됩니다.</p>}
-      {profile.positions.includes('OTHER') && <label htmlFor="member-custom-position">기타 악기·역할 직접 입력<input id="member-custom-position" maxLength={50} value={profile.custom_position} onChange={(event) => setProfile((previous) => ({ ...previous, custom_position: event.target.value }))} /></label>}
     </fieldset>}
     {error && <p className="workspace-error" role="alert">{error}</p>}
     {(conflict || (!loading && !profile)) && <button type="button" className="secondary-btn" onClick={retryRead}>최신 프로필 다시 불러오기</button>}

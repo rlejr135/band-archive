@@ -242,6 +242,29 @@ test('signed-in visitor must explicitly supply a member name and accept after re
   } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
 });
 
+test('invite accept sends optional shared position selections and their custom OTHER value', async () => {
+  await load(); inviteService.resetInviteUrlContextForTests();
+  setUrl(`http://localhost/invite#token=${opaque()}`); inviteService.initializeInviteUrlContext();
+  const previous = globalThis.fetch; let acceptBody;
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith('/resume-context')) return response({ context: opaque('P'), expires_at: '2099-01-01T00:00:00Z' }, 201);
+    if (path.endsWith('/resume')) return response(invitePayload());
+    if (path.endsWith('/accept')) { acceptBody = JSON.parse(options.body); return response({ joined: true, already_member: false, band: { id: 3, name: '초대 밴드', slug: 'invite-band' }, membership: { status: 'active', role: 'member' } }); }
+    return response(invitePayload());
+  };
+  try {
+    const view = render(tree(account('visitor')));
+    await view.findByRole('heading', { name: '초대 밴드' }); await userEvent.click(view.getByRole('button', { name: '초대 확인하고 계속' }));
+    await view.findByRole('button', { name: '초대받은 밴드에 가입' });
+    await userEvent.type(view.getByLabelText('밴드에서 사용할 이름 (필수)'), '초대 이름');
+    await userEvent.click(view.getByRole('checkbox', { name: '보컬' })); await userEvent.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+    const customPosition = view.getByLabelText('기타 악기·역할 직접 입력'); assert.equal(customPosition.maxLength, 50); await userEvent.type(customPosition, '색소폰');
+    await userEvent.click(view.getByRole('button', { name: '초대받은 밴드에 가입' })); await view.findByText('workspace');
+    assert.deepEqual(acceptBody, { context: opaque('P'), name: '초대 이름', positions: ['VOCAL', 'OTHER'], custom_position: '색소폰' });
+  } finally { globalThis.fetch = previous; inviteService.resetInviteUrlContextForTests(); }
+});
+
 test('verify callback scrubs only invite_resume and preserves Supabase auth params', async () => {
   await load(); inviteService.resetInviteUrlContextForTests();
   setUrl(`http://localhost/verify-email?code=provider-code&invite_resume=${opaque('C')}#provider-fragment`);
@@ -363,15 +386,20 @@ test('invite name is retained on failure and a new context clears drafts and ign
   try {
     const view = render(tree(account('member'), '/invite/continue'));
     await view.findByLabelText('밴드에서 사용할 이름 (필수)');
+    assert.ok(view.getByText(/포지션은 선택 사항이며.*재가입 시 선택하지 않으면 기존 포지션이 유지됩니다/));
     await userEvent.type(view.getByLabelText('밴드에서 사용할 이름 (필수)'), '내 멤버 이름');
+    await userEvent.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+    await userEvent.type(view.getByLabelText('기타 악기·역할 직접 입력'), '색소폰');
     await userEvent.click(view.getByRole('button', { name: '초대받은 밴드에 가입' })); await view.findByRole('alert');
     assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').value, '내 멤버 이름');
+    assert.equal(view.getByLabelText('기타 악기·역할 직접 입력').value, '색소폰');
     await userEvent.click(view.getByRole('button', { name: '초대받은 밴드에 가입' }));
     await waitFor(() => assert.equal(writes.length, 2));
     inviteService.saveInviteResumeContext(opaque('K'), '2099-01-01T00:00:00Z'); view.rerender(tree(account('member'), '/invite/continue'));
     await view.findByLabelText('밴드에서 사용할 이름 (필수)');
     assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').value, '');
     assert.equal(view.getByLabelText('밴드에서 사용할 이름 (필수)').disabled, false);
+    assert.equal(view.queryByLabelText('기타 악기·역할 직접 입력'), null);
     await act(async () => acceptResolve(response({ joined: true, band: { slug: 'old-band' } })));
     assert.equal(view.queryByText('workspace'), null);
     assert.equal(inviteService.getInviteResumeContext(), opaque('K'));

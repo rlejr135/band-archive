@@ -6,6 +6,7 @@ import { bandRoleLabel } from '../../context/bandRole.js';
 import { UploadContext } from '../../context/UploadContext.jsx';
 import { isUploadInProgress } from '../../services/uploadPresentation.js';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
+import { memberPositionLabels } from '../workspace/memberPositions.js';
 import { InviteLinkGuidance } from './BandOnboarding.jsx';
 import BandSwitcher from './BandSwitcher.jsx';
 import AuthStatus from '../layout/AuthStatus.jsx';
@@ -185,7 +186,7 @@ export const BandsPage = () => {
         {loading ? <p aria-live="polite">밴드 정보를 불러오는 중입니다…</p> : error ? <div className="account-error" role="alert"><span>{error}</span><button type="button" className="secondary-btn" onClick={reload}>다시 시도</button></div> : activeBands.length === 0 ? <div className="account-empty"><h3>아직 가입한 밴드가 없습니다</h3><p>공개 밴드를 둘러보거나 밴드 관리자에게 초대 링크를 요청해 주세요.</p></div> : <ul className="account-band-list">
           {activeBands.map((band) => <BandMembershipCard key={`${user?.id}:${band.id}`} band={band} userId={user?.id} selected={selectedBand?.id === band.id} onOpen={openBand} onLeave={() => {}} />)}
         </ul>}
-        {pendingMemberships.length > 0 && <section className="account-pending" aria-labelledby="pending-bands-heading"><h3 id="pending-bands-heading">가입 대기</h3><ul>{pendingMemberships.map((membership) => <li key={membership.id}><span>{membership.band?.name || '밴드'}</span><span>승인 대기 중</span></li>)}</ul></section>}
+        {pendingMemberships.length > 0 && <section className="account-pending" aria-labelledby="pending-bands-heading"><h3 id="pending-bands-heading">가입 대기</h3><ul>{pendingMemberships.map((membership) => <li key={membership.id}><span>{membership.band?.name || '밴드'}{Array.isArray(membership.requested_positions) && membership.requested_positions.length > 0 && <small className="account-pending-positions">요청 포지션: {memberPositionLabels(membership.requested_positions, membership.requested_custom_position).join(' · ') || '미설정'}</small>}</span><span>승인 대기 중</span></li>)}</ul></section>}
         <InviteLinkGuidance />
       </section>
     </main>

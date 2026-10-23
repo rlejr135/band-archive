@@ -97,8 +97,8 @@ test('visitor discover preserves a safe login return and join becomes pending on
   await load(); const previous = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, request = {}) => { calls.push([String(url), request]); return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
   try { const visitor = render(createElement(App, { entry: '/bands/discover', authValue: account(null), discover: true })); await visitor.findByText('Public'); await userEvent.click(visitor.getByRole('button', { name: '로그인 후 가입 요청' })); await visitor.findByText('login:?returnTo=%2Fbands%2Fdiscover'); assert.ok(calls.every(([url]) => !url.includes('invite'))); visitor.unmount();
-    let joined = 0; let membershipReads = 0; globalThis.fetch = async (url) => { if (String(url).endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (String(url).includes('join-requests')) { joined += 1; return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
-    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); assert.equal(joined, 0); assert.equal(member.getByRole('button', { name: '가입 요청 보내기' }).disabled, true); await user.type(member.getByLabelText('밴드에서 사용할 이름 (필수)'), '멤버 이름'); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
+    let joined = 0; let membershipReads = 0; const joinBodies = []; globalThis.fetch = async (url, options = {}) => { if (String(url).endsWith('/api/v2/bands')) { membershipReads += 1; return response({ bands: [], pending_memberships: membershipReads > 1 ? [{ id: 1, band: { id: 7 } }] : [] }); } if (String(url).includes('join-requests')) { joined += 1; joinBodies.push(JSON.parse(options.body)); return response({ membership: { id: 1 }, created: true }, 201); } return response({ bands: [{ id: 7, slug: 'public', name: 'Public' }], pagination: { total: 1, has_more: false } }); };
+    const member = render(createElement(App, { entry: '/bands/discover', discover: true })); await member.findByText('Public'); const join = member.getByRole('button', { name: '가입 요청' }); await userEvent.click(join); assert.equal(joined, 0); assert.equal(member.getByRole('button', { name: '가입 요청 보내기' }).disabled, true); await user.type(member.getByLabelText('밴드에서 사용할 이름 (필수)'), '멤버 이름'); await userEvent.click(member.getByRole('button', { name: '가입 요청 보내기' })); await waitFor(() => assert.equal(joined, 1)); assert.deepEqual(joinBodies[0], { name: '멤버 이름', introduction: '' }); await member.findByRole('button', { name: '승인 대기 중' }); await userEvent.click(member.getByRole('button', { name: '승인 대기 중' })); assert.equal(joined, 1);
   } finally { globalThis.fetch = previous; }
 });
 
@@ -129,6 +129,7 @@ test('join introduction is optional plain text, bounded to 300 code points, trim
   try {
     const view = render(createElement(App, { entry: '/bands/discover', discover: true }));
     await view.findByRole('button', { name: '가입 요청' }); await userEvent.click(view.getByRole('button', { name: '가입 요청' }));
+    assert.ok(view.getByText(/포지션은 선택 사항이며.*재가입 시 선택하지 않으면 기존 포지션이 유지됩니다/));
     await user.type(view.getByLabelText('밴드에서 사용할 이름 (필수)'), '  요청 이름  ');
     const input = view.getByLabelText('간단한 자기소개 (선택)');
     fireEvent.change(input, { target: { value: 'a'.repeat(301) } });
@@ -136,8 +137,10 @@ test('join introduction is optional plain text, bounded to 300 code points, trim
     await userEvent.type(input, ' 기타와 보컬을 해요. ');
     const send = view.getByRole('button', { name: '가입 요청 보내기' });
     assert.equal(send.disabled, true); await user.clear(input); await userEvent.type(input, ' 기타와 보컬을 해요. ');
+    await userEvent.click(view.getByRole('checkbox', { name: '보컬' })); await userEvent.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+    const custom = view.getByLabelText('기타 악기·역할 직접 입력'); assert.equal(custom.maxLength, 50); await user.type(custom, '색소폰');
     await userEvent.click(send); fireEvent.submit(input.closest('form')); assert.equal(writes.length, 1);
-    assert.deepEqual(writes[0], { name: '요청 이름', introduction: '기타와 보컬을 해요.' });
+    assert.deepEqual(writes[0], { name: '요청 이름', introduction: '기타와 보컬을 해요.', positions: ['VOCAL', 'OTHER'], custom_position: '색소폰' });
     await act(async () => pending.resolve(response({ membership: { id: 1 }, created: true }, 201)));
     await waitFor(() => assert.equal(view.queryByLabelText('간단한 자기소개 (선택)') === null, true));
   } finally { globalThis.fetch = previous; }
@@ -154,10 +157,13 @@ test('join account switch clears draft and ignores the previous account response
     const view = render(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('a') }));
     await view.findByRole('button', { name: '가입 요청' }); await userEvent.click(view.getByRole('button', { name: '가입 요청' }));
     await user.type(view.getByLabelText('밴드에서 사용할 이름 (필수)'), 'private name');
+    await userEvent.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+    await userEvent.type(view.getByLabelText('기타 악기·역할 직접 입력'), 'private position');
     await userEvent.type(view.getByLabelText('간단한 자기소개 (선택)'), 'private draft'); await userEvent.click(view.getByRole('button', { name: '가입 요청 보내기' }));
     view.rerender(createElement(App, { entry: '/bands/discover', discover: true, authValue: account('b') }));
     assert.equal(view.queryByDisplayValue('private draft'), null);
     assert.equal(view.queryByDisplayValue('private name'), null);
+    assert.equal(view.queryByDisplayValue('private position'), null);
     await act(async () => pending.resolve(response({}, 400)));
     await view.findByRole('button', { name: '가입 요청' }); assert.equal(view.queryByRole('alert'), null); assert.equal(writes, 1);
   } finally { globalThis.fetch = previous; }
@@ -168,7 +174,7 @@ test('manager sees pending introduction as text and KST timestamp, never active 
   globalThis.fetch = async (url) => {
     const path = String(url);
     if (path.includes('/by-slug/a')) return response({ band: { id: 1, slug: 'a', name: 'A', membership: { role: 'owner' }, permissions: { can_manage_members: true, can_manage_invites: true } } });
-    if (path.endsWith('/memberships')) return response({ memberships: [{ id: 1, status: 'pending', user: { display_name: 'Applicant' }, requested_at: '2026-10-17T00:30:00Z', introduction: '<img src=x onerror=alert(1)>\n기타 연주' }, { id: 2, status: 'active', role: 'member', user: { display_name: 'Member' }, introduction: 'must-not-display' }] });
+    if (path.endsWith('/memberships')) return response({ memberships: [{ id: 1, status: 'pending', user: { display_name: 'Applicant' }, requested_at: '2026-10-17T00:30:00Z', introduction: '<img src=x onerror=alert(1)>\n기타 연주', requested_positions: ['GUITAR', 'OTHER'], requested_custom_position: '색소폰' }, { id: 2, status: 'active', role: 'member', user: { display_name: 'Member' }, introduction: 'must-not-display', requested_positions: ['DRUMS'] }] });
     if (path.endsWith('/announcement')) return response({ announcement: null });
     return response({ invite_links: [] });
   };
@@ -177,6 +183,8 @@ test('manager sees pending introduction as text and KST timestamp, never active 
     assert.ok(view.getByText('2026-10-17 09:30 KST'));
     const text = view.container.querySelector('.membership-introduction'); assert.equal(text.textContent, '<img src=x onerror=alert(1)>\n기타 연주');
     assert.equal(text.querySelector('img'), null); assert.equal(view.queryByText('must-not-display'), null);
+    assert.ok(view.getByText('요청 포지션: 기타 · 색소폰'));
+    assert.equal(view.queryByText('요청 포지션: 드럼'), null);
   } finally { globalThis.fetch = previous; }
 });
 

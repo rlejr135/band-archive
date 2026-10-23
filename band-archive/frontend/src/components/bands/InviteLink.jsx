@@ -5,6 +5,7 @@ import { BandContext } from '../../context/BandContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { BandIntroduction } from './BandIntroduction.jsx';
 import { normalizedJoinName, validJoinName } from '../../services/joinName.js';
+import MemberPositionPicker from '../workspace/MemberPositionPicker.jsx';
 import { LoginPage } from '../auth/AuthPages.jsx';
 import {
   clearInviteResumeContext,
@@ -161,6 +162,9 @@ export const InviteContinueRoute = () => {
   const draftIdentity = identity;
   const [nameDraft, setNameDraft] = useState({ identity: draftIdentity, value: '' });
   const name = nameDraft.identity === draftIdentity ? nameDraft.value : '';
+  const [positionDraft, setPositionDraft] = useState({ identity: draftIdentity, positions: [], custom_position: '' });
+  const requestedPositions = useMemo(() => positionDraft.identity === draftIdentity ? positionDraft.positions : [], [draftIdentity, positionDraft.identity, positionDraft.positions]);
+  const requestedCustomPosition = positionDraft.identity === draftIdentity ? positionDraft.custom_position : '';
 
   useEffect(() => {
     if (!context && hasPendingInviteToken()) navigate('/invite', { replace: true });
@@ -200,8 +204,9 @@ export const InviteContinueRoute = () => {
     setAcceptingIdentity(identity);
     setState((previous) => ({ ...previous, error: '' }));
     try {
+      const requestedProfile = requestedPositions.length ? { positions: requestedPositions, ...(requestedPositions.includes('OTHER') ? { custom_position: requestedCustomPosition } : {}) } : {};
       const result = await api.requestJson(inviteLinkPath('/accept'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, name: normalizedJoinName(name) }), cache: 'no-store', signal: controller.signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, name: normalizedJoinName(name), ...requestedProfile }), cache: 'no-store', signal: controller.signal,
       });
       if (controller.signal.aborted || identityRef.current !== identity) return;
       if (result?.joined !== true && result?.already_member !== true) throw new Error('invalid_invite_accept');
@@ -212,7 +217,7 @@ export const InviteContinueRoute = () => {
       navigate(`/bands/${encodeURIComponent(result.band.slug)}`, { replace: true });
     } catch (error) { if (!controller.signal.aborted && identityRef.current === identity) setState((previous) => previous.identity === identity ? { ...previous, error: apiError(error) } : previous); }
     finally { if (!controller.signal.aborted) setAcceptingIdentity((previous) => previous === identity ? '' : previous); }
-  }, [accepting, api, context, identity, name, bands, navigate]);
+  }, [accepting, api, context, identity, name, requestedPositions, requestedCustomPosition, bands, navigate]);
 
   if (state.identity !== identity || state.loading) return <main className="band-introduction-page"><p role="status">초대 상태를 확인하는 중입니다…</p></main>;
   if (!state.payload) return <main className="band-introduction-page"><Link className="bands-return-link" to="/bands">← 내 밴드</Link><section className="invite-error" role="alert"><h1>초대를 이어갈 수 없습니다</h1><p>{state.error}</p>{state.retryable && context && <button type="button" className="secondary-btn" onClick={() => { setState((previous) => ({ ...previous, loading: true, error: '' })); setResumeAttempt((attempt) => attempt + 1); }}>다시 시도</button>}<p>초대 정보가 만료되었거나 브라우저에서 사라졌다면 로그인 후 원래 받은 초대 링크를 다시 열어 주세요.</p><p><Link to="/bands/discover">공개 밴드 찾기</Link></p></section></main>;
@@ -226,6 +231,8 @@ export const InviteContinueRoute = () => {
         <form className="bands-form" onSubmit={(event) => { event.preventDefault(); accept(); }} aria-busy={accepting}>
           <label htmlFor="invite-member-name">밴드에서 사용할 이름 (필수)<input id="invite-member-name" value={name} onChange={(event) => setNameDraft({ identity: draftIdentity, value: event.target.value })} required maxLength={100} autoComplete="name" disabled={accepting} aria-describedby="invite-member-name-help" /></label>
           <p className="bands-help" id="invite-member-name-help">가입 후 멤버 목록에 표시할 이름을 100자 이내로 입력해 주세요.</p>
+          <MemberPositionPicker positions={requestedPositions} customPosition={requestedCustomPosition} onChange={(positions, custom_position) => setPositionDraft({ identity: draftIdentity, positions, custom_position })} disabled={accepting} idPrefix="invite-position" />
+          <p className="bands-help">포지션은 선택 사항이며, 가입 후 밴드 멤버 프로필에서 본인이 변경할 수 있습니다. 멤버 명단 공개 설정에 따라 비로그인 방문자에게도 보일 수 있습니다. 재가입 시 선택하지 않으면 기존 포지션이 유지됩니다.</p>
           <button className="primary-btn" type="submit" disabled={accepting || !validJoinName(name)}>{accepting ? '가입 중…' : '초대받은 밴드에 가입'}</button>
         </form><p className="bands-help">가입 버튼을 누르기 전에는 밴드 멤버가 되지 않습니다.</p></section>}
   </BandIntroduction>;

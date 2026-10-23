@@ -61,10 +61,12 @@ test('account switch hides prior pending memberships and ignores a late response
     await waitFor(() => assert.equal(calls.length, 1));
     view.rerender(renderAccount('account-b'));
     await waitFor(() => assert.equal(calls.length, 2));
-    await act(async () => accountA.resolve(response({ bands: [], pending_memberships: [{ id: 1, band: { name: 'A private pending band' } }] })));
+    await act(async () => accountA.resolve(response({ bands: [], pending_memberships: [{ id: 1, band: { name: 'A private pending band' }, requested_positions: ['OTHER'], requested_custom_position: 'A private position' }] })));
     assert.equal(view.queryByText('A private pending band'), null);
-    await act(async () => accountB.resolve(response({ bands: [], pending_memberships: [{ id: 2, band: { name: 'B pending band' } }] })));
+    await act(async () => accountB.resolve(response({ bands: [], pending_memberships: [{ id: 2, band: { name: 'B pending band' }, requested_positions: ['OTHER'], requested_custom_position: '색소폰' }] })));
     await view.findByText('B pending band', { exact: false });
+    assert.ok(view.getByText('요청 포지션: 색소폰'));
+    assert.equal(view.queryByText('A private position'), null);
     assert.equal(view.queryByText('A private pending band'), null);
     assert.equal(calls.length, 2);
   } finally { globalThis.fetch = previousFetch; }

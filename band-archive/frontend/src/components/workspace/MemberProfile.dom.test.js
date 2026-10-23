@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -19,7 +21,7 @@ const profile = (overrides = {}) => ({ id: 4, name: '기덕', biography: '', pos
 const user = userEvent.setup({ document: dom.window.document });
 const editor = (api, props = {}) => createElement(module.MemberProfileEditor, { band: { id: 8 }, api, onSaved: () => {}, onCancel: () => {}, ...props });
 
-test('own profile editor loads authenticated me endpoint and saves only biography, multiple positions and revision', async () => {
+test('own profile editor reuses the shared multi-position picker and preserves revision payload rules', async () => {
   await load(); const calls = []; let saved;
   const api = { requestJson: async (path, options) => { calls.push({ path, options }); return { member: profile(options.method ? { ...JSON.parse(options.body), profile_revision: 1 } : {}) }; } };
   const view = render(editor(api, { onSaved: (member) => { saved = member; } }));
@@ -30,10 +32,18 @@ test('own profile editor loads authenticated me endpoint and saves only biograph
   await userEvent.type(view.getByLabelText('간단한 소개'), '<b>함께 합주해요</b>');
   await userEvent.click(view.getByRole('checkbox', { name: '보컬' }));
   await userEvent.click(view.getByRole('checkbox', { name: '기타', exact: true }));
+  await userEvent.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+  await user.type(view.getByLabelText('기타 악기·역할 직접 입력'), '색소폰');
   await userEvent.click(view.getByRole('button', { name: '저장', exact: true }));
   await waitFor(() => assert.ok(saved));
-  assert.deepEqual(JSON.parse(calls[1].options.body), { biography: '<b>함께 합주해요</b>', positions: ['VOCAL', 'GUITAR'], profile_revision: 0 });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { biography: '<b>함께 합주해요</b>', positions: ['VOCAL', 'GUITAR', 'OTHER'], custom_position: '색소폰', profile_revision: 0 });
   assert.equal(calls[1].options.method, 'PATCH'); assert.equal(calls[1].options.headers['Content-Type'], 'application/json');
+});
+
+test('shared position picker opts checkboxes out of bands-form text-input sizing', async () => {
+  const cssPath = fileURLToPath(new URL('./MemberProfile.css', import.meta.url));
+  const css = await readFile(cssPath, 'utf8');
+  assert.match(css, /\.member-position-options input\[type="checkbox"\]\s*\{[^}]*width:\s*auto;[^}]*flex:\s*0 0 auto;[^}]*padding:\s*0;/);
 });
 
 test('band-local name loads from the member profile and saves its normalized value with the revision', async () => {
@@ -80,6 +90,20 @@ test('band-local name accepts 100 supplementary Unicode characters within the UT
   assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
   await user.click(view.getByRole('button', { name: '저장', exact: true })); await waitFor(() => assert.ok(payload));
   assert.equal(payload.name, hundredEmoji); assert.equal(payload.profile_revision, 0);
+});
+
+test('shared OTHER position picker clears its custom value when deselected', async () => {
+  await load(); let payload;
+  const api = { requestJson: async (_path, options) => { if (options.method) payload = JSON.parse(options.body); return { member: profile(options.method ? { ...payload, profile_revision: 1 } : {}) }; } };
+  const view = render(editor(api));
+  await view.findByLabelText('간단한 소개');
+  await user.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+  const custom = view.getByLabelText('기타 악기·역할 직접 입력'); assert.equal(custom.maxLength, 50); await user.type(custom, '하모니카');
+  await user.click(view.getByRole('checkbox', { name: '기타 악기·역할' }));
+  assert.equal(view.queryByLabelText('기타 악기·역할 직접 입력'), null);
+  await user.click(view.getByRole('checkbox', { name: '기타', exact: true }));
+  await user.click(view.getByRole('button', { name: '저장', exact: true })); await waitFor(() => assert.ok(payload));
+  assert.deepEqual(payload, { positions: ['GUITAR'], profile_revision: 0 });
 });
 
 test('optional profile fields may stay blank and custom text clears when OTHER is deselected', async () => {
