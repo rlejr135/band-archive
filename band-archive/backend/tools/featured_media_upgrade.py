@@ -108,20 +108,24 @@ def without_featured_index(objects):
 
 
 def normalized_inventory(inventory):
-    """Mask only the expected ledger row, index count, aggregate object hash, and new index."""
+    """Normalize the single ledger transition and recompute the catalog hash after the new index."""
     result = json.loads(json.dumps(inventory, default=str))
+    check(set(result) == {'tables', 'catalog', 'catalog_sha256', 'owners', 'alembic_versions'},
+          'public inventory shape differs')
     check(result.get('tables', {}).get('alembic_version', {}).get('rows') == 1,
           'Alembic ledger row count differs from the one-row contract')
+    catalog = result.get('catalog')
+    expected_catalog = {'columns', 'constraints', 'functions', 'indexes', 'sequence_dependencies',
+                        'sequences', 'triggers'}
+    check(isinstance(catalog, dict) and set(catalog) == expected_catalog,
+          'public catalog inventory shape differs')
+    check(inventory.get('catalog_sha256') == stable_hash(inventory['catalog']),
+          'public catalog checksum does not match its contents')
     result['tables']['alembic_version']['sha256'] = '<revision-transition>'
     result['alembic_versions'] = ['<revision-transition>']
-    if 'indexes' in result:
-        result['indexes'] = '<reviewed-index-transition>'
-    if 'object_sha256' in result:
-        result['object_sha256'] = '<recomputed-from-exact-object-manifest>'
-    catalog = result.get('catalog')
-    if isinstance(catalog, dict) and 'indexes' in catalog:
-        catalog['indexes'] = [row for row in catalog['indexes']
-                              if not (len(row) > 1 and row[0] == 'media' and row[1] == INDEX)]
+    catalog['indexes'] = [row for row in catalog['indexes']
+                          if not (len(row) > 1 and row[0] == 'media' and row[1] == INDEX)]
+    result['catalog_sha256'] = stable_hash(catalog)
     return result
 
 
@@ -133,14 +137,18 @@ def compare_inventories(before, after, *, revision_transition):
     after_ledger = after.get('tables', {}).get('alembic_version', {})
     check(before_ledger.get('rows') == after_ledger.get('rows') == 1,
           'Alembic ledger row count differs')
-    check(all(name in before and name in after for name in ('indexes', 'foreign_keys', 'triggers')),
-          'public object inventory summary is incomplete')
-    check(after['indexes'] == before['indexes'] + int(revision_transition),
-          'public index count differs beyond the reviewed index')
-    check(after['foreign_keys'] == before['foreign_keys'] and after['triggers'] == before['triggers'],
-          'public foreign-key or trigger count changed')
+    before_indexes = before.get('catalog', {}).get('indexes')
+    after_indexes = after.get('catalog', {}).get('indexes')
+    check(isinstance(before_indexes, list) and isinstance(after_indexes, list)
+          and len(after_indexes) == len(before_indexes) + int(revision_transition),
+          'public catalog index count differs beyond the reviewed index')
     check(normalized_inventory(before) == normalized_inventory(after),
           'inventory changed beyond the reviewed revision and index')
+
+
+def stable_hash(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=True, sort_keys=True,
+                                     separators=(',', ':')).encode()).hexdigest()
 
 
 def verify_object_transition(before_objects, after_objects):

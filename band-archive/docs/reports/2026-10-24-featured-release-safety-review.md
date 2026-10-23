@@ -93,3 +93,43 @@ still conditional on validation of the final code, final reviewed source pins,
 and a fresh verified rehearsal. This reviewer did not execute tests or inspect
 private evidence. The linked-rehearsal preflight limitation remains a
 documented nonblocking P2 follow-up.
+
+## Addendum — 2026-10-24 correction after actual provider rehearsal
+
+The first revised operator failed a real read-only rehearsal with
+`public object inventory summary is incomplete`. Root reported remote writes
+were false and the owned local server stopped. The preceding static review
+relied on a supplied structural description from a different tracked helper;
+that description did not match the pinned provider actually used. Its
+inventory-shape validation was therefore insufficient. This addendum corrects
+the earlier status without changing the preceding report or addendum.
+
+With the expanded code-read authorization, this reviewer directly inspected
+the pinned helper chain and the source of
+`backup_staging_v12_security13_rehearsal.py::public_inventory` and
+`stable_hash`. No dump, manifest, production evidence, credentials, or secrets
+were read. The actual inventory has exactly `tables`, `catalog`,
+`catalog_sha256`, `owners`, and `alembic_versions`. Its catalog has `columns`,
+`constraints`, `functions`, `indexes`, `sequence_dependencies`, `sequences`,
+and `triggers`. Index entries contain table, name, definition, validity, and
+readiness. The hash uses ASCII-escaped, sorted, compact JSON.
+
+Independent static rereview of the final correction passes. It verifies
+the original catalog checksum before normalization, requires the actual
+inventory/catalog shape, removes only `(media, uq_media_featured_band_song)`,
+and recomputes the normalized checksum with the provider's exact canonical
+JSON algorithm. All remaining catalog entries, non-ledger rows, and owners
+remain equal. The ledger remains exactly one OLD-to-NEW row transition and
+the catalog index list increases by exactly one. Separate exact new-index
+definition and FK/index/trigger transition checks remain in the call path.
+
+The new local PostgreSQL integration regression invokes the actual pinned
+inventory provider in an isolated imported module, overriding only its test
+table allowlist. Root reported all seven final operator tests passed in
+session 96621 (13.19 seconds). This reviewer did not execute tests.
+
+No additional blocking source defect was found. The final corrected source
+may proceed to a new read-only backup/local restore rehearsal with final
+reviewed pins. Production apply remains conditional on that fresh verified
+rehearsal. The nonblocking P2 limitation above is unchanged. This review report
+is frozen after this append; root owns subsequent commit and rehearsal work.

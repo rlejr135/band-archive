@@ -22,21 +22,23 @@ def test_default_invocation_is_inert(monkeypatch, capsys):
 
 
 def test_inventory_normalization_allows_only_expected_ledger_and_object_delta():
-    before = {'alembic_versions': ['20261023_23'], 'tables': {
-        'alembic_version': {'rows': 1, 'sha256': 'ledger-v23'},
-        'media': {'rows': 8, 'sha256': 'media-rows'}},
-        'foreign_keys': 12, 'indexes': 50, 'triggers': 4, 'object_sha256': 'object-hash-v23',
-        'catalog': {'indexes': [['media', 'ix_media_song', 'old definition']],
-                    'columns': [['media', 'is_featured', 'boolean']],
-                    'constraints': [['media', 'fk_media_song']]}}
-    after = {'alembic_versions': ['20261024_24'], 'tables': {
-        'alembic_version': {'rows': 1, 'sha256': 'ledger-v24'},
-        'media': {'rows': 8, 'sha256': 'media-rows'}},
-        'foreign_keys': 12, 'indexes': 51, 'triggers': 4, 'object_sha256': 'object-hash-v24',
-        'catalog': {'indexes': [['media', 'ix_media_song', 'old definition'],
-                                ['media', operator.INDEX, 'new definition']],
-                    'columns': [['media', 'is_featured', 'boolean']],
-                    'constraints': [['media', 'fk_media_song']]}}
+    def make_inventory(revision, ledger_hash, indexes):
+        catalog = {'columns': [['media', 'is_featured', 'boolean', False, '', '', None]],
+            'constraints': [['media', 'f', 'fk_media_song', 'FOREIGN KEY (...)', True, False, False]],
+            'functions': [], 'indexes': indexes, 'sequence_dependencies': [], 'sequences': [],
+            'triggers': []}
+        return {'alembic_versions': [revision], 'tables': {
+            'alembic_version': {'rows': 1, 'sha256': ledger_hash},
+            'media': {'rows': 8, 'sha256': 'media-rows'}}, 'catalog': catalog,
+            'catalog_sha256': operator.stable_hash(catalog), 'owners': [['media', 'postgres']]}
+
+    prior_index = ['media', 'ix_media_song', 'CREATE INDEX ix_media_song ON public.media USING btree (song_id)',
+                   True, True]
+    new_index = ['media', operator.INDEX,
+                 'CREATE UNIQUE INDEX uq_media_featured_band_song ON public.media USING btree '
+                 '(band_id, song_id) WHERE (is_featured IS TRUE)', True, True]
+    before = make_inventory('20261023_23', 'ledger-v23', [prior_index])
+    after = make_inventory('20261024_24', 'ledger-v24', [prior_index, new_index])
     operator.compare_inventories(before, after, revision_transition=True)
     before_objects = {'foreign_keys': [['media', 'fk_media_song', 'FOREIGN KEY (...)']],
         'indexes': [['media', 'ix_media_song', 'CREATE INDEX ...']],
@@ -52,12 +54,13 @@ def test_inventory_normalization_allows_only_expected_ledger_and_object_delta():
     with pytest.raises(operator.GateError, match='inventory changed'):
         operator.compare_inventories(before, bad, revision_transition=True)
     bad = json.loads(json.dumps(after))
-    bad['foreign_keys'] += 1
-    with pytest.raises(operator.GateError, match='foreign-key or trigger count'):
+    bad['catalog']['constraints'].append(['media', 'unexpected_fk'])
+    bad['catalog_sha256'] = operator.stable_hash(bad['catalog'])
+    with pytest.raises(operator.GateError, match='inventory changed'):
         operator.compare_inventories(before, bad, revision_transition=True)
     bad = json.loads(json.dumps(after))
-    bad['catalog']['constraints'].append(['media', 'unexpected_fk'])
-    with pytest.raises(operator.GateError, match='inventory changed'):
+    bad['catalog_sha256'] = 'mismatched-catalog-checksum'
+    with pytest.raises(operator.GateError, match='checksum'):
         operator.compare_inventories(before, bad, revision_transition=True)
     bad_objects = json.loads(json.dumps(after_objects))
     bad_objects['triggers'].append(['media', 'unexpected', 'CREATE TRIGGER ...'])
@@ -94,6 +97,40 @@ def test_index_verifier_requires_exact_partial_unique_index(private_pg17):
                                            + definition)
                 with pytest.raises(operator.GateError, match='definition differs'):
                     operator.verify_featured_index(connection, present=True)
+    finally:
+        engine.dispose()
+
+
+def test_pinned_public_inventory_compares_real_revision_transition(private_pg17):
+    from sqlalchemy import create_engine
+
+    inventory_helper = operator.load(
+        TOOL.parents[1] / 'tools' / '.state' / 'backup_staging_v12_security13_rehearsal.py',
+        '351fad0f1927fbd7aaf2effd6a359a4045885940ee7e0aea75fd0bfb40d18191',
+        'featured_media_real_inventory_fixture')
+    # Isolated imported module instance only; the persisted helper and pins stay untouched.
+    inventory_helper.TABLES = ('alembic_version', 'media')
+    engine = create_engine(private_pg17)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('CREATE TABLE public.media '
+                '(id integer PRIMARY KEY, band_id integer, song_id integer, is_featured boolean)')
+            connection.exec_driver_sql('CREATE TABLE public.alembic_version (version_num text NOT NULL)')
+            connection.exec_driver_sql("INSERT INTO public.alembic_version VALUES ('20261023_23')")
+            connection.exec_driver_sql('INSERT INTO public.media VALUES (1, 10, 20, true)')
+            raw = connection.connection.driver_connection
+            before = inventory_helper.public_inventory(raw)
+            connection.exec_driver_sql(f'CREATE UNIQUE INDEX {operator.INDEX} ON public.media '
+                '(band_id, song_id) WHERE is_featured IS TRUE')
+            connection.exec_driver_sql("UPDATE public.alembic_version SET version_num='20261024_24'")
+            after = inventory_helper.public_inventory(raw)
+            operator.compare_inventories(before, after, revision_transition=True)
+
+            tampered = json.loads(json.dumps(after))
+            tampered['catalog']['columns'].append(['media', 'unexpected', 'integer', False, '', '', None])
+            tampered['catalog_sha256'] = inventory_helper.stable_hash(tampered['catalog'])
+            with pytest.raises(operator.GateError, match='inventory changed'):
+                operator.compare_inventories(before, tampered, revision_transition=True)
     finally:
         engine.dispose()
 
