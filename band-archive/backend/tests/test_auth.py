@@ -123,6 +123,26 @@ def _get_me(app, token=None):
     return app.test_client().get('/api/v2/me', headers=headers)
 
 
+def test_band_slug_availability_uses_verified_supabase_auth_and_synchronizes_user(auth_app, signer):
+    _install_jwks(auth_app, [[_jwk(signer, 'key-1')]])
+    auth_app.config['BAND_API_SCHEMA_READY'] = True
+    client = auth_app.test_client()
+    endpoint = '/api/v2/band-slugs/availability?slug=general-band'
+
+    unauthenticated = client.get(endpoint)
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.get_json()['error'] == 'missing_token'
+
+    authenticated = client.get(endpoint, headers={'Authorization': f'Bearer {_token(signer)}'})
+    assert authenticated.status_code == 200
+    assert authenticated.get_json() == {'slug': 'general-band', 'available': True}
+    with auth_app.app_context():
+        user = AppUser.query.filter_by(
+            supabase_user_id='11111111-1111-1111-1111-111111111111',
+        ).one()
+        assert user.email == 'user@example.com' and user.email_verified is True
+
+
 def test_me_requires_well_formed_bearer_header(auth_app):
     assert _get_me(auth_app).get_json()['error'] == 'missing_token'
     response = auth_app.test_client().get('/api/v2/me', headers={'Authorization': 'Basic x'})

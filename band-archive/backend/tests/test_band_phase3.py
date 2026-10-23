@@ -6,7 +6,7 @@ without relying on SQLite's different writer-lock scheduling.
 """
 
 from flask import g, request
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import threading
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +24,7 @@ from config import TestingConfig
 from errors import ValidationError
 from extensions import db
 from models import (
-    AppUser, AuditEvent, Band, BandInviteCode, BandMembership,
+    AppUser, AuditEvent, Band, BandCreationRequest, BandInviteCode, BandMembership,
     LegacyBandClaimToken,
 )
 
@@ -465,6 +465,115 @@ def test_pending_request_unique_constraint_is_idempotent(band_app):
                          json={'name': 'Once', 'slug': 'once'})
     assert first.status_code == 201
     assert second.status_code == 200 and second.get_json()['created'] is False
+
+
+def test_band_slug_availability_is_authenticated_normalized_and_not_a_reservation(band_app):
+    client = band_app.test_client()
+    endpoint = '/api/v2/band-slugs/availability'
+    assert client.get(endpoint + '?slug=first-band').status_code == 401
+    available = client.get(endpoint + '?slug=New-Band', headers=_headers('owner-id'))
+    assert available.status_code == 200
+    assert available.get_json() == {'slug': 'new-band', 'available': True}
+    assert available.headers['Cache-Control'] == 'private, no-store'
+    assert 'Authorization' in available.vary
+    assert client.get(endpoint + '?slug=general-band', headers=_headers('owner-id')).get_json() == {
+        'slug': 'general-band', 'available': True,
+    }
+
+    band_id = _approve_band(client)
+    assert client.get(endpoint + '?slug=the-archive', headers=_headers('member-id')).get_json() == {
+        'slug': 'the-archive', 'available': False,
+    }
+
+    pending = client.post('/api/v2/band-creation-requests', headers=_headers('owner-id'),
+                          json={'name': 'Pending', 'slug': 'pending-band'})
+    assert pending.status_code == 201
+    # Pending requests are visible only through the private request API and do
+    # not reserve a slug globally.
+    assert client.get(endpoint + '?slug=pending-band', headers=_headers('other-id')).get_json() == {
+        'slug': 'pending-band', 'available': True,
+    }
+    assert client.post('/api/v2/band-creation-requests', headers=_headers('other-id'),
+                       json={'name': 'Duplicate band', 'slug': 'pending-band'}).status_code == 201
+
+    with band_app.app_context():
+        band = db.session.get(Band, band_id)
+        band.deleted_at = datetime.now(timezone.utc)
+        db.session.commit()
+    assert client.get(endpoint + '?slug=the-archive', headers=_headers('owner-id')).get_json() == {
+        'slug': 'the-archive', 'available': False,
+    }
+
+
+@pytest.mark.parametrize('query', ['', '?slug=', '?slug=bad--slug', '?slug=-bad',
+                                   '?slug=bad-', '?slug=' + 'a' * 81,
+                                   '?slug=valid&slug=also-valid', '?slug=valid&extra=1'])
+def test_band_slug_availability_rejects_malformed_queries(band_app, query):
+    response = band_app.test_client().get('/api/v2/band-slugs/availability' + query,
+                                          headers=_headers('owner-id'))
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize('reserved_slug', ['discover', 'request'])
+def test_reserved_band_slugs_are_rejected_for_availability_and_creation(band_app, reserved_slug):
+    client = band_app.test_client()
+    headers = _headers('owner-id')
+    availability = client.get(f'/api/v2/band-slugs/availability?slug={reserved_slug}', headers=headers)
+    assert availability.status_code == 400
+    created = client.post('/api/v2/band-creation-requests', headers=headers,
+                          json={'name': 'Reserved path', 'slug': reserved_slug})
+    assert created.status_code == 400
+    assert created.get_json() == {'error': 'This slug is reserved for an application route.'}
+
+
+def test_reserved_slug_pending_before_rule_cannot_be_approved(band_app):
+    client = band_app.test_client()
+    pending = client.post('/api/v2/band-creation-requests', headers=_headers('owner-id'),
+                          json={'name': 'Old pending request', 'slug': 'old-pending'})
+    assert pending.status_code == 201
+    request_id = pending.get_json()['request']['id']
+    with band_app.app_context():
+        item = db.session.get(BandCreationRequest, request_id)
+        item.slug = 'discover'
+        db.session.commit()
+    approved = client.post(f'/api/v2/platform/band-creation-requests/{request_id}/approve',
+                           headers=_headers('admin-id'))
+    assert approved.status_code == 400
+    assert approved.get_json() == {'error': 'This slug is reserved for an application route.'}
+    with band_app.app_context():
+        assert db.session.get(BandCreationRequest, request_id).status == 'pending'
+        assert Band.query.filter_by(slug='discover').count() == 0
+
+
+def test_band_slug_availability_obeys_band_schema_readiness(band_app):
+    client = band_app.test_client()
+    band_app.config['BAND_API_SCHEMA_READY'] = False
+    unavailable = client.get('/api/v2/band-slugs/availability?slug=general-band')
+    assert unavailable.status_code == 503
+    assert unavailable.get_json()['error'] == 'band_schema_unavailable'
+
+
+def test_creation_request_rejects_used_slug_and_approval_rechecks_it(band_app):
+    client = band_app.test_client()
+    band_id = _approve_band(client)
+    duplicate = client.post('/api/v2/band-creation-requests', headers=_headers('other-id'),
+                            json={'name': 'Duplicate', 'slug': 'the-archive'})
+    assert duplicate.status_code == 409
+    assert duplicate.get_json() == {'error': 'Band slug is already in use.'}
+
+    request = client.post('/api/v2/band-creation-requests', headers=_headers('other-id'),
+                          json={'name': 'Racing band', 'slug': 'racing-band'})
+    assert request.status_code == 201
+    request_id = request.get_json()['request']['id']
+    with band_app.app_context():
+        db.session.add(Band(name='Racing winner', slug='racing-band'))
+        db.session.commit()
+    raced = client.post(f'/api/v2/platform/band-creation-requests/{request_id}/approve',
+                        headers=_headers('admin-id'))
+    assert raced.status_code == 409
+    with band_app.app_context():
+        assert Band.query.filter_by(slug='racing-band').count() == 1
+        assert db.session.get(Band, band_id) is not None
 
 
 def _ownerless_legacy_band(app, *, name='Legacy archive', slug='legacy-archive'):

@@ -13,6 +13,7 @@ from band_service import (
     leave_band, membership_dict, require_band_role, review_request, revoke_invite,
     rotate_invite, set_role, transfer_ownership, update_band_profile,
     can_remove_from_band, membership_profile_names, membership_removal_access, remove_membership,
+    creation_slug,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -281,6 +282,19 @@ def get_band_introduction(band_slug):
 def request_band_creation():
     item, created = create_request(current_app_user(), payload())
     return jsonify({'request': creation_request_dict(item), 'created': created}), 201 if created else 200
+
+
+@bands_bp.get('/band-slugs/availability')
+@require_auth
+def band_slug_availability():
+    if set(request.args) != {'slug'} or len(request.args.getlist('slug')) != 1:
+        raise ValidationError('slug is required exactly once.')
+    normalized = creation_slug(request.args['slug'])
+    available = Band.query.filter_by(slug=normalized).first() is None
+    response = jsonify({'slug': normalized, 'available': available})
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.vary.add('Authorization')
+    return response
 
 
 @bands_bp.get('/platform/band-creation-requests')

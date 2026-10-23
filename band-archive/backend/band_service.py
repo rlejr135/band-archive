@@ -24,6 +24,7 @@ OWNER_ROLES = {'owner'}
 MANAGER_ROLES = {'owner', 'admin'}
 ACTIVE = 'active'
 _SLUG = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+_RESERVED_BAND_SLUGS = {'discover', 'request'}
 _UNRESOLVED_MEMBERSHIP = object()
 
 
@@ -49,6 +50,14 @@ def slug(value):
     value = value.strip().casefold() if isinstance(value, str) else ''
     if not _SLUG.fullmatch(value) or len(value) > 80:
         raise ValidationError('slug must use lowercase letters, numbers, and single hyphens.')
+    return value
+
+
+def creation_slug(value):
+    """Validate a slug that will be used for a newly created band."""
+    value = slug(value)
+    if value in _RESERVED_BAND_SLUGS:
+        raise ValidationError('This slug is reserved for an application route.')
     return value
 
 
@@ -207,8 +216,10 @@ def creation_request_dict(item):
 
 def create_request(user, payload):
     name = required_text(payload, 'name', 120)
-    requested_slug = slug(payload.get('slug', ''))
+    requested_slug = creation_slug(payload.get('slug', ''))
     description = optional_text(payload, 'description')
+    if Band.query.filter_by(slug=requested_slug).first() is not None:
+        raise ValidationError('Band slug is already in use.', 409)
     existing = BandCreationRequest.query.filter_by(
         requested_by_user_id=user.id, slug=requested_slug, status='pending').one_or_none()
     if existing:
@@ -239,6 +250,10 @@ def review_request(admin, request_id, approved, note=None):
         raise NotFoundError('Band creation request not found')
     if item.status != 'pending':
         return item, False
+    if approved:
+        # Pending rows predate this route reservation and must not be approved
+        # into a path that the frontend already uses for application screens.
+        creation_slug(item.slug)
     timestamp = now()
     item.reviewed_by_user_id = admin.id
     item.reviewed_at = timestamp
