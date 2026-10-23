@@ -1,6 +1,6 @@
 # 밴드 가입 프로필·일정 유형 VOC 계약
 
-상태: Phase 1은 `origin/master`의 `7772534` 및 백엔드 Fly.io v66 배포와 라이브 프런트엔드 확인까지 운영 완료했다. Phase 2는 로컬 구현·전체 검증을 완료했으며, 운영 DB 변경은 별도 승인 전으로 미승인·미적용이고 배포 대기 중이다. 아래 실행안의 백업·로컬 복원·운영 적용 및 운영 검증이 완료됐다는 의미는 아니다.
+상태: Phase 1은 `origin/master`의 `7772534`, 백엔드 Fly.io v66 및 라이브 프런트엔드 확인까지 운영 완료했다. Phase 2 기능은 `9f28caa`에서 구현·검증됐고, 운영자 도구 보완은 `e0b8a456e2b0aea8adced7a4bbffe6ded2561b83`에 반영됐다. revision 23의 백업·로컬 복원·운영 적용, 백엔드 Fly.io v67 및 프런트엔드 Pages 라이브 검증까지 완료됐다. 최종 `origin/master` 일반 push 뒤 HTML·JS·CSS HTTP 200과 기능 마커를 확인했다. 라이브 JS는 `/assets/index-C1JfAthe.js`(SHA-256 `ef1151ee7dc6369de5c71848562576a9834d4fd037c44678e68d961e6840806a`)다.
 
 ## 승인된 제품 계약
 
@@ -46,7 +46,8 @@
 
 - Phase 1과 Phase 2의 승인된 코드 변경은 로컬 테스트·리뷰·단위 커밋 뒤, 프로젝트 상시 승인에 따라 필요한 배포와 `origin/master` 일반 push를 진행한다. Phase 1에는 Phase 2 데이터베이스 변경이 포함되지 않는다.
 - Phase 1 배포 뒤 Phase 2로 넘어가는 순서는 총괄의 내부 작업 순서다. 이는 사용자에게서 새 구현 승인을 받는 조건이 아니다.
-- 운영 DB에 Phase 2 migration을 적용하기 전에는 migration SQL, 기존 데이터 영향, 백업·복원 검증, startup/RLS 검증, 적용·검증·중단 계획을 담은 구체적인 실행안을 작성해 별도 승인을 받는다. AGENTS.md의 별도 운영 DB 변경·데이터 이전 확인 경계를 따른다. 운영 DB 승인 경계는 코드 구현·배포 및 일반 push의 상시 승인과 별개다.
+- 운영 DB 변경은 백업·로컬 복원 검증 뒤 별도 승인 절차에 따라 완료했다. 적용·보존 검증은 아래 결과를 참조한다.
+- 최종 프런트엔드 커밋 `e0b8a456e2b0aea8adced7a4bbffe6ded2561b83`를 `origin/master`에 일반 push했고 Pages 자동 배포가 완료됐다. 최종 HTTP 응답과 라이브 번들 확인 결과는 아래에 기록한다.
 - 기존 rehearsal 자료의 유형은 `UNCLASSIFIED`로만 채운다. 데이터 이전이나 의미 추론을 하지 않는다.
 
 ## Snapshot·digest·운영 도구 영향
@@ -66,11 +67,20 @@
 - v2 및 `Rehearsal.to_dict` 목록·상세·달력·대시보드의 additive 유형 표시, 그리고 생성·수정 요청에서 유형을 생략했을 때 기본값/기존 값 유지 동작을 확인한다.
 - SQLite/PostgreSQL migration 업그레이드·보호된 downgrade 동작, revision 22 historical snapshot, head startup guard, RLS/ACL 불변 계약 및 refresh digest/mapping 호환성을 검증한다.
 
-## Phase 2 운영 DB 별도 승인용 실행안 — 미승인·미적용
+## Phase 2 운영 DB 변경 및 릴리즈 기록
 
-이 절은 실행 계획이며 운영 DB 변경 승인이나 적용 기록이 아니다. 운영 DB migration 별도 승인은 아직 대기 중이다. Phase 1의 여섯 커밋은 `origin/master`의 `7772534`까지 반영됐고, 백엔드 Fly.io v66 및 라이브 프런트엔드 확인을 마쳤다. Phase 2는 로컬 구현과 전체 검증을 완료했으며 운영 DB 변경은 미승인·미적용, 배포는 대기 상태다. Phase 2 코드가 이미 커밋·배포됐거나 아래 백업·로컬 복원·운영 적용·운영 검증이 성공했다고 주장하지 않는다.
+이 절은 revision 23 운영 적용까지의 증거와 상태를 기록한다. Phase 1의 여섯 커밋은 `origin/master`의 `7772534`까지 반영됐고, Phase 2 애플리케이션 기능은 `9f28caa`에서 검증됐다. 운영 적용 직전 로컬 복원 검증에서 public schema ACL의 `pg_database_owner` → `PUBLIC` `USAGE` 권한 1개가 복원본에서 빠지는 불일치가 발견됐다. 운영자 도구는 그 정확한 캡처 항목만 owned local restore에서 재생하고 나머지 ACL을 엄격 비교하도록 보완했다. 이 보완 뒤 새 읽기 전용 백업·복원 리허설과 운영 적용이 모두 성공했다. 최초 실패 증거는 보존했다.
 
-Phase 2 최종 로컬 검증은 백엔드 전체 **1,136 passed / 0 failed / 0 skipped**(986.78초), 프런트엔드 전체 **377 passed / 0 failed / 0 skipped**(166.23초)다. 변경 JavaScript 23개 파일 lint와 production build도 통과했다(209 modules, 2.70초). 앞선 백엔드 전체 검증의 8개 실패는 frozen revision 05 fixture가 신규 컬럼을 가진 최신 Rehearsal ORM mapping으로 삽입·조회하던 테스트 호환 문제였다. 기존 revision 05 스키마·검증과 cross-tenant assertions를 유지하며 fixture를 당시 컬럼 SQL로 보완하고, 현재 head의 실제 ORM 자동 scope·PUBLIC·관계 저장 검증과 backfilled v05의 `/rehearsals` HTTP 503 보호 검증을 추가했다. 해당 파일 focused **24 passed / 0 failed / 0 skipped** 후 위 전체 1,136개가 통과했다. 스키마 영향 재검증 8개와 비즈니스 영향 검증 128개 통과 기록도 유지한다. 이 로컬 결과는 아래 운영 백업·복원 전제나 별도 승인 게이트를 대체하지 않는다.
+Phase 2 애플리케이션 회귀 검증은 백엔드 전체 **1,136 passed / 0 failed / 0 skipped**(986.78초), 프런트엔드 전체 **377 passed / 0 failed / 0 skipped**(166.23초)다. 변경 JavaScript 23개 파일 lint와 production build도 통과했다(209 modules, 2.70초). 앞선 백엔드 전체 검증의 8개 실패는 frozen revision 05 fixture가 신규 컬럼을 가진 최신 Rehearsal ORM mapping으로 삽입·조회하던 테스트 호환 문제였다. 기존 revision 05 스키마·검증과 cross-tenant assertions를 유지하며 fixture를 당시 컬럼 SQL로 보완하고, 현재 head의 실제 ORM 자동 scope·PUBLIC·관계 저장 검증과 backfilled v05의 `/rehearsals` HTTP 503 보호 검증을 추가했다. 해당 파일 focused **24 passed / 0 failed / 0 skipped** 후 위 전체 1,136개가 통과했다. 스키마 영향 재검증 8개와 비즈니스 영향 검증 128개 통과 기록도 유지한다. 이 결과는 운영자 도구의 별도 focused **11 passed / 0 failed / 0 skipped**와 구분한다.
+
+### 백업·복원·운영 적용 완료 결과
+
+- 읽기 전용 백업과 owned local PostgreSQL 17 복원 리허설은 `admission-event22-23-20261023T090115Z-abf89e79f7d6`에서 성공했다. 38개 public table, 기존 37개 애플리케이션 테이블 데이터 projection과 Alembic ledger, security 및 key 보존을 확인했고 owned PostgreSQL은 정상 종료했다. `report.json` SHA-256은 `09fc0eb262473ba28d7d784d6c34a018fd1b09b699a1d6f2d9ff650aa5046894`, `manifest.json`은 `68487a84de6e212e272f396989fd82b2ac6a64e07025e17c7c180ed7200081ef`, dump는 `269e440b9b9005238ae0ad08b33a85252e2d546642ac558412b5db7c19ed3c30`이다.
+- 운영 적용은 `admission-event22-23-20261023T090316Z-0ccc0ec83533`에서 완료됐다. report SHA-256 `c414bd278af03ec0a10abd375f08b38e497f8ae350a3a76d06f4a19da8d44ef6`; revision 23, 38개 테이블, `committed: true`, fresh read-only postcheck 통과를 기록한다.
+- 백엔드는 Fly.io release **v67**이 NRT에서 시작 완료됐다(기존 app/sizing 유지, deployment `01M5KYH2B1FN2YK5VF7Y84DN19`). startup critical log는 없었고 Gunicorn/worker boot를 확인했다. API 확인은 members 200 및 정확한 CORS, slug guest 401, v1/v2 public rehearsal 각각 11개 항목·유형 필드를 포함한다. policy flags `ready`, `acceptance`, `upload`는 모두 false로 유지됐고 실제 R2 연결·객체 변경은 없었다.
+- 로컬 rehearsal은 Supabase provider/system role membership 24개 edge를 재현하지 않았고 `anon`/`authenticated` role closure만 재현했다. 그 전체 remote role/membership graph는 운영 적용 전후 정확히 보존됐는지 비교했다.
+- 최초 로컬 복원 실패 증거는 그대로 보존했다. 관리형 Supabase Auth는 이번 public-schema backup 범위가 아니며 이 backup은 Auth 관리 데이터의 백업을 뜻하지 않는다.
+- 프런트엔드 소스의 `origin/master` 일반 push 후 Pages가 배포됐다. HTML·JS·CSS 모두 HTTPS HTTP 200을 반환했고, live JS에서 API origin `https://band-archive.fly.dev`, `rehearsal_type`, `합주 유형`, `포지션 · 여러 개 선택 가능` 마커와 CSS의 `.member-position-options input`을 확인했다. 기능 준비 상태 `feature_ready`는 true였다. JS asset은 `/assets/index-C1JfAthe.js`, SHA-256 `ef1151ee7dc6369de5c71848562576a9834d4fd037c44678e68d961e6840806a`다.
 
 ### 정확한 적용 대상과 데이터 영향
 
@@ -78,7 +88,7 @@ Phase 2 최종 로컬 검증은 백엔드 전체 **1,136 passed / 0 failed / 0 s
 - 변경은 기존 테이블에 세 컬럼과 named CHECK 하나를 추가하는 것뿐이다. 새 테이블·인덱스를 만들지 않고 테이블/컬럼/sequence ACL, RLS 활성화·FORCE 상태, 정책, 소유권 및 default privileges를 변경하지 않는다.
 - 기존 가입 요청 두 필드는 모두 `NULL`, 기존 rehearsal 유형은 모두 `UNCLASSIFIED`가 된다. 제목·메모·instrument에서 포지션이나 유형을 추론하지 않는다. 기존 tenant/user/member ID, 모든 기존 컬럼 값, 객체 키 및 관계를 보존한다.
 
-검토 대상 DDL의 의미는 아래와 같다. 이는 체크인된 revision의 정적 설명이며 라이브 DB에서 생성하거나 실행한 SQL이 아니다. 실제 적용은 검토된 migration runner로 수행한다.
+아래는 적용된 revision의 DDL 의미를 설명한다. 운영 적용은 검토된 migration runner로 수행했으며, 아래 블록은 라이브 DB에서 추출한 SQL이 아니다.
 
 ```sql
 ALTER TABLE band_membership ADD COLUMN requested_positions_json TEXT NULL;
@@ -92,24 +102,22 @@ ALTER TABLE rehearsal ADD CONSTRAINT ck_rehearsal_type
 
 초대 수락에 적용할 포지션은 **그 수락 요청에서 현재 명시한 비어 있지 않은 선택값만** 사용한다. 초대 요청의 선택값이 없거나 빈 배열이면 기존 프로필을 유지하며, 과거 pending 가입 요청 포지션을 fallback으로 적용하지 않는다. 일반 가입 승인에서 저장된 pending 신청을 처리하는 계약과 혼동하지 않는다.
 
-### 적용 전 증거와 승인 게이트
+### 적용 전 증거와 승인 게이트 완료 기록
 
-1. Phase 2 전체 백엔드·프런트엔드 회귀 검증과 보안 리뷰를 완료하고 정확한 커밋, migration 파일 및 배포 산출물의 해시를 고정한다. 현재의 focused 통과 기록을 전체 검증 완료로 대신하지 않는다.
-2. 운영 대상의 정확한 환경·DB identity·revision `20261021_22`와 migration owner를 읽기 전용으로 확인한다. 모든 테이블의 컬럼·타입·default·NOT NULL·PK·unique·CHECK·FK·인덱스, tenant 관계와 backfill marker, audit append-only 계약 및 의도하지 않은 public relation 유무를 엄격 비교한다. table/column/sequence ACL과 PUBLIC·브라우저 role의 유효 권한, RLS·FORCE·policy, owner 및 schema/global default privileges도 사전 증거로 고정한다. drift가 있으면 적용하지 않는다.
-3. 승인받을 쓰기 중단·배포 전환 구간과 백업 대상·보관 위치·복원 절차를 명시하고, 일관된 전체 DB 백업을 확보한다. 이 계획서 작성으로 백업이나 운영 쓰기 중단이 이미 수행된 것은 아니다. 비밀이나 DB URL을 보고서에 노출하지 않는다.
-4. 그 백업을 격리된 로컬 PostgreSQL에 복원하고 원본 증거와 전체 테이블의 행 수·기존 컬럼 값 digest·ID·관계·FK 및 ACL/RLS 계약을 비교한다. 복원본에서만 동일 revision을 적용해 기존 컬럼 값 전부 불변, 새 요청 필드 전부 NULL, 기존 일정 유형 전부 UNCLASSIFIED, exact-head/schema·startup 계약 및 보안 상태 불변을 확인한다. 새 컬럼 때문에 달라지는 전체-row digest는 기존 컬럼 projection과 새 컬럼의 기대값을 나누어 검증한다.
-5. 위 증거, 정적 DDL, 기존 데이터 영향, 정확한 운영 대상·버전·배포 전환 순서, 백업·복원 결과 및 아래 중단 계획을 사용자에게 제시하고 **운영 DB 변경에 대한 별도 명시적 승인**을 받는다. 승인 전에는 운영 DB migration을 실행하지 않는다.
+적용 전에 Phase 2 백엔드·프런트엔드 전체 회귀 검증과 보안 검토를 마치고 source commit, migration 및 operator evidence pin을 고정했다. 대상은 revision `20261021_22`였고, drift가 없는지 비교한 뒤 일관된 public-schema 백업을 확보했다. 이 백업은 관리형 Auth를 포함하지 않는다.
 
-### 런타임 호환 구간과 승인 후 실행 순서
+백업은 owned local PostgreSQL 17에 복원해 38개 테이블, 37개 애플리케이션 테이블의 기존 컬럼 projection과 Alembic ledger, security 및 key manifest를 비교했다. 첫 로컬 복원에서 `PUBLIC USAGE` ACL 항목 하나가 누락되어 gate가 중단됐다. source/local ACL 차이가 그 캡처 항목 하나일 때만 local restore에서 정확히 재생하는 수정을 추가했고, unexpected ACL delta는 여전히 거부하도록 테스트했다. 수정 후의 새 읽기 전용 rehearsal, 데이터 보존 검사와 owned-server clean stop은 위 evidence에 기록돼 있다.
 
-현재 구버전 런타임의 SQL은 새 nullable 필드와 DB 기본값을 사용하는 additive schema와 호환되는 범위가 있지만, 이것이 구버전의 재시작 안전성을 보장하지는 않는다. 기존 v66의 startup은 revision 22를, Phase 2 새 런타임 startup은 revision 23 exact head와 전체 schema contract를 요구한다. 따라서 새 런타임은 DB가 22인 동안 시작될 수 없고, DB를 23으로 바꾼 뒤 구버전을 새로 시작하는 순서도 허용되지 않는다. 이 짧은 전환 구간에는 사전에 정한 쓰기 중단과 배포 순서를 따르고, 잠깐 실행 중인 구버전 프로세스를 전체 전환 검증의 대체 근거로 삼지 않는다. 자동 migration이나 startup `create_all`로 간격을 메우지 않는다.
+별도 승인 후 runner로 `22 → 23`을 적용했다. report는 commit 성공과 revision 23/38 tables를 기록하고, fresh read-only postcheck가 통과했다. 기존 데이터 projection, security와 key 보존 검증 결과는 해당 report와 위 rehearsal evidence에 보존돼 있다.
 
-별도 승인 후에도 먼저 정확한 backup/복원·대상·revision/보안 증거와 고정 산출물을 재확인한다. 승인된 구간에 검토된 runner로 `22 → 23` migration을 한 번 실행하고, 성공 확인 뒤 사전에 준비한 새 백엔드를 시작한다. 이어서 필요한 프런트엔드 산출물을 배포한다. 구체적인 release 식별자와 순서는 승인 시점의 배포 실행안에 기록하며 현재 문서에서 미래 release 성공을 가정하지 않는다.
+### 런타임 전환과 현재 상태
 
-운영 적용 직후에는 모든 테이블의 행 수·기존 컬럼 digest·ID, FK/tenant 관계, audit 계약, 새 컬럼 값과 제약 및 기존 index 집합을 사전 증거와 대조한다. ACL/RLS·소유권·default privileges도 전후 동일한지 확인하고 exact-head startup의 읽기 전용 검증을 통과시킨다. 그 뒤 실제 HTTP 응답·CORS·라이브 프런트엔드 번들, 신청 포지션 공개 범위와 일정 유형 응답을 확인한다. 운영 smoke 검증을 위해 콘텐츠나 신청 데이터를 새로 쓰지 않는다.
+전환 당시 기존 v66은 revision 22를, Phase 2 새 런타임은 revision 23 exact head와 전체 schema contract를 요구했다. 승인된 순서로 revision 23 적용 후 Fly.io v67을 시작·검증했다. 현재 DB는 revision 23이고 v67 백엔드가 운영 중이다. 자동 migration이나 startup `create_all`로 schema 간격을 메우지 않는다.
+
+운영 적용 report는 DB preservation 및 fresh read-only postcheck 통과를 기록한다. 백엔드 릴리즈 후 members·slug·v1/v2 rehearsal HTTP/CORS 검증도 완료했고, 프런트엔드 Pages의 HTTP 응답·라이브 번들·기능 마커도 위와 같이 확인했다. 운영 smoke 검증을 위해 콘텐츠나 신청 데이터를 새로 쓰지 않았다.
 
 ### 실패와 중단 경계
 
 사전 drift, 백업·복원 불일치, 검증 실패, 잠금/문장 timeout 또는 배포 실패가 발생하면 다음 mutation을 중단하고 증거와 현재 revision·런타임 상태를 보고한다. 실패 검증을 우회하거나 timeout을 늘리지 않고 자동 롤백·강제 push를 하지 않는다. PostgreSQL의 실패한 DDL 트랜잭션이 원자적으로 취소되는 것과 운영 버전을 임의로 되돌리는 자동 롤백은 구별한다. 성공적으로 커밋된 migration 이후의 복원·downgrade는 현재 데이터와 백업을 다시 검토해 별도 방향을 정한다.
 
-revision 23 downgrade는 두 requested 필드 중 하나라도 non-NULL이거나 `UNCLASSIFIED` 외 일정 유형이 하나라도 있으면 데이터 폐기를 거부한다. 이 보호를 무력화하기 위해 해당 값을 삭제·초기화하지 않는다. 이 실행안은 R2 원본·콘텐츠 쓰기/삭제·데이터 이전, 비밀 설정, 스케일·과금 인프라 및 실제 메일 발송 활성화를 포함하지 않는다. 운영 DB 별도 승인이 오기 전까지 Phase 2의 운영 DB 적용은 대기한다.
+revision 23 downgrade는 두 requested 필드 중 하나라도 non-NULL이거나 `UNCLASSIFIED` 외 일정 유형이 하나라도 있으면 데이터 폐기를 거부한다. 이 보호를 무력화하기 위해 해당 값을 삭제·초기화하지 않는다. 이번 변경은 R2 원본·콘텐츠 쓰기/삭제·데이터 이전, 비밀 설정, 스케일·과금 인프라 및 실제 메일 발송 활성화를 포함하지 않았다. 추가적인 운영 DB 변경은 별도 승인 대상이다.
