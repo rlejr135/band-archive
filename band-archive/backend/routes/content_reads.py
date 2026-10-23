@@ -161,6 +161,7 @@ def _dashboard_rehearsal_summary_map(scope, rehearsals):
             'time': (rehearsal.time or '')[:20] or None,
             'location': (rehearsal.location or '')[:200] or None,
             'color': (rehearsal.color or '')[:7] or None,
+            'rehearsal_type': rehearsal.rehearsal_type,
             'visibility': rehearsal.visibility,
             'effective_visibility': visibility,
             **content_capabilities(scope, rehearsal),

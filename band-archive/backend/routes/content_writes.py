@@ -24,6 +24,7 @@ from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comme
                     PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
                     SongSuggestion, SongSuggestionVote)
 from validators import validate_external_http_url
+from voc_validation import validate_rehearsal_type
 from policy_service import confirm_public_expansion, upload_policy_enabled
 from v2_content_serializers import (
     media_visibility, song_visibility, rehearsal_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
@@ -39,7 +40,7 @@ _VISIBILITIES = {'PUBLIC', 'MEMBERS'}
 _SONG_FIELDS = {'title', 'artist', 'status', 'chords', 'link', 'memo', 'genre', 'difficulty', 'visibility', 'visibility_confirm'}
 _REHEARSAL_FIELDS = {
     'title', 'date', 'start_date', 'end_date', 'time', 'location', 'latitude', 'longitude',
-    'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm',
+    'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm', 'rehearsal_type',
 }
 _IGNORED_OWNERSHIP_FIELDS = {'band_id', 'created_by_membership_id', 'created_by_user_id', 'is_legacy'}
 _SUGGESTION_FIELDS = {'title', 'artist', 'link', 'memo', 'visibility', 'visibility_confirm'}
@@ -537,6 +538,8 @@ def _apply_rehearsal(rehearsal, data, band_id):
             setattr(rehearsal, field, float(value) if value is not None else None)
     if 'visibility' in data:
         rehearsal.visibility = _visibility(data['visibility'], rehearsal.visibility)
+    if 'rehearsal_type' in data:
+        rehearsal.rehearsal_type = validate_rehearsal_type(data['rehearsal_type'])
     if 'song_ids' in data:
         # All IDs are resolved before replacing the relation: no partial link.
         rehearsal.songs = _songs_or_404(band_id, data['song_ids'])

@@ -131,6 +131,7 @@ def test_visitor_content_read_envelopes_filter_nested_members_only_graphs_and_ne
     assert song['visibility'] == song['effective_visibility'] == 'PUBLIC'
     assert [item['id'] for item in song['rehearsals']] == [content_graph['public_rehearsal']]
     assert song['rehearsals'][0]['effective_visibility'] == 'PUBLIC'
+    assert song['rehearsals'][0]['rehearsal_type'] == 'UNCLASSIFIED'
     # Summaries stay storage-neutral.  Media is only available through the
     # dedicated SQL-paginated endpoint below.
     assert 'media' not in song

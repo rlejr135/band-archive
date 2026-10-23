@@ -165,6 +165,7 @@ def rehearsal_ref(scope, rehearsal):
     visibility = rehearsal_visibility(scope, rehearsal)
     return {
         'id': rehearsal.id, 'title': rehearsal.title, 'date': _iso(rehearsal.date),
+        'rehearsal_type': rehearsal.rehearsal_type,
         **_flags(scope, rehearsal, visibility),
     }
 
@@ -239,6 +240,7 @@ def serialize_rehearsal(scope, rehearsal, *, include_children=True):
         'start_date': _iso(rehearsal.start_date), 'end_date': _iso(rehearsal.end_date),
         'time': rehearsal.time, 'location': rehearsal.location, 'latitude': rehearsal.latitude,
         'longitude': rehearsal.longitude, 'memo': rehearsal.memo, 'color': rehearsal.color,
+        'rehearsal_type': rehearsal.rehearsal_type,
         'created_at': _iso(rehearsal.created_at), 'updated_at': _iso(rehearsal.updated_at),
         **_flags(scope, rehearsal, visibility),
     }

@@ -24,6 +24,7 @@ from validators import (
 from legacy_read_visibility import legacy_item_visible, legacy_read_scope
 from v2_content_serializers import media_visibility, song_visibility
 from v2_content_serializers import rehearsal_visibility
+from voc_validation import validate_rehearsal_type
 
 rehearsals_bp = Blueprint('rehearsals', __name__)
 
@@ -157,6 +158,8 @@ def create_rehearsal():
         memo=data.get('memo'),
         color=data.get('color', '#ffd32a'),
     )
+    if 'rehearsal_type' in data:
+        rehearsal.rehearsal_type = validate_rehearsal_type(data['rehearsal_type'])
 
     db.session.add(rehearsal)
     if song_ids:
@@ -208,6 +211,8 @@ def update_rehearsal(id):
         rehearsal.memo = data['memo']
     if 'color' in data:
         rehearsal.color = data['color']
+    if 'rehearsal_type' in data:
+        rehearsal.rehearsal_type = validate_rehearsal_type(data['rehearsal_type'])
 
     if 'song_ids' in data:
         rehearsal.songs = _songs_in_rehearsal_band_or_error(rehearsal.band_id, data['song_ids'])

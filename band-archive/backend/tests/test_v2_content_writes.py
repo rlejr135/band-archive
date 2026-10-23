@@ -86,6 +86,47 @@ def test_song_rehearsal_write_ownership_and_atomic_relation_scope(access_app, wr
         assert [item.id for item in db.session.get(Rehearsal, rehearsal_id).songs] == [song_id]
 
 
+def test_rehearsal_type_is_optional_validated_and_serialized(access_app, write_client, principals):
+    band_id = _band_id(access_app)
+    base = f'/api/v2/bands/{band_id}/rehearsals'
+    defaulted = write_client.post(base, headers=principals['member'], json={
+        'title': 'Unclassified', 'date': '2026-10-25',
+    })
+    assert defaulted.status_code == 201
+    defaulted_item = defaulted.get_json()['rehearsal']
+    assert defaulted_item['rehearsal_type'] == 'UNCLASSIFIED'
+
+    created = write_client.post(base, headers=principals['member'], json={
+        'title': 'Live show', 'date': '2026-10-26', 'rehearsal_type': 'LIVE',
+    })
+    assert created.status_code == 201
+    item = created.get_json()['rehearsal']
+    assert item['rehearsal_type'] == 'LIVE'
+    rehearsal_id = item['id']
+    assert write_client.post(base, headers=principals['member'], json={
+        'title': 'Invalid type', 'date': '2026-10-27', 'rehearsal_type': 'CONCERT',
+    }).status_code == 400
+
+    updated = write_client.patch(f'{base}/{rehearsal_id}', headers=principals['member'], json={
+        'title': 'Renamed live show',
+    })
+    assert updated.status_code == 200
+    assert updated.get_json()['rehearsal']['rehearsal_type'] == 'LIVE'
+    assert write_client.patch(f'{base}/{rehearsal_id}', headers=principals['member'], json={
+        'rehearsal_type': 'CONCERT',
+    }).status_code == 400
+
+    listed = write_client.get(base, headers=principals['member']).get_json()['rehearsals']
+    assert next(row for row in listed if row['id'] == rehearsal_id)['rehearsal_type'] == 'LIVE'
+    detail = write_client.get(f'{base}/{rehearsal_id}', headers=principals['member']).get_json()['rehearsal']
+    assert detail['rehearsal_type'] == 'LIVE'
+    dashboard = write_client.get(f'/api/v2/bands/{band_id}/dashboard?month=2026-10',
+                                 headers=principals['member']).get_json()['dashboard']
+    dashboard_item = next(row for row in dashboard['month_rehearsals']['items']
+                          if row['id'] == rehearsal_id)
+    assert dashboard_item['rehearsal_type'] == 'LIVE'
+
+
 def test_account_comments_ignore_password_and_are_owner_or_manager_only(access_app, write_client, principals):
     band_id = _band_id(access_app)
     with access_app.app_context():

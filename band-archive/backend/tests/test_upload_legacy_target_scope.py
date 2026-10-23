@@ -209,3 +209,27 @@ def test_v1_same_band_song_media_upload_still_works(client, upload_scope_graph, 
         'rehearsal_id': upload_scope_graph['foreign_rehearsal'],
     }).status_code == 404
     assert len(calls) == 1
+
+
+def test_legacy_rehearsal_type_is_optional_validated_and_preserved(app, client):
+    created = client.post('/rehearsals', json={
+        'title': 'Legacy live', 'date': '2026-10-25', 'rehearsal_type': 'LIVE',
+    })
+    assert created.status_code == 201
+    payload = created.get_json()
+    assert payload['rehearsal_type'] == 'LIVE'
+    rehearsal_id = payload['id']
+
+    defaulted = client.post('/rehearsals', json={
+        'title': 'Legacy default', 'date': '2026-10-26',
+    })
+    assert defaulted.status_code == 201
+    assert defaulted.get_json()['rehearsal_type'] == 'UNCLASSIFIED'
+    assert client.post('/rehearsals', json={
+        'title': 'Bad type', 'date': '2026-10-27', 'rehearsal_type': 'CONCERT',
+    }).status_code == 400
+
+    updated = client.put(f'/rehearsals/{rehearsal_id}', json={'title': 'Legacy renamed'})
+    assert updated.status_code == 200
+    assert updated.get_json()['rehearsal_type'] == 'LIVE'
+    assert client.put(f'/rehearsals/{rehearsal_id}', json={'rehearsal_type': 'CONCERT'}).status_code == 400
