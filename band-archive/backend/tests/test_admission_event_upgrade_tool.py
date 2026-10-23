@@ -163,3 +163,74 @@ def test_apply_limits_are_bounded_and_local():
     assert "SET LOCAL {name} = '{maximum}ms'" in source
     assert "('lock_timeout', 5000), ('statement_timeout', 30000)" in source
     assert 'load_dotenv(' not in source
+
+
+def _prepare_public_schema_acl(connection, *, extra_public_create=False):
+    connection.exec_driver_sql("""DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+    END $$""")
+    connection.exec_driver_sql('ALTER SCHEMA public OWNER TO pg_database_owner')
+    connection.exec_driver_sql('REVOKE ALL ON SCHEMA public FROM PUBLIC, anon, authenticated, service_role, postgres')
+    connection.exec_driver_sql('GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres')
+    connection.exec_driver_sql('GRANT CREATE, USAGE ON SCHEMA public TO pg_database_owner')
+    if extra_public_create:
+        connection.exec_driver_sql('GRANT CREATE ON SCHEMA public TO PUBLIC')
+    return operator.public_schema_acl(connection)
+
+
+class _OwnedLocalOps:
+    def __init__(self, data):
+        self.data = Path(data).resolve()
+        self.calls = 0
+
+    def verify_owned_cluster(self, server, port, data):
+        assert server == 'owned-test-process'
+        assert isinstance(port, int) and port > 0
+        assert Path(data).resolve() == self.data
+        self.calls += 1
+
+
+def test_local_public_schema_acl_replays_only_exact_captured_tuple(private_pg17):
+    engine = create_engine(private_pg17)
+    expected = ['public', 'pg_database_owner', 'pg_database_owner', 'PUBLIC', 'USAGE', False]
+    try:
+        with engine.begin() as connection:
+            baseline = _prepare_public_schema_acl(connection)
+            source_acl = sorted([*baseline, expected])
+            port = connection.exec_driver_sql('SELECT inet_server_port()').scalar_one()
+            data = connection.exec_driver_sql("SELECT current_setting('data_directory')").scalar_one()
+            ops = _OwnedLocalOps(data)
+            assert operator.replay_missing_public_schema_acl(
+                ops, connection, 'owned-test-process', port, data, source_acl)
+            assert operator.public_schema_acl(connection) == source_acl
+            assert connection.exec_driver_sql('SELECT current_user').scalar_one() == 'postgres'
+            assert ops.calls == 1
+    finally:
+        engine.dispose()
+
+
+def test_local_public_schema_acl_replay_stops_on_any_other_delta(private_pg17):
+    engine = create_engine(private_pg17)
+    expected = ['public', 'pg_database_owner', 'pg_database_owner', 'PUBLIC', 'USAGE', False]
+    try:
+        with engine.begin() as connection:
+            local_acl = _prepare_public_schema_acl(connection, extra_public_create=True)
+            source_acl = sorted([row for row in local_acl if not (
+                row[2] == 'pg_database_owner' and row[3] == 'PUBLIC' and row[4] == 'CREATE')]
+                + [expected])
+            port = connection.exec_driver_sql('SELECT inet_server_port()').scalar_one()
+            data = connection.exec_driver_sql("SELECT current_setting('data_directory')").scalar_one()
+            ops = _OwnedLocalOps(data)
+            try:
+                operator.replay_missing_public_schema_acl(
+                    ops, connection, 'owned-test-process', port, data, source_acl)
+            except operator.GateError as error:
+                assert str(error) == 'local public schema ACL differs beyond the one reviewed PUBLIC USAGE grant'
+            else:
+                raise AssertionError('unexpected local public ACL delta was accepted')
+            assert ops.calls == 1
+            assert operator.public_schema_acl(connection) == local_acl
+    finally:
+        engine.dispose()

@@ -12,11 +12,20 @@ repeatable-read snapshot of the public schema, makes and locally restores a
 custom PostgreSQL 17 dump, compares all 38 public tables, old-column row
 digests, catalog state, ownership, ACL/RLS/role state and the R2 key manifest,
 then runs revision 23 only on the owned restore. The local restore reproduces
-and checks public ACL/RLS/default privileges, schema ACL and relevant role
-memberships; it deliberately does not copy remote role LOGIN, SUPERUSER or
-BYPASSRLS attributes to localhost. The full remote role and membership
-fingerprint is compared exactly before and after a production apply. The tool
-stops the owned server and records private evidence under `backend/tools/.state`.
+and checks public object ACL/RLS/default privileges and public schema ACL. A
+restored schema can lack the source's captured `PUBLIC USAGE` ACL entry granted
+by `pg_database_owner`. The rehearsal may replay only that exact captured
+tuple, and only when the semantic source/local ACL delta is exactly that one
+row; any local-only permission, owner difference, grant-option change, or
+other ACL delta stops the rehearsal. It then compares the full semantic schema
+ACL exactly. Local role replay is intentionally a safe projection: the remote
+24 provider/system-role membership edges are not copied to localhost; only the
+`anon`/`authenticated` role closure needed to check public security is
+reproduced. Remote role LOGIN, SUPERUSER and BYPASSRLS attributes are not
+copied. The complete remote role and membership fingerprint, including the
+excluded edges, is still compared exactly before and after a production apply.
+The tool stops the owned server and records private evidence under
+`backend/tools/.state`.
 
 Review the tool, migration and source commit before running rehearsal. Supply
 their reviewed pins explicitly; the helper pin is the SHA-256 of this file and

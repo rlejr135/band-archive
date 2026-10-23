@@ -8,6 +8,7 @@ Credentials come only from the protected process environment.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -190,6 +191,56 @@ def local_security_matches_source(source, local):
             and local['public_schema_acl'] == source['public_schema_acl'])
 
 
+def public_schema_acl(connection):
+    statement = """SELECT n.nspname,
+        pg_get_userbyid(n.nspowner),
+        CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+        CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+        a.privilege_type,a.is_grantable
+        FROM pg_namespace n CROSS JOIN LATERAL aclexplode(
+          COALESCE(n.nspacl,acldefault('n'::"char",n.nspowner))) a
+        WHERE n.nspname='public' ORDER BY 1,2,3,4,5,6"""
+    result = _execute_statement(connection, statement)
+    return [list(row) for row in result]
+
+
+def _execute_statement(connection, statement):
+    return connection.exec_driver_sql(statement) if hasattr(connection, 'exec_driver_sql') \
+        else connection.execute(statement)
+
+
+def replay_missing_public_schema_acl(ops, connection, server, port, data, source_acl):
+    """Replay only the reviewed missing PUBLIC USAGE row on an owned local restore."""
+    ops.verify_owned_cluster(server, port, data)
+    statement = """SELECT current_user,current_database(),
+        current_setting('server_version_num')::integer,inet_server_port(),
+        current_setting('data_directory'),
+        (inet_server_addr() << inet '127.0.0.0/8' OR inet_server_addr() << inet '::1/128'),
+        (SELECT rolsuper FROM pg_roles WHERE rolname=current_user)"""
+    result = _execute_statement(connection, statement)
+    identity = result.one() if hasattr(result, 'one') else result.fetchone()
+    check(identity[0:2] == ('postgres', 'postgres') and int(identity[2]) // 10000 == 17
+          and identity[3] == port and Path(identity[4]).resolve() == Path(data).resolve()
+          and bool(identity[5]) and identity[6] is True,
+          'public schema ACL replay requires the owned local PostgreSQL restore')
+
+    expected = ['public', 'pg_database_owner', 'pg_database_owner', 'PUBLIC', 'USAGE', False]
+    before = public_schema_acl(connection)
+    source_counts = Counter(tuple(row) for row in source_acl)
+    local_counts = Counter(tuple(row) for row in before)
+    expected_tuple = tuple(expected)
+    check(source_counts - local_counts == Counter({expected_tuple: 1})
+          and not (local_counts - source_counts),
+          'local public schema ACL differs beyond the one reviewed PUBLIC USAGE grant')
+
+    _execute_statement(connection, 'SET LOCAL ROLE "pg_database_owner"')
+    _execute_statement(connection, 'GRANT USAGE ON SCHEMA public TO PUBLIC')
+    _execute_statement(connection, 'RESET ROLE')
+    check(public_schema_acl(connection) == source_acl,
+          'replayed public schema ACL does not exactly match source')
+    return True
+
+
 def compare_preserved(before, after, before_rows, before_security, before_keys,
                       logo, ops, connection, raw, columns):
     from migration_bootstrap import schema_contract_differences
@@ -319,6 +370,9 @@ def rehearse(args, logo, ops, revision, work, report):
             env=ops.local_environment(port), timeout=600)
         check(restored.returncode == 0, 'faithful public restore failed')
         ops.verify_owned_cluster(server, port, data)
+        with ops.local_connect(port) as raw:
+            replay_missing_public_schema_acl(ops, raw, server, port, data,
+                                            security['public_schema_acl'])
         app = ops.create_migration_app(f'postgresql+psycopg://postgres@127.0.0.1:{port}/postgres?sslmode=disable')
         with app.app_context():
             try:
