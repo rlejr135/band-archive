@@ -11,9 +11,9 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from extensions import db
 from migration_bootstrap import (
-    MIGRATIONS_DIRECTORY, PHASE23_REVISION, assert_upgrade_preflight,
+    MIGRATIONS_DIRECTORY, PHASE23_REVISION, PHASE24_REVISION, assert_upgrade_preflight,
     create_migration_app, metadata_for_recorded_revision, phase22_metadata,
-    phase23_metadata, schema_contract_differences, schema_differences,
+    phase23_metadata, phase24_metadata, schema_contract_differences, schema_differences,
 )
 from startup_guard import assert_postgres_startup_ready
 from tenant_backfill import apply as backfill
@@ -101,7 +101,10 @@ def _exercise(app, *, postgres=False):
                 assert after == before
                 assert not schema_contract_differences(connection, metadata=phase23_metadata())
                 assert not schema_differences(connection, metadata=phase23_metadata())
-                assert not schema_contract_differences(connection)
+                # Revision 23 is intentionally still missing the revision-24
+                # representative-media index; it must not be treated as head.
+                assert ('media.uq_media_featured_band_song partial predicate is missing or invalid'
+                        in schema_contract_differences(connection))
                 assert {i['name'] for i in inspect(connection).get_indexes('rehearsal')} == {
                     i.name for i in phase22_metadata().tables['rehearsal'].indexes}
                 if postgres:
@@ -152,6 +155,23 @@ def _exercise(app, *, postgres=False):
                 if postgres:
                     assert _security(connection) == security
             upgrade(revision=PHASE23_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            if postgres:
+                # Startup must remain fail-closed until the explicit revision
+                # 24 migration installs the reviewed partial unique index.
+                with pytest.raises(RuntimeError, match='PostgreSQL startup validation failed'):
+                    assert_postgres_startup_ready(db.engine)
+            with db.engine.connect() as connection:
+                before_revision24 = _rows(connection)
+                security_before_revision24 = _security(connection) if postgres else None
+            upgrade(revision=PHASE24_REVISION, directory=str(MIGRATIONS_DIRECTORY))
+            with db.engine.connect() as connection:
+                assert _rows(connection) == before_revision24
+                assert not schema_contract_differences(connection, metadata=phase24_metadata())
+                assert not schema_differences(connection, metadata=phase24_metadata())
+                assert {index['name'] for index in inspect(connection).get_indexes('media')} >= {
+                    'uq_media_featured_band_song'}
+                if postgres:
+                    assert _security(connection) == security_before_revision24
             if postgres:
                 statements = []
                 def observe(connection, cursor, statement, parameters, context, executemany):
@@ -234,13 +254,13 @@ def test_postgres_revision23_lock_failure_preserves_revision22_and_rows(private_
         _dispose(app)
 
 
-def test_every_historical_revision_remains_exact_after_revision23(tmp_path):
+def test_every_historical_revision_remains_exact_after_revision24(tmp_path):
     app = create_migration_app('sqlite:///' + (tmp_path / 'history.db').as_posix())
     try:
         with app.app_context():
             script = ScriptDirectory.from_config(_config(app))
             revisions = list(reversed(list(script.walk_revisions())))
-            assert revisions[-1].revision == PHASE23_REVISION
+            assert revisions[-1].revision == PHASE24_REVISION
             for revision in revisions:
                 upgrade(revision=revision.revision, directory=str(MIGRATIONS_DIRECTORY))
                 metadata = metadata_for_recorded_revision(revision.revision)
@@ -271,9 +291,9 @@ def test_legacy_copy_automatically_receives_unclassified_type_before_refresh_dig
     app = create_migration_app('sqlite:///' + copied.as_posix())
     try:
         with app.app_context(), engine.connect() as connection:
-            assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == PHASE23_REVISION
+            assert connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one() == PHASE24_REVISION
             assert connection.execute(text('SELECT id,title,rehearsal_type FROM rehearsal')).all() == [(8, 'R', 'UNCLASSIFIED')]
-            assert not schema_contract_differences(connection, metadata=phase23_metadata())
+            assert not schema_contract_differences(connection, metadata=phase24_metadata())
             from sqlalchemy import MetaData
             metadata = MetaData()
             metadata.reflect(bind=connection)

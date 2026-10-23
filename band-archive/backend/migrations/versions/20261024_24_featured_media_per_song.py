@@ -92,9 +92,10 @@ def _preflight(bind):
 def upgrade():
     bind = op.get_bind()
     security = _security()
+    # PREVIOUS_TABLES already describes the complete revision-20 schema,
+    # including availability, personal schedule notes, and band logos.
     tables = (*security.PREVIOUS_TABLES, 'band_invite_link', 'invite_resume_context',
-              'content_restriction', 'band_availability_state', 'band_availability_day',
-              'band_personal_schedule_note', 'band_logo')
+              'content_restriction')
     if bind.dialect.name == 'postgresql':
         if op.get_context().as_sql:
             raise RuntimeError('Featured-media migration requires a live PostgreSQL connection.')

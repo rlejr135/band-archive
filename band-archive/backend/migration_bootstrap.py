@@ -156,6 +156,20 @@ def _remove_featured_media_index(metadata):
     return metadata
 
 
+def _current_historical_metadata():
+    """Copy current models as a pre-revision-24 snapshot base.
+
+    Historical factories that use current model tables must explicitly prune
+    the featured-media uniqueness contract until revision 24 introduced it.
+    Keeping the rule at the shared copy boundary prevents direct factory
+    callers from inheriting a future index.
+    """
+    metadata = MetaData()
+    for table in db.metadata.tables.values():
+        table.to_metadata(metadata)
+    return _remove_featured_media_index(metadata)
+
+
 def auth_metadata():
     """Exact revision-02 schema snapshot for safe upgrades to Phase 3."""
     metadata = baseline_metadata()
@@ -291,9 +305,7 @@ def _remove_future_content_restrictions(metadata):
 
 def phase4_metadata():
     """Exact revision-05 snapshot before Phase 6 contracts tenant reads."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
@@ -332,9 +344,7 @@ def phase4_metadata():
 
 def phase6_metadata():
     """Exact revision-06 snapshot before the account write contract."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
@@ -348,9 +358,7 @@ def phase6_metadata():
 
 def phase7_metadata():
     """Exact revision-07 snapshot before account suggestion votes."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
@@ -363,9 +371,7 @@ def phase7_metadata():
 
 def phase8_metadata():
     """Exact revision-08 snapshot before direct-upload reservations existed."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
@@ -377,9 +383,7 @@ def phase8_metadata():
 
 def phase9_metadata():
     """Exact revision-09 snapshot before expiring became a cleanup claim."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
@@ -392,9 +396,7 @@ def phase9_metadata():
 
 def phase10_metadata():
     """Exact revision-10 snapshot before direct gallery reservations."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)
@@ -406,9 +408,7 @@ def phase10_metadata():
 
 def phase11_metadata():
     """Exact revision-11 snapshot before ownership-claim capabilities."""
-    metadata = MetaData()
-    for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+    metadata = _current_historical_metadata()
     _remove_future_email_outbox(metadata)
     _remove_future_r2_deletion_task(metadata)
     _remove_future_policy_acceptance(metadata)

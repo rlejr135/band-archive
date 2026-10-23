@@ -154,6 +154,9 @@ def test_v1_song_rehearsal_and_media_mutations_reject_foreign_ids_before_storage
         before_media = Media.query.count()
         before_sessions = MultipartUploadSession.query.count()
         before_rehearsals = Rehearsal.query.count()
+        foreign_media_before = db.session.get(Media, foreign_media)
+        foreign_media_state = (foreign_media_before.filename, foreign_media_before.object_key,
+                               foreign_media_before.is_featured)
     assert client.put(f'/songs/{foreign_song}', json={'title': 'mutated'}).status_code == 404
     assert client.delete(f'/songs/{foreign_song}').status_code == 410
     assert client.post(f'/songs/{foreign_song}/upload', data={
@@ -170,7 +173,7 @@ def test_v1_song_rehearsal_and_media_mutations_reject_foreign_ids_before_storage
         'song_id': str(legacy_song), 'file': (BytesIO(b'foreign media'), 'foreign.mp4'),
     }).status_code == 404
     assert client.patch(f'/media/{foreign_media}/rehearsal', json={'rehearsal_id': legacy_rehearsal}).status_code == 404
-    assert client.patch(f'/media/{foreign_media}/featured').status_code == 404
+    assert client.patch(f'/media/{foreign_media}/featured').status_code == 410
     assert client.put(f'/media/{foreign_media}/rename', json={'filename': 'renamed.mp4'}).status_code == 410
     assert client.delete(f'/media/{foreign_media}').status_code == 410
     assert client.put(f'/rehearsals/{foreign_rehearsal}', json={'title': 'mutated'}).status_code == 404
@@ -188,6 +191,9 @@ def test_v1_song_rehearsal_and_media_mutations_reject_foreign_ids_before_storage
         assert Rehearsal.query.count() == before_rehearsals
         assert [song.id for song in db.session.get(Rehearsal, legacy_rehearsal).songs] == [legacy_song]
         assert db.session.get(Media, foreign_media).filename == 'foreign.mp4'
+        foreign_media_after = db.session.get(Media, foreign_media)
+        assert (foreign_media_after.filename, foreign_media_after.object_key,
+                foreign_media_after.is_featured) == foreign_media_state
         assert db.session.get(Rehearsal, foreign_rehearsal).title == 'foreign rehearsal'
 
 

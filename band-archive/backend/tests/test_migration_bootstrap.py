@@ -11,6 +11,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from click.testing import CliRunner
 import pytest
 
+import migration_bootstrap as historical_metadata
 from extensions import db
 from migration_bootstrap import (
     ALEMBIC_VERSION_TABLE,
@@ -60,6 +61,53 @@ def _version(app):
     with app.app_context():
         with db.engine.connect() as connection:
             return connection.execute(text('SELECT version_num FROM alembic_version')).scalar_one()
+
+
+def test_all_pre_revision24_metadata_factories_exclude_featured_media_index(tmp_path):
+    app = _migration_app(tmp_path / 'historical_metadata.db')
+    factories = (
+        historical_metadata.baseline_metadata,
+        historical_metadata.auth_metadata,
+        historical_metadata.phase3_metadata,
+        historical_metadata.phase3_hardened_metadata,
+        historical_metadata.phase4_metadata,
+        historical_metadata.phase6_metadata,
+        historical_metadata.phase7_metadata,
+        historical_metadata.phase8_metadata,
+        historical_metadata.phase9_metadata,
+        historical_metadata.phase10_metadata,
+        historical_metadata.phase11_metadata,
+        historical_metadata.phase12_metadata,
+        historical_metadata.phase14_metadata,
+        historical_metadata.phase15_metadata,
+        historical_metadata.phase16_metadata,
+        historical_metadata.phase17_metadata,
+        historical_metadata.phase18_metadata,
+        historical_metadata.phase19_metadata,
+        historical_metadata.phase20_metadata,
+        historical_metadata.phase21_metadata,
+        historical_metadata.phase22_metadata,
+        historical_metadata.phase23_metadata,
+    )
+    revisions = (
+        '20260914_01', '20260914_02', '20260915_03', '20260916_04', '20260916_05',
+        '20260920_06', '20260927_07', '20261002_08', '20261002_09', '20261003_10',
+        '20261004_11', '20261006_12', '20261010_13', '20261014_14', '20261016_15',
+        '20261017_16', '20261017_17', '20261017_18', '20261018_19', '20261019_20',
+        '20261020_21', '20261021_22', '20261023_23',
+    )
+    try:
+        with app.app_context():
+            for factory in factories:
+                assert all(index.name != 'uq_media_featured_band_song'
+                           for index in factory().tables['media'].indexes), factory.__name__
+            for revision in revisions:
+                assert all(index.name != 'uq_media_featured_band_song'
+                           for index in metadata_for_recorded_revision(revision).tables['media'].indexes), revision
+            assert any(index.name == 'uq_media_featured_band_song'
+                       for index in historical_metadata.phase24_metadata().tables['media'].indexes)
+    finally:
+        _dispose(app)
 
 
 def _dispose(app):
