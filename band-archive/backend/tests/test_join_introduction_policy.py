@@ -72,17 +72,23 @@ def test_join_introduction_is_manager_pending_only_and_duplicate_preserves_first
     band_id = _create_band(client)
     intro = '  Hello, we play jazz.  '
     response = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'),
-                           json={'name': 'New Member', 'introduction': intro})
+                           json={'name': 'New Member', 'introduction': intro,
+                                 'positions': ['OTHER'], 'custom_position': 'Mandolin'})
     assert response.status_code == 201
     membership_id = response.get_json()['membership']['id']
+    assert response.get_json()['membership']['requested_positions'] == ['OTHER']
+    assert response.get_json()['membership']['requested_custom_position'] == 'Mandolin'
     duplicate = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'),
-                            json={'name': 'Do not overwrite', 'introduction': 'Overwrite attempt'})
+                            json={'name': 'Do not overwrite', 'introduction': 'Overwrite attempt',
+                                  'positions': ['DRUMS']})
     assert duplicate.status_code == 200
     assert duplicate.get_json()['created'] is False
 
     manager = client.get(f'/api/v2/bands/{band_id}/memberships', headers=_headers('owner-id')).get_json()
     requested = next(item for item in manager['memberships'] if item['id'] == membership_id)
     assert requested['introduction'] == 'Hello, we play jazz.'
+    assert requested['requested_positions'] == ['OTHER']
+    assert requested['requested_custom_position'] == 'Mandolin'
     with band_app.app_context():
         other = AppUser.query.filter_by(supabase_user_id='other-id').one()
         db.session.add(BandMembership(band_id=band_id, user_id=other.id, status='active'))
@@ -93,6 +99,9 @@ def test_join_introduction_is_manager_pending_only_and_duplicate_preserves_first
     assert all('introduction' not in item for item in roster['memberships'])
     pending_self = client.get('/api/v2/bands', headers=_headers('member-id')).get_json()['pending_memberships']
     assert all('introduction' not in item for item in pending_self)
+    self_application = next(item for item in pending_self if item['id'] == membership_id)
+    assert self_application['requested_positions'] == ['OTHER']
+    assert self_application['requested_custom_position'] == 'Mandolin'
     with band_app.app_context():
         membership = db.session.get(BandMembership, membership_id)
         assert membership.join_introduction == 'Hello, we play jazz.'
@@ -113,6 +122,23 @@ def test_join_introduction_is_manager_pending_only_and_duplicate_preserves_first
         membership = db.session.get(BandMembership, membership_id)
         assert membership.status == 'pending'
         assert membership.join_introduction == 'New request'
+
+
+def test_join_request_positions_are_validated_before_creating_pending_row(band_app):
+    client = band_app.test_client()
+    band_id = _create_band(client)
+    for extra in (
+        {'positions': None},
+        {'positions': ['OTHER', 'OTHER']},
+        {'positions': ['VOCAL'], 'custom_position': 'Mandolin'},
+        {'positions': ['OTHER'], 'custom_position': 'x' * 51},
+    ):
+        response = client.post(f'/api/v2/bands/{band_id}/join-requests', headers=_headers('member-id'),
+                               json={'name': 'Invalid Position', **extra})
+        assert response.status_code == 400
+    with band_app.app_context():
+        member = AppUser.query.filter_by(supabase_user_id='member-id').one()
+        assert BandMembership.query.filter_by(band_id=band_id, user_id=member.id).count() == 0
 
 
 def test_join_introduction_manager_audience_is_band_scoped_and_approval_clears(band_app):

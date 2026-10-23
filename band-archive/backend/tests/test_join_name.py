@@ -4,7 +4,8 @@ from sqlalchemy import create_engine
 
 from extensions import db
 from models import AppUser, AuditEvent, Band, BandMembership, Member
-from band_service import approve_membership, join_request, membership_dict
+from band_service import (approve_membership, create_invite, join_invite, join_request,
+                          membership_dict)
 from errors import ValidationError
 from join_name import required_join_name
 from tests.test_member_profiles import profiles  # noqa: F401
@@ -66,6 +67,50 @@ def test_pending_name_first_value_private_then_approval_consumes_name(profiles):
         assert other.requested_name == 'Other band name'
 
 
+def test_pending_positions_are_private_first_value_and_apply_on_approval(profiles):
+    with profiles.app_context():
+        actor, user = db.session.get(AppUser, 1), db.session.get(AppUser, 4)
+        application, created = join_request(
+            user, 1, name='Position Member', positions=['OTHER', 'GUITAR'],
+            custom_position='Mandolin',
+        )
+        assert created
+        expected_positions = ['GUITAR', 'OTHER']
+        for audience in ('self', 'management'):
+            serialized = membership_dict(application, audience)
+            assert serialized['requested_positions'] == expected_positions
+            assert serialized['requested_custom_position'] == 'Mandolin'
+        member_view = membership_dict(application, 'member')
+        assert 'requested_positions' not in member_view
+        assert 'requested_custom_position' not in member_view
+
+        repeated, created = join_request(
+            user, 1, name='Do not replace', positions=['DRUMS'], custom_position='',
+        )
+        assert not created
+        assert repeated.requested_positions_json == '["GUITAR", "OTHER"]'
+        assert repeated.requested_custom_position == 'Mandolin'
+
+        approved, _ = approve_membership(actor, application.id, True)
+        profile = Member.query.filter_by(band_id=1, linked_user_id=user.id).one()
+        assert profile.positions_json == '["GUITAR", "OTHER"]'
+        assert profile.custom_position == 'Mandolin'
+        assert profile.instrument == '기타, Mandolin'
+        assert profile.profile_revision == 1
+        assert approved.requested_positions_json is None
+        assert approved.requested_custom_position is None
+
+        # An empty rejoin selection preserves the established profile values.
+        approved.status = 'left'
+        db.session.commit()
+        pending, _ = join_request(user, 1, name='Position Member', positions=[])
+        approve_membership(actor, pending.id, True)
+        assert profile.positions_json == '["GUITAR", "OTHER"]'
+        assert profile.custom_position == 'Mandolin'
+        assert profile.instrument == '기타, Mandolin'
+        assert profile.profile_revision == 1
+
+
 def test_legacy_pending_null_name_fill_once_and_rejoin_preserves_profile(profiles):
     with profiles.app_context():
         actor, user = db.session.get(AppUser, 1), db.session.get(AppUser, 3)
@@ -100,11 +145,28 @@ def test_legacy_pending_null_name_fill_once_and_rejoin_preserves_profile(profile
 def test_rejection_discards_pending_name_and_new_request_replaces_it(profiles):
     with profiles.app_context():
         actor, user = db.session.get(AppUser, 1), db.session.get(AppUser, 4)
-        pending, _ = join_request(user, 1, name='Rejected name')
+        pending, _ = join_request(user, 1, name='Rejected name', positions=['BASS'])
         approve_membership(actor, pending.id, False)
         assert pending.requested_name is None
+        assert pending.requested_positions_json is None
+        assert pending.requested_custom_position is None
         join_request(user, 1, name='Resubmitted name')
         assert pending.requested_name == 'Resubmitted name'
+
+
+def test_internal_legacy_invite_transition_clears_pending_positions_without_applying(profiles):
+    with profiles.app_context():
+        owner, user = db.session.get(AppUser, 1), db.session.get(AppUser, 4)
+        pending, _ = join_request(user, 1, name='Invite Member', positions=['BASS'])
+        _invite, raw = create_invite(owner, 1)
+        activated = join_invite(user, raw)
+        profile = Member.query.filter_by(band_id=1, linked_user_id=user.id).one()
+        assert activated.status == 'active'
+        assert profile.name == 'Invite Member'
+        assert profile.positions_json == '[]'
+        assert profile.instrument == ''
+        assert pending.requested_positions_json is None
+        assert pending.requested_custom_position is None
 
 
 def test_profile_creation_failure_cannot_commit_approval_or_discard_name(profiles, monkeypatch):

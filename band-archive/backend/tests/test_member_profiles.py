@@ -12,8 +12,9 @@ import auth_service
 from app import create_app
 from config import TestingConfig
 from extensions import db
+from errors import ValidationError
 from models import AppUser, Band, BandMembership, Member, PersonalLog, TenantScopeUnavailable
-from member_profile_service import ensure_member_profile
+from member_profile_service import activate_member_profile, ensure_member_profile
 from band_service import (approve_membership, create_invite, join_invite, join_request,
                           leave_band, review_request, create_request)
 
@@ -58,6 +59,38 @@ def headers(user=2):
 
 
 BASE = '/api/v2/bands/1/members'
+
+
+def test_activation_positions_empty_or_omitted_preserve_and_invalid_is_atomic(profiles):
+    with profiles.app_context():
+        membership = db.session.get(BandMembership, 2)
+        profile = Member.query.filter_by(band_id=1, linked_user_id=2).one()
+        starting_revision = profile.profile_revision
+
+        activate_member_profile(membership, profile.name, positions=['BASS'])
+        assert profile.positions_json == '["BASS"]'
+        assert profile.instrument == '베이스'
+        assert profile.profile_revision == starting_revision + 1
+
+        activate_member_profile(membership, profile.name, positions=[])
+        activate_member_profile(membership, profile.name)
+        assert profile.positions_json == '["BASS"]'
+        assert profile.instrument == '베이스'
+        assert profile.profile_revision == starting_revision + 1
+
+        before = (profile.name, profile.positions_json, profile.custom_position,
+                  profile.instrument, profile.profile_revision)
+        with pytest.raises(ValidationError):
+            activate_member_profile(membership, 'Must not rename', positions=['INVALID'])
+        assert (profile.name, profile.positions_json, profile.custom_position,
+                profile.instrument, profile.profile_revision) == before
+
+        unprofiled_membership = db.session.get(BandMembership, 3)
+        unprofiled_membership.status = 'active'
+        db.session.commit()
+        with pytest.raises(ValidationError):
+            activate_member_profile(unprofiled_membership, 'Must not create', positions=['INVALID'])
+        assert Member.query.filter_by(band_id=1, linked_user_id=3).count() == 0
 
 
 def test_own_profile_edit_and_scope(profiles):

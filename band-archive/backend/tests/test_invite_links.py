@@ -292,7 +292,10 @@ def test_reusable_link_joins_two_accounts_and_completed_context_cannot_rejoin_af
                        headers=outsider_headers).status_code == 200
     # A bound invitation is not sufficient to create an unnamed profile.
     for invalid in ({'context': outsider_context}, {'context': outsider_context, 'name': '  '},
-                    {'context': outsider_context, 'name': 'bad\u200bname'}):
+                    {'context': outsider_context, 'name': 'bad\u200bname'},
+                    {'context': outsider_context, 'name': 'Valid', 'positions': ['OTHER', 'OTHER']},
+                    {'context': outsider_context, 'name': 'Valid', 'positions': ['VOCAL'],
+                     'custom_position': 'Mandolin'}):
         assert client.post('/api/v2/invite-links/accept', json=invalid,
                            headers=outsider_headers).status_code == 400
     with app.app_context():
@@ -300,8 +303,10 @@ def test_reusable_link_joins_two_accounts_and_completed_context_cannot_rejoin_af
         assert BandMembership.query.filter_by(band_id=1, user_id=outsider.id).count() == 0
         assert InviteResumeContext.query.filter_by(context_hash=hashlib.sha256(
             outsider_context.encode('ascii')).hexdigest()).one().completed_at is None
-    joined = client.post('/api/v2/invite-links/accept', json={'context': outsider_context, 'name': 'Invited Member'},
-                         headers=outsider_headers)
+    joined = client.post('/api/v2/invite-links/accept', json={
+        'context': outsider_context, 'name': 'Invited Member',
+        'positions': ['OTHER', 'KEYBOARD'], 'custom_position': 'Synth',
+    }, headers=outsider_headers)
     assert joined.status_code == 200
     assert joined.get_json()['joined'] is True
     assert joined.get_json()['membership'] == {'status': 'active', 'role': 'member'}
@@ -309,15 +314,25 @@ def test_reusable_link_joins_two_accounts_and_completed_context_cannot_rejoin_af
         member = AppUser.query.filter_by(email='outsider@example.com').one()
         assert BandMembership.query.filter_by(band_id=1, user_id=member.id, status='active').one().role == 'member'
         assert Member.query.filter_by(band_id=1, linked_user_id=member.id).count() == 1
-        assert Member.query.filter_by(band_id=1, linked_user_id=member.id).one().name == 'Invited Member'
+        profile = Member.query.filter_by(band_id=1, linked_user_id=member.id).one()
+        assert profile.name == 'Invited Member'
+        assert profile.positions_json == '["KEYBOARD", "OTHER"]'
+        assert profile.custom_position == 'Synth'
+        assert profile.instrument == '키보드, Synth'
         assert BandMembership.query.filter_by(band_id=1, user_id=member.id).one().requested_name is None
     # Completed retries may omit or change name but never rename the profile.
     assert client.post('/api/v2/invite-links/accept', json={'context': outsider_context},
                        headers=outsider_headers).status_code == 200
-    assert client.post('/api/v2/invite-links/accept', json={'context': outsider_context, 'name': 'Rename attempt'},
-                       headers=outsider_headers).status_code == 200
+    assert client.post('/api/v2/invite-links/accept', json={
+        'context': outsider_context, 'name': 'Rename attempt', 'positions': ['DRUMS'],
+    }, headers=outsider_headers).status_code == 200
     with app.app_context():
-        assert Member.query.filter_by(band_id=1, linked_user_id=member.id).one().name == 'Invited Member'
+        profile = Member.query.filter_by(band_id=1, linked_user_id=member.id).one()
+        assert profile.name == 'Invited Member'
+        assert profile.positions_json == '["KEYBOARD", "OTHER"]'
+        membership = BandMembership.query.filter_by(band_id=1, user_id=member.id).one()
+        assert membership.requested_positions_json is None
+        assert membership.requested_custom_position is None
     assert client.post('/api/v2/bands/1/leave', headers=outsider_headers).status_code == 200
     replay = client.post('/api/v2/invite-links/accept', json={'context': outsider_context},
                          headers=outsider_headers)
@@ -333,7 +348,9 @@ def test_accept_reactivates_inactive_membership_as_plain_member(invite_auth, sta
     with app.app_context():
         outsider = AppUser.query.filter_by(email='outsider@example.com').one()
         db.session.add(BandMembership(band_id=1, user_id=outsider.id, role='admin', status=status,
-                                      requested_name='Old application name'))
+                                      requested_name='Old application name',
+                                      requested_positions_json='["BASS", "OTHER"]' if status == 'pending' else None,
+                                      requested_custom_position='Bass VI' if status == 'pending' else None))
         db.session.add(Member(band_id=1, linked_user_id=outsider.id, name='Old profile name',
                               instrument='보컬', biography='Keep biography', positions_json='["VOCAL"]',
                               custom_position='', profile_revision=3))
@@ -359,10 +376,77 @@ def test_accept_reactivates_inactive_membership_as_plain_member(invite_auth, sta
         assert profile.name == 'Returning Member'
         assert profile.id == profile_id
         assert profile.biography == 'Keep biography'
-        assert profile.positions_json == '["VOCAL"]'
-        assert profile.instrument == '보컬'
-        assert profile.profile_revision == 4
-        assert BandMembership.query.filter_by(band_id=1, user_id=outsider_id).one().requested_name is None
+        # Invite acceptance only applies choices supplied in its own payload;
+        # a pending request's saved selection is cleared without overwriting
+        # an existing profile.
+        if status == 'pending':
+            assert profile.positions_json == '["VOCAL"]'
+            assert profile.custom_position == ''
+            assert profile.instrument == '보컬'
+            assert profile.profile_revision == 4
+        else:
+            assert profile.positions_json == '["VOCAL"]'
+            assert profile.instrument == '보컬'
+            assert profile.profile_revision == 4
+        membership = BandMembership.query.filter_by(band_id=1, user_id=outsider_id).one()
+        assert membership.requested_name is None
+        assert membership.requested_positions_json is None
+        assert membership.requested_custom_position is None
+
+
+@pytest.mark.parametrize('selection', ['omitted', 'empty', 'nonempty'])
+def test_invite_reactivation_only_applies_current_nonempty_selection(invite_auth, selection):
+    app, signer = invite_auth
+    with app.app_context():
+        outsider = AppUser.query.filter_by(email='outsider@example.com').one()
+        pending = BandMembership(
+            band_id=1, user_id=outsider.id, status='pending', requested_name='Old request',
+            requested_positions_json='["KEYBOARD", "OTHER"]', requested_custom_position='Synth',
+        )
+        profile = Member(
+            band_id=1, linked_user_id=outsider.id, name='Existing name', instrument='보컬',
+            biography='Keep biography', positions_json='["VOCAL"]', custom_position='',
+            profile_revision=3,
+        )
+        db.session.add_all((pending, profile))
+        db.session.commit()
+        profile_id, outsider_id = profile.id, outsider.id
+
+    client = app.test_client()
+    owner_headers = _auth(signer)
+    token = client.post('/api/v2/bands/1/invite-links', json={}, headers=owner_headers).get_json()['token']
+    context = client.post('/api/v2/invite-links/resume-context', json={
+        'token': token, 'email': 'outsider@example.com',
+    }).get_json()['context']
+    outsider_headers = _auth(signer, '77777777-7777-7777-7777-777777777777', 'outsider@example.com')
+    assert client.post('/api/v2/invite-links/resume', json={'context': context},
+                       headers=outsider_headers).status_code == 200
+    body = {'context': context, 'name': 'Returning Member'}
+    if selection == 'empty':
+        body['positions'] = []
+    elif selection == 'nonempty':
+        body.update({'positions': ['OTHER', 'BASS'], 'custom_position': 'Bass VI'})
+    accepted = client.post('/api/v2/invite-links/accept', json=body, headers=outsider_headers)
+    assert accepted.status_code == 200
+
+    with app.app_context():
+        stored_profile = Member.query.filter_by(band_id=1, linked_user_id=outsider_id).one()
+        assert stored_profile.id == profile_id
+        assert stored_profile.name == 'Returning Member'
+        assert stored_profile.biography == 'Keep biography'
+        assert stored_profile.profile_revision == 4
+        if selection == 'nonempty':
+            assert stored_profile.positions_json == '["BASS", "OTHER"]'
+            assert stored_profile.custom_position == 'Bass VI'
+            assert stored_profile.instrument == '베이스, Bass VI'
+        else:
+            # Neither omission nor [] falls back to a saved pending selection.
+            assert stored_profile.positions_json == '["VOCAL"]'
+            assert stored_profile.custom_position == ''
+            assert stored_profile.instrument == '보컬'
+        stored_membership = BandMembership.query.filter_by(band_id=1, user_id=outsider_id).one()
+        assert stored_membership.requested_positions_json is None
+        assert stored_membership.requested_custom_position is None
 
 
 def test_revoke_after_resume_and_expired_context_cannot_accept(invite_auth):

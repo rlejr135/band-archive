@@ -14,6 +14,7 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, Band, BandInviteLink, BandMembership, InviteResumeContext
 from member_profile_service import activate_member_profile, ensure_member_profile
+from voc_validation import selected_member_position_values
 from join_name import required_join_name
 
 _TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{43}$')
@@ -280,7 +281,7 @@ def _viewer(actor, band_id):
             'can_open_workspace': bool(item and item.status == ACTIVE)}
 
 
-def accept(context, actor, name=None):
+def accept(context, actor, name=None, positions=None, custom_position=None):
     rate_limit('invite-accept', 20, 60, actor=actor)
     _begin_privileged_mutation()
     band, link, row, actor = _resolve_context(context, actor, allow_claim=False)
@@ -298,6 +299,10 @@ def accept(context, actor, name=None):
         return {'joined': False, 'already_member': True, 'band': {'id': band.id, 'name': band.name, 'slug': band.slug},
                 'membership': {'status': existing.status, 'role': existing.role}}
     name = required_join_name(name)
+    position_selection_supplied = positions is not None or custom_position is not None
+    selected_positions = (selected_member_position_values(
+        positions, '' if custom_position is None else custom_position,
+    ) if position_selection_supplied else None)
     if existing is None:
         existing = BandMembership(band_id=band.id, user_id=actor.id, role='member', status=ACTIVE,
                                   requested_at=now(), approved_at=now(), left_at=None,
@@ -314,8 +319,14 @@ def accept(context, actor, name=None):
         existing.join_introduction = None
     row.completed_at = now()
     existing.requested_name = name
-    activate_member_profile(existing, name)
+    if selected_positions:
+        activate_member_profile(existing, name, positions=selected_positions['positions'],
+                                custom_position=selected_positions['custom_position'])
+    else:
+        activate_member_profile(existing, name)
     existing.requested_name = None
+    existing.requested_positions_json = None
+    existing.requested_custom_position = None
     audit('membership_joined_by_invite_link', actor, band=band, target=existing)
     db.session.commit()
     return {'joined': True, 'already_member': False, 'band': {'id': band.id, 'name': band.name, 'slug': band.slug},

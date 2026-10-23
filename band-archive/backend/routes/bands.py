@@ -19,6 +19,7 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from models import Band, BandCreationRequest, BandInviteCode, BandLogo, BandMembership, GalleryImage
 from routes.search import search_places_for_member
+from voc_validation import stored_member_position_values
 
 
 bands_bp = Blueprint('bands', __name__, url_prefix='/api/v2')
@@ -97,7 +98,9 @@ def my_bands():
             'status': item.status,
             'requested_at': item.requested_at.isoformat() if item.requested_at else None,
             'requested_name': item.requested_name,
-        } for item in pending],
+            'requested_positions': ((values['positions'] if values else [])),
+            'requested_custom_position': ((values['custom_position'] if values else '')),
+        } for item in pending for values in [stored_member_position_values(item)]],
     })
 
 
@@ -353,8 +356,12 @@ def request_join(band_id):
             raise ValidationError('A valid JSON object is required.')
     if not isinstance(body, dict):
         raise ValidationError('A JSON object is required.')
-    if set(body) - {'name', 'introduction'}:
-        raise ValidationError('Only name and introduction are accepted.')
+    if set(body) - {'name', 'introduction', 'positions', 'custom_position'}:
+        raise ValidationError('Only name, introduction, positions, and custom_position are accepted.')
+    if 'positions' in body and not isinstance(body['positions'], list):
+        raise ValidationError('positions must contain distinct supported positions.')
+    if 'custom_position' in body and not isinstance(body['custom_position'], str):
+        raise ValidationError('custom_position must be text of at most 50 characters.')
     introduction = None
     if 'introduction' in body:
         raw_introduction = body['introduction']
@@ -368,7 +375,10 @@ def request_join(band_id):
             for char in introduction
         ):
             raise ValidationError('introduction contains unsupported control characters.')
-    item, created = join_request(current_app_user(), band_id, introduction=introduction, name=body.get('name'))
+    item, created = join_request(
+        current_app_user(), band_id, introduction=introduction, name=body.get('name'),
+        positions=body.get('positions'), custom_position=body.get('custom_position'),
+    )
     return jsonify({'membership': membership_dict(item, audience='self'), 'created': created}), 201 if created else 200
 
 

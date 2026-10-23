@@ -7,9 +7,8 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, BandMembership, Member
 from join_name import required_join_name
+from voc_validation import member_position_values, selected_member_position_values
 
-POSITION_LABELS = {'VOCAL': '보컬', 'GUITAR': '기타', 'BASS': '베이스',
-                   'DRUMS': '드럼', 'KEYBOARD': '키보드', 'OTHER': '기타 역할'}
 PROFILE_COLUMNS = ('biography', 'positions_json', 'custom_position', 'profile_revision')
 
 
@@ -65,16 +64,32 @@ def ensure_member_profile(membership):
     return profile
 
 
-def activate_member_profile(membership, submitted_name=None):
-    """Ensure the linked profile and apply a name submitted for this activation.
+def activate_member_profile(membership, submitted_name=None, positions=None, custom_position=''):
+    """Ensure the linked profile and apply requested name/positions atomically.
 
     Call only while transitioning a non-active membership to active. Routine
     profile ensures and active-member retries must never rename an existing
-    band-local profile.
+    band-local profile. An omitted/empty position selection leaves an existing
+    profile untouched; a new profile retains the blank defaults from ensure.
     """
+    # Validate before ensuring a linked profile or applying the name. Empty
+    # selections deliberately mean "no change" on activation/rejoin; only
+    # own_profile's explicit edit path treats [] as a clear operation.
+    position_values = selected_member_position_values(positions, custom_position)
     profile = ensure_member_profile(membership)
+    changed = False
     if submitted_name is not None and profile.name != submitted_name:
         profile.name = submitted_name[:100]
+        changed = True
+    if position_values:
+        if (profile.positions_json != position_values['positions_json']
+                or profile.custom_position != position_values['custom_position']
+                or profile.instrument != position_values['instrument']):
+            profile.positions_json = position_values['positions_json']
+            profile.custom_position = position_values['custom_position']
+            profile.instrument = position_values['instrument']
+            changed = True
+    if changed:
         profile.profile_revision += 1
     return profile
 
@@ -117,26 +132,18 @@ def own_profile(actor, band_id, payload=None):
         biography = payload.get('biography', member.biography)
         positions = payload.get('positions', json.loads(member.positions_json))
         custom = payload.get('custom_position', member.custom_position)
+        if 'positions' in payload and 'custom_position' not in payload and isinstance(positions, list) \
+                and 'OTHER' not in positions:
+            custom = ''
         if not isinstance(biography, str) or len(biography) > 300 or '\x00' in biography:
             raise ValidationError('biography must be text of at most 300 characters.')
-        if (not isinstance(positions, list) or len(positions) > len(POSITION_LABELS)
-                or any(not isinstance(p, str) or p not in POSITION_LABELS for p in positions)
-                or len(set(positions)) != len(positions)):
-            raise ValidationError('positions must contain distinct supported positions.')
-        if not isinstance(custom, str) or len(custom) > 50 or '\x00' in custom:
-            raise ValidationError('custom_position must be text of at most 50 characters.')
-        if 'OTHER' not in positions:
-            if 'custom_position' in payload and custom.strip():
-                raise ValidationError('custom_position requires OTHER.')
-            custom = ''
-        positions = [p for p in POSITION_LABELS if p in positions]
+        position_values = member_position_values(positions, custom)
         member.name = name
         member.biography = biography.strip()
-        member.positions_json = json.dumps(positions)
-        member.custom_position = custom.strip()
+        member.positions_json = position_values['positions_json']
+        member.custom_position = position_values['custom_position']
         if 'positions' in payload or 'custom_position' in payload:
-            member.instrument = ', '.join(custom.strip() if p == 'OTHER' and custom.strip()
-                                          else POSITION_LABELS[p] for p in positions)
+            member.instrument = position_values['instrument']
         member.profile_revision += 1
         db.session.commit()
     return {**member.to_dict(), **profile_fields(member, actor.id, can_edit=True),

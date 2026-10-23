@@ -114,9 +114,16 @@ def resume_invite():
 @invite_links_bp.post('/invite-links/accept')
 @require_auth
 def accept_invite():
-    body = _body({'context'}, optional={'name'})
+    body = _body({'context'}, optional={'name', 'positions', 'custom_position'})
+    if 'positions' in body and not isinstance(body['positions'], list):
+        raise ValidationError('positions must contain distinct supported positions.')
+    if 'custom_position' in body and not isinstance(body['custom_position'], str):
+        raise ValidationError('custom_position must be text of at most 50 characters.')
     actor = current_app_user(required=True)
-    return _limited(lambda: jsonify(accept(body['context'], actor, name=body.get('name'))))
+    return _limited(lambda: jsonify(accept(
+        body['context'], actor, name=body.get('name'), positions=body.get('positions'),
+        custom_position=body.get('custom_position'),
+    )))
 
 
 @invite_links_bp.get('/bands/<int:band_id>/invite-links')
