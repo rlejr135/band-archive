@@ -71,10 +71,12 @@ def _upgrade_and_verify(app, *, postgres=False):
             band = Band(name='Preserved', slug='restriction-preserved', default_visibility='PUBLIC')
             db.session.add_all((actor, writer, band))
             db.session.flush()
-            membership = BandMembership(band_id=band.id, user_id=writer.id, role='owner', status='active')
-            db.session.add(membership)
-            db.session.flush()
-            song = Song(band_id=band.id, created_by_membership_id=membership.id, title='Preserved', artist='Fixture')
+            # This is the immutable revision-22 database; avoid an ORM INSERT
+            # that would include nullable columns introduced after revision 22.
+            membership_id = db.session.execute(BandMembership.__table__.insert().values(
+                band_id=band.id, user_id=writer.id, role='owner', status='active',
+            ).returning(BandMembership.id)).scalar_one()
+            song = Song(band_id=band.id, created_by_membership_id=membership_id, title='Preserved', artist='Fixture')
             db.session.add(song)
             db.session.flush()
             item = ContentRestriction(band_id=band.id, resource_type='song', resource_id=song.id,
@@ -83,6 +85,10 @@ def _upgrade_and_verify(app, *, postgres=False):
             db.session.add(item)
             db.session.commit()
             if not postgres:
+                # The operator CLI deliberately requires the exact current
+                # head. Exercise it there, then restore the historical v22
+                # target before verifying v22's own rollback protection.
+                upgrade(revision='head', directory=str(MIGRATIONS_DIRECTORY))
                 arguments = ['--database-url', app.config['SQLALCHEMY_DATABASE_URI'],
                              '--actor-user-id', str(actor.id), '--band-id', str(band.id),
                              '--resource-type', 'song', '--resource-id', str(song.id),
@@ -97,6 +103,9 @@ def _upgrade_and_verify(app, *, postgres=False):
                 assert released.exit_code == 0, released.output
                 db.session.expire_all()
                 assert not is_restricted(db.session.get(Song, song.id))
+                db.session.remove()
+                config = app.extensions['migrate'].migrate.get_config(str(MIGRATIONS_DIRECTORY))
+                command.downgrade(config, revision='20261021_22')
             # FK anonymization must not release a case. This actor has no other
             # account dependencies; the separate audit-history policy remains intact.
             if postgres:

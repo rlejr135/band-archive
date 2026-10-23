@@ -116,6 +116,8 @@ class BandMembership(db.Model):
     acted_by_user_id = db.Column(db.Integer, db.ForeignKey('app_user.id'), nullable=True)
     join_introduction = db.Column(db.String(300), nullable=True)
     requested_name = db.Column(db.String(100), nullable=True)
+    requested_positions_json = db.Column(db.Text, nullable=True)
+    requested_custom_position = db.Column(db.String(50), nullable=True)
 
     user = db.relationship('AppUser', foreign_keys=[user_id])
     acted_by = db.relationship('AppUser', foreign_keys=[acted_by_user_id])
@@ -954,6 +956,7 @@ class Rehearsal(db.Model):
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)
     visibility = db.Column(db.String(20), nullable=False, default='PUBLIC', server_default='PUBLIC')
     title = db.Column(db.String(200), nullable=False)
+    rehearsal_type = db.Column(db.String(20), nullable=False, default='UNCLASSIFIED', server_default='UNCLASSIFIED')
     date = db.Column(db.Date, nullable=False)
     start_date = db.Column(db.Date, nullable=True)
     end_date = db.Column(db.Date, nullable=True)
@@ -970,6 +973,8 @@ class Rehearsal(db.Model):
     songs = db.relationship('Song', secondary=rehearsal_songs, backref='rehearsals', lazy=True)
     __table_args__ = (
         db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_rehearsal_visibility'),
+        db.CheckConstraint("rehearsal_type IN ('REGULAR', 'EXTRA', 'LIVE', 'OTHER', 'UNCLASSIFIED')",
+                           name='ck_rehearsal_type'),
         db.Index('ix_rehearsal_band_visibility_date_id', 'band_id', 'visibility', 'date', 'id'),
     )
 
@@ -981,6 +986,7 @@ class Rehearsal(db.Model):
         return {
             'id': self.id,
             'title': self.title,
+            'rehearsal_type': self.rehearsal_type,
             'date': self.date.isoformat() if self.date else None,
             'start_date': self.start_date.isoformat() if self.start_date else None,
             'end_date': self.end_date.isoformat() if self.end_date else None,

@@ -47,6 +47,7 @@ PHASE19_REVISION = '20261018_19'
 PHASE20_REVISION = '20261019_20'
 PHASE21_REVISION = '20261020_21'
 PHASE22_REVISION = '20261021_22'
+PHASE23_REVISION = '20261023_23'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -138,6 +139,7 @@ def baseline_metadata():
                     column.foreign_keys.discard(foreign_key)
                 table._columns.remove(column)
     _remove_future_member_profile(metadata)
+    _remove_future_admission_and_rehearsal_type(metadata)
     _remove_future_band_logo(metadata)
     _restore_pre_phase7_content_writes(metadata)
     return metadata
@@ -200,6 +202,7 @@ def _remove_future_r2_deletion_task(metadata):
 def _remove_future_policy_acceptance(metadata):
     """Keep all immutable snapshots before revision 16 structurally exact."""
     _remove_future_member_profile(metadata)
+    _remove_future_admission_and_rehearsal_type(metadata)
     table = metadata.tables.get('band_membership')
     if table is not None and table.c.get('join_introduction') is not None:
         table._columns.remove(table.c.join_introduction)
@@ -210,6 +213,23 @@ def _remove_future_policy_acceptance(metadata):
     for name in AVAILABILITY_TABLES:
         if name in metadata.tables:
             metadata.remove(metadata.tables[name])
+    return metadata
+
+
+def _remove_future_admission_and_rehearsal_type(metadata):
+    """Keep every pre-revision-23 snapshot independent of new request fields."""
+    membership = metadata.tables.get('band_membership')
+    if membership is not None:
+        for name in ('requested_positions_json', 'requested_custom_position'):
+            if name in membership.c:
+                membership._columns.remove(membership.c[name])
+    rehearsal = metadata.tables.get('rehearsal')
+    if rehearsal is not None:
+        for constraint in list(rehearsal.constraints):
+            if constraint.name == 'ck_rehearsal_type':
+                rehearsal.constraints.remove(constraint)
+        if 'rehearsal_type' in rehearsal.c:
+            rehearsal._columns.remove(rehearsal.c.rehearsal_type)
     return metadata
 
 
@@ -480,6 +500,19 @@ def phase22_metadata():
     return metadata
 
 
+def phase23_metadata():
+    """Pending positions and explicitly classified band events, without backfill."""
+    metadata = phase22_metadata()
+    membership = metadata.tables['band_membership']
+    for name in ('requested_positions_json', 'requested_custom_position'):
+        membership.append_column(db.metadata.tables['band_membership'].c[name]._copy())
+    rehearsal = metadata.tables['rehearsal']
+    rehearsal.append_column(db.metadata.tables['rehearsal'].c.rehearsal_type._copy())
+    rehearsal.append_constraint(CheckConstraint(
+        "rehearsal_type IN ('REGULAR', 'EXTRA', 'LIVE', 'OTHER', 'UNCLASSIFIED')", name='ck_rehearsal_type'))
+    return metadata
+
+
 def _restore_pre_phase7_content_writes(metadata):
     """Remove v07-only nullability/indexes from older immutable snapshots."""
     comment = metadata.tables.get('comment')
@@ -531,6 +564,12 @@ def _restore_pre_phase11_direct_gallery_state(metadata):
         for constraint in list(table.constraints):
             if constraint.columns.contains_column(gallery_column):
                 table.constraints.remove(constraint)
+        # Removing a constraint does not detach the copied column's FK
+        # objects. Historical v09/v10 metadata must not retain a future
+        # gallery reference through Table.foreign_key_constraints.
+        for foreign_key in list(gallery_column.foreign_keys):
+            table.foreign_keys.discard(foreign_key)
+            gallery_column.foreign_keys.discard(foreign_key)
         table._columns.remove(gallery_column)
     for constraint in list(table.constraints):
         if constraint.name in {'ck_direct_upload_session_kind', 'ck_direct_upload_session_target'}:
@@ -1915,6 +1954,8 @@ def metadata_for_recorded_revision(revision):
         return phase21_metadata()
     if revision == PHASE22_REVISION:
         return phase22_metadata()
+    if revision == PHASE23_REVISION:
+        return phase23_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(
