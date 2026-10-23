@@ -73,6 +73,7 @@
 .bands-form input,.bands-form textarea,.bands-form select { font: inherit; }
 .bands-form input::placeholder,.bands-form textarea::placeholder { font: inherit; }
 .bands-form textarea { min-height: 88px; resize: vertical; }
+.bands-form > .band-request-url-preview { min-width: 0; overflow-wrap: anywhere; }
 .band-list > li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-default); }
 .band-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bands-pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 18px; }

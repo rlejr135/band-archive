@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createElement, useEffect } from 'react';
+import { createElement, StrictMode, useEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { createServer } from 'vite';
 
@@ -217,8 +218,130 @@ test('manager sees the requested member name with legacy account-name fallback',
 
 test('creation form has one in-flight submit and reports its status', async () => {
   await load(); const previous = globalThis.fetch; const first = deferred(); let writes = 0;
-  globalThis.fetch = async (url) => { if (String(url).includes('band-creation-requests')) { writes += 1; return first.promise; } throw new Error('unexpected'); };
-  try { const view = render(createElement(App, { entry: '/bands/request', create: true })); await userEvent.type(view.getByLabelText('밴드 이름'), '새 밴드'); await userEvent.type(view.getByLabelText('밴드 영어명'), 'new-band'); const button = view.getByRole('button', { name: '생성 요청 보내기' }); await userEvent.click(button); await userEvent.click(button); assert.equal(writes, 1); await act(async () => first.resolve(response({ request: { name: '새 밴드', status: 'pending' } }, 201))); await view.findByText(/승인 대기 중/); } finally { globalThis.fetch = previous; }
+  globalThis.fetch = async (url) => { if (String(url).includes('band-slugs/availability')) return response({ slug: 'new-band', available: true }); if (String(url).includes('band-creation-requests')) { writes += 1; return first.promise; } throw new Error('unexpected'); };
+  try { const view = render(createElement(App, { entry: '/bands/request', create: true })); await userEvent.type(view.getByLabelText('밴드 이름'), '새 밴드'); await userEvent.type(view.getByLabelText('밴드 영어명'), 'new-band'); await userEvent.click(view.getByRole('button', { name: '중복 확인' })); await view.findByText('사용 가능한 주소입니다.'); const button = view.getByRole('button', { name: '생성 요청 보내기' }); await userEvent.click(button); await userEvent.click(button); assert.equal(writes, 1); await act(async () => first.resolve(response({ request: { name: '새 밴드', status: 'pending' } }, 201))); await view.findByText(/승인 대기 중/); } finally { globalThis.fetch = previous; }
+});
+
+test('slug availability is explicit, edit invalidates stale replies, and preview uses the current origin', async () => {
+  await load(); const previous = globalThis.fetch; const checks = [];
+  globalThis.fetch = async (url, options = {}) => { const wait = deferred(); checks.push({ url: String(url), options, wait }); return wait.promise; };
+  try {
+    const view = render(createElement(App, { entry: '/bands/request', create: true })); const input = view.getByLabelText('밴드 영어명');
+    assert.match(view.getByText(/생성될 주소/).textContent, /올바른 영어명을 입력/); assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, true);
+    await userEvent.type(input, 'first-band'); assert.match(view.getByText(/생성될 주소/).textContent, /http:\/\/localhost\/bands\/first-band/); await userEvent.click(view.getByRole('button', { name: '중복 확인' }));
+    assert.match(checks[0].url, /\/api\/v2\/band-slugs\/availability\?slug=first-band$/); assert.ok(checks[0].options.headers?.Authorization);
+    await user.click(input); await user.clear(input); await user.type(input, 'second-band');
+    await act(async () => checks[0].wait.resolve(response({ slug: 'first-band', available: true })));
+    assert.equal(view.queryByText('사용 가능한 주소입니다.'), null); assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, true);
+    await userEvent.click(view.getByRole('button', { name: '중복 확인' }));
+    await act(async () => checks[1].wait.resolve(response({ slug: 'second-band', available: false })));
+    await view.findByText('이미 사용 중인 주소입니다.'); assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, true);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('maximum-length slug preview keeps its wrapping class and remains a single mobile-safe form item', async () => {
+  await load(); const view = render(createElement(App, { entry: '/bands/request', create: true }));
+  const input = view.getByLabelText('밴드 영어명'); await user.type(input, 'a'.repeat(80));
+  const preview = view.getByText(/생성될 주소/);
+  assert.ok(preview.classList.contains('band-request-url-preview'));
+  const bandsCss = readFileSync(new URL('./BandsPage.css', import.meta.url), 'utf8');
+  assert.match(bandsCss, /\.bands-form > \.band-request-url-preview\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/);
+  assert.equal(preview.textContent, `생성될 주소(예시): http://localhost/bands/${'a'.repeat(80)}`);
+  assert.equal(input.value.length, 80); assert.equal(view.getByRole('button', { name: '중복 확인' }).disabled, false);
+});
+
+test('StrictMode availability resolves successfully and a separate unfinished check aborts on unmount', async () => {
+  await load(); const previous = globalThis.fetch; const available = deferred(); let strictSignal; let unmountSignal;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes('band-slugs/availability')) {
+      if (new URL(String(url), 'http://localhost').searchParams.get('slug') === 'strict-band') { strictSignal = options.signal; return available.promise; }
+      unmountSignal = options.signal; return new Promise(() => {});
+    }
+    throw new Error('unexpected');
+  };
+  try {
+    const view = render(createElement(StrictMode, null, createElement(App, { entry: '/bands/request', create: true })));
+    const input = view.getByLabelText('밴드 영어명'); await user.type(input, 'strict-band'); await user.click(view.getByRole('button', { name: '중복 확인' }));
+    await view.findByText('주소 사용 여부를 확인하고 있습니다…'); assert.equal(strictSignal.aborted, false);
+    await act(async () => available.resolve(response({ slug: 'strict-band', available: true })));
+    await view.findByText('사용 가능한 주소입니다.'); assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, false);
+    view.unmount();
+
+    const unfinished = render(createElement(App, { entry: '/bands/request', create: true }));
+    await user.type(unfinished.getByLabelText('밴드 영어명'), 'unfinished'); await user.click(unfinished.getByRole('button', { name: '중복 확인' }));
+    await unfinished.findByText('주소 사용 여부를 확인하고 있습니다…'); unfinished.unmount(); assert.equal(unmountSignal.aborted, true);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('reserved service routes cannot pass availability check or produce a valid URL preview', async () => {
+  await load(); const previous = globalThis.fetch; let checks = 0;
+  globalThis.fetch = async () => { checks += 1; return response({ slug: 'discover', available: true }); };
+  try {
+    const view = render(createElement(App, { entry: '/bands/request', create: true })); const input = view.getByLabelText('밴드 영어명');
+    for (const slug of ['discover', 'request']) {
+      await user.type(input, slug);
+      assert.ok(view.getByRole('alert').textContent.includes('서비스 페이지 주소'));
+      assert.match(view.getByText(/생성될 주소/).textContent, /올바른 영어명을 입력/);
+      assert.equal(view.getByRole('button', { name: '중복 확인' }).disabled, true);
+      assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, true);
+      await user.clear(input);
+    }
+    assert.equal(checks, 0);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('creation request state is cleared on account switch and late prior responses stay isolated', async () => {
+  await load(); const previous = globalThis.fetch; const write = deferred(); let writes = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('band-slugs/availability')) return response({ slug: 'same-slug', available: true });
+    if (String(url).includes('band-creation-requests')) { writes += 1; return write.promise; }
+    throw new Error('unexpected');
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/request', create: true, authValue: account('a') }));
+    await user.type(view.getByLabelText('밴드 이름'), 'A 이름'); await user.type(view.getByLabelText('밴드 영어명'), 'same-slug'); await user.click(view.getByRole('button', { name: '중복 확인' })); await view.findByText('사용 가능한 주소입니다.');
+    await user.click(view.getByRole('button', { name: '생성 요청 보내기' })); await waitFor(() => assert.equal(writes, 1));
+    view.rerender(createElement(App, { entry: '/bands/request', create: true, authValue: account('b') }));
+    assert.equal(view.getByLabelText('밴드 이름').value, ''); assert.equal(view.getByLabelText('밴드 영어명').value, '');
+    await act(async () => write.resolve(response({ request: { name: 'A 이름', status: 'pending' } }, 201)));
+    assert.equal(view.queryByText('사용 가능한 주소입니다.'), null); assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, true);
+    assert.equal(view.queryByText(/A 이름.*승인 대기 중/), null); view.unmount();
+  } finally { globalThis.fetch = previous; }
+});
+
+test('account switch aborts a creation request waiting for its access token before fetch', async () => {
+  await load(); const previous = globalThis.fetch; const delayedToken = deferred(); let tokenReads = 0; let availabilityReads = 0; let writes = 0;
+  const accountA = { ...account('a'), getAccessToken: async () => { tokenReads += 1; return tokenReads === 1 ? 'token-a' : delayedToken.promise; } };
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes('band-slugs/availability')) { availabilityReads += 1; return response({ slug: 'token-race', available: true }); }
+    if (path.includes('band-creation-requests')) { writes += 1; return response({ request: { name: 'A 이름', status: 'pending' } }, 201); }
+    throw new Error('unexpected');
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/request', create: true, authValue: accountA }));
+    await user.type(view.getByLabelText('밴드 이름'), 'A 이름'); await user.type(view.getByLabelText('밴드 영어명'), 'token-race');
+    await user.click(view.getByRole('button', { name: '중복 확인' })); await view.findByText('사용 가능한 주소입니다.'); assert.equal(availabilityReads, 1);
+    await user.click(view.getByRole('button', { name: '생성 요청 보내기' })); await waitFor(() => assert.equal(tokenReads, 2));
+    view.rerender(createElement(App, { entry: '/bands/request', create: true, authValue: account('b') }));
+    await act(async () => delayedToken.resolve('token-a')); await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(writes, 0); assert.equal(view.getByLabelText('밴드 이름').value, ''); assert.equal(view.queryByText(/A 이름.*승인 대기 중/), null);
+    view.unmount();
+  } finally { globalThis.fetch = previous; }
+});
+
+test('availability errors can be retried and a server conflict blocks a stale availability result', async () => {
+  await load(); const previous = globalThis.fetch; let checks = 0; let writes = 0;
+  globalThis.fetch = async (url) => { const path = String(url); if (path.includes('band-slugs/availability')) { checks += 1; return checks === 1 ? response({ error: 'unavailable' }, 500) : response({ slug: 'club-name', available: true }); } if (path.includes('band-creation-requests')) { writes += 1; return response({ error: 'taken' }, 409); } throw new Error('unexpected'); };
+  try {
+    const view = render(createElement(App, { entry: '/bands/request', create: true })); const input = view.getByLabelText('밴드 영어명'); await userEvent.type(view.getByLabelText('밴드 이름'), '밴드'); await userEvent.type(input, 'club-name');
+    await userEvent.click(view.getByRole('button', { name: '중복 확인' })); await view.findByText(/주소 사용 여부를 확인하지 못했습니다/);
+    await userEvent.click(view.getByRole('button', { name: '중복 확인' })); await view.findByText('사용 가능한 주소입니다.');
+    await userEvent.click(view.getByRole('button', { name: '생성 요청 보내기' })); await view.findByRole('alert');
+    assert.equal(writes, 1); assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, true);
+    await user.click(view.getByRole('button', { name: '중복 확인' })); await view.findByText('사용 가능한 주소입니다.');
+    assert.equal(view.getByRole('button', { name: '생성 요청 보내기' }).disabled, false);
+  } finally { globalThis.fetch = previous; }
 });
 
 test('creation request uses the shared return-link styling and explains the English URL name without weakening slug validation', async () => {

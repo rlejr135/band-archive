@@ -119,21 +119,63 @@ const DiscoverBandsContent = () => {
 };
 
 export const BandCreationRequestPage = () => {
+  const { user, authGeneration = 0 } = useAuth();
+  return <BandCreationRequestContent key={`${user?.id || 'visitor'}:${authGeneration}`} />;
+};
+
+const BandCreationRequestContent = () => {
   const api = useApi(); const guard = useRef(createSubmissionGuard()).current;
   const [busy, setBusy] = useState(false); const [result, setResult] = useState(null); const [error, setError] = useState('');
+  const [name, setName] = useState(''); const [slug, setSlug] = useState(''); const [description, setDescription] = useState('');
+  const [availability, setAvailability] = useState({ slug: '', status: 'idle' });
+  const availabilityRequest = useRef(null); const submissionRequest = useRef(null); const availabilitySequence = useRef(0); const alive = useRef(true);
+  const validSlugSyntax = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) && slug.length <= 80;
+  const reservedSlug = slug === 'discover' || slug === 'request';
+  const validSlug = validSlugSyntax && !reservedSlug;
+  useEffect(() => { alive.current = true; return () => { alive.current = false; availabilitySequence.current += 1; availabilityRequest.current?.abort(); submissionRequest.current?.abort(); }; }, []);
+  const changeSlug = (value) => {
+    availabilitySequence.current += 1; availabilityRequest.current?.abort(); availabilityRequest.current = null;
+    setSlug(value); setAvailability({ slug: '', status: 'idle' }); setError('');
+  };
+  const checkSlug = async () => {
+    if (!validSlug || busy) return;
+    availabilityRequest.current?.abort();
+    const controller = new AbortController(); availabilityRequest.current = controller;
+    const sequence = ++availabilitySequence.current; const checkedSlug = slug;
+    setAvailability({ slug: checkedSlug, status: 'loading' }); setError('');
+    try {
+      const data = await api.requestJson(`/api/v2/band-slugs/availability?slug=${encodeURIComponent(checkedSlug)}`, { signal: controller.signal });
+      if (!alive.current || controller.signal.aborted || sequence !== availabilitySequence.current) return;
+      if (data?.slug !== checkedSlug || typeof data?.available !== 'boolean') throw new Error('Invalid availability response');
+      setAvailability({ slug: checkedSlug, status: data.available ? 'available' : 'unavailable' });
+    } catch {
+      if (alive.current && !controller.signal.aborted && sequence === availabilitySequence.current) setAvailability({ slug: checkedSlug, status: 'error' });
+    } finally { if (availabilityRequest.current === controller) availabilityRequest.current = null; }
+  };
   const submit = async (event) => {
-    event.preventDefault(); if (!guard.tryAcquire()) return;
-    const form = new FormData(event.currentTarget); setBusy(true); setError('');
-    try { const data = await api.requestJson('/api/v2/band-creation-requests', requestOptions('POST', { name: form.get('name'), slug: form.get('slug'), description: form.get('description') })); setResult(data?.request || null); }
-    catch { setError(genericFailure); } finally { guard.release(); setBusy(false); }
+    event.preventDefault(); if (!validSlug || availability.slug !== slug || availability.status !== 'available' || !guard.tryAcquire()) return;
+    setBusy(true); setError('');
+    const controller = new AbortController(); submissionRequest.current = controller;
+    try { const data = await api.requestJson('/api/v2/band-creation-requests', requestOptions('POST', { name, slug, description }, controller.signal)); if (alive.current && !controller.signal.aborted) setResult(data?.request || null); }
+    catch (failure) {
+      if (alive.current && !controller.signal.aborted) {
+        if (failure?.status === 409) { setAvailability({ slug, status: 'unavailable' }); setError('이미 사용 중인 주소입니다. 다른 주소를 선택해 다시 확인해 주세요.'); }
+        else setError(genericFailure);
+      }
+    }
+    finally { guard.release(); if (submissionRequest.current === controller) submissionRequest.current = null; if (alive.current && !controller.signal.aborted) setBusy(false); }
   };
   return <main className="bands-page" aria-labelledby="create-band-title">
     <header className="bands-manage-header"><Link className="bands-return-link" to="/bands"><span aria-hidden="true">←</span> 내 밴드</Link><h2 id="create-band-title">밴드 생성 요청</h2></header><p className="bands-help">플랫폼 검토 후 승인됩니다.</p>
     <form onSubmit={submit} className="bands-form" aria-busy={busy}>
-      <label>밴드 이름<input name="name" required maxLength="120" /></label>
-      <label htmlFor="band-request-slug">밴드 영어명<input id="band-request-slug" name="slug" required maxLength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autoCapitalize="none" aria-describedby="band-request-slug-help" /></label>
-      <p id="band-request-slug-help" className="bands-help">해당 이름이 밴드 URL 주소가 됩니다. 영문 소문자·숫자로 입력하고, 단어 사이에는 하이픈(-)을 하나씩 사용할 수 있습니다. 공백·대문자는 사용할 수 없으며 최대 80자입니다.</p>
-      <label>소개<textarea name="description" maxLength="2000" /></label><button type="submit" className="primary-btn" disabled={busy}>{busy ? '요청 중…' : '생성 요청 보내기'}</button>
+      <label>밴드 이름<input name="name" value={name} onChange={(event) => setName(event.target.value)} required maxLength="120" disabled={busy} /></label>
+      <label htmlFor="band-request-slug">밴드 영어명<input id="band-request-slug" name="slug" value={slug} onChange={(event) => changeSlug(event.target.value)} required maxLength="80" pattern="[a-z0-9]+(-[a-z0-9]+)*" autoCapitalize="none" aria-describedby="band-request-slug-help" disabled={busy} /></label>
+      <p id="band-request-slug-help" className="bands-help">해당 이름이 밴드 URL 주소가 됩니다. 영문 소문자·숫자로 입력하고, 단어 사이에는 하이픈(-)을 하나씩 사용할 수 있습니다. 공백·대문자는 사용할 수 없으며 최대 80자입니다. discover와 request는 서비스 페이지 주소이므로 사용할 수 없습니다.</p>
+      {reservedSlug && <p role="alert" className="auth-error">discover와 request는 서비스 페이지 주소이므로 다른 영어명을 입력해 주세요.</p>}
+      <div className="band-actions"><button type="button" className="secondary-btn" onClick={checkSlug} disabled={busy || !validSlug || availability.status === 'loading'}>{availability.status === 'loading' ? '확인 중…' : '중복 확인'}</button></div>
+      <p className="bands-help" role="status" aria-live="polite">{availability.status === 'available' && availability.slug === slug ? '사용 가능한 주소입니다.' : availability.status === 'unavailable' && availability.slug === slug ? '이미 사용 중인 주소입니다.' : availability.status === 'loading' && availability.slug === slug ? '주소 사용 여부를 확인하고 있습니다…' : availability.status === 'error' && availability.slug === slug ? '주소 사용 여부를 확인하지 못했습니다. 다시 시도해 주세요.' : ''}</p>
+      <p className="bands-help band-request-url-preview">생성될 주소(예시): {validSlug ? `${window.location.origin}${safeBandPath(slug)}` : '올바른 영어명을 입력하면 표시됩니다.'}</p>
+      <label>소개<textarea name="description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength="2000" disabled={busy} /></label><button type="submit" className="primary-btn" disabled={busy || !validSlug || availability.slug !== slug || availability.status !== 'available'}>{busy ? '요청 중…' : '생성 요청 보내기'}</button>
     </form>
     {result && <p role="status">“{result.name}” 생성 요청이 {result.status === 'pending' ? '승인 대기 중' : result.status}입니다.</p>}{error && <p role="alert" className="auth-error">{error}</p>}
   </main>;
