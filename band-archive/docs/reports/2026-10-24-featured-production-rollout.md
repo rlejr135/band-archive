@@ -32,3 +32,15 @@ This record will be appended with deployment results after they are reported. Un
 - Frontend push remains pending.
 
 This follow-up supersedes the earlier “Fly.io deployment: running” status. The backend deployment is complete; the frontend push is still not complete.
+
+## Frontend publication and final checks
+
+- Normal push to `origin/master` completed at commit `3ad2f1f9183c4c73094d4847e519e6e807785083`.
+- Cloudflare Pages is serving [https://band-archive.pages.dev](https://band-archive.pages.dev); the HTML and live JavaScript asset `/assets/index-WspcnyLK.js` were verified.
+- All checked live bundle markers were present: `GenericTitleBandArchive`, `representative-media`, `/portal`, `/guide`, `/community/`, and API host `https://band-archive.fly.dev`.
+- Validation counts remain: frontend 387 passed, backend 1168 passed, featured-media operator 7 passed.
+- Local mocked desktop and mobile UI states were verified. These were not authenticated production writes: representative-item selection, replay upload, and R2 operations were not exercised in the production smoke checks.
+- User secrets were preserved.
+- Non-blocking P2 follow-ups remain: the existing private-admin/non-member direct-management-route constraint, and the migration-linked rehearsal restriction. These were recorded as limitations, not bypassed.
+
+This final follow-up supersedes the earlier “Frontend push: not run/pending” status. Production representative-media writes, replay uploads, and R2 operations remain untested.
