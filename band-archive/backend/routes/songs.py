@@ -389,12 +389,7 @@ def link_media_rehearsal(media_id):
 
 @songs_bp.route('/media/<int:media_id>/featured', methods=['PATCH'])
 def set_featured_media(media_id):
-    media = _get_legacy_media_or_404(media_id)
-
-    Media.query.filter_by(band_id=media.band_id, song_id=media.song_id, is_featured=True).update({'is_featured': False})
-    media.is_featured = True
-    db.session.commit()
-    return jsonify(media.to_dict()), 200
+    reject_legacy_destructive_write()
 
 
 @songs_bp.route('/media/<int:media_id>/rename', methods=['PUT'])

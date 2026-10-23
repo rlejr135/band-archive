@@ -631,6 +631,9 @@ class Media(db.Model):
         db.CheckConstraint("visibility IN ('PUBLIC', 'MEMBERS')", name='ck_media_visibility'),
         db.Index('ix_media_band_song_visibility_score_id', 'band_id', 'song_id', 'visibility', 'vote_score', 'id'),
         db.Index('ix_media_band_rehearsal_visibility_score_id', 'band_id', 'rehearsal_id', 'visibility', 'vote_score', 'id'),
+        db.Index('uq_media_featured_band_song', 'band_id', 'song_id', unique=True,
+                 sqlite_where=db.text('is_featured IS TRUE'),
+                 postgresql_where=db.text('is_featured IS TRUE')),
     )
 
     def to_dict(self, viewer_vote=0):

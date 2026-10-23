@@ -8,14 +8,14 @@ from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import aliased, selectinload
 
 from band_access import (
-    content_capabilities, current_audience, optional_auth, read_scope_for_id, visible_object_or_404,
-    visible_query,
+    BandReadScope, MembershipAudience, RequestAudience, content_capabilities, current_audience,
+    optional_auth, read_scope_for_id, visible_object_or_404, visible_query,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
 from member_profile_service import active_profile_condition
 from content_restrictions import prime_unrestricted_records, restriction_predicate
-from models import (Announcement, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
+from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, R2DeletionTask, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
@@ -61,6 +61,44 @@ def _scope(band_id):
     # ``read_scope_for_id`` already proved this record is live.  The extra
     # lookup only supplies the resolved policy to pure serializers.
     return scope_with_band_visibility(scope, band)
+
+
+def _can_feature_for_scope(scope):
+    if scope.audience.user_id is None:
+        return False
+    actor = AppUser.query.filter_by(id=scope.audience.user_id).populate_existing().one_or_none()
+    return bool(actor and actor.status == 'active' and actor.email_verified is True and (
+        actor.is_platform_admin is True
+        or (scope.membership is not None and scope.membership.role == 'owner')
+    ))
+
+
+def _featured_management_scope(band_id):
+    audience = current_audience()
+    if audience.user_id is None:
+        raise ValidationError('Authentication is required.', 401)
+    actor = AppUser.query.filter_by(id=audience.user_id).populate_existing().one_or_none()
+    if actor is None or actor.status != 'active' or actor.email_verified is not True:
+        raise ValidationError('An active, verified account is required.', 403)
+    membership = BandMembership.query.filter_by(
+        band_id=band_id, user_id=actor.id, status='active',
+    ).one_or_none()
+    if actor.is_platform_admin is not True and not (membership and membership.role == 'owner'):
+        raise ValidationError('Only a band owner or platform administrator may manage featured media.', 403)
+    band = Band.query.filter(Band.id == band_id, Band.deleted_at.is_(None)).one_or_none()
+    if band is None:
+        raise NotFoundError('Band not found')
+    current = RequestAudience(
+        user_id=actor.id, subject=actor.supabase_user_id, account_active=True,
+        email_verified=True, is_platform_admin=actor.is_platform_admin is True,
+    )
+    member_audience = MembershipAudience(
+        id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
+        user_subject=actor.supabase_user_id, user_display_name=actor.display_name, user_email=actor.email,
+    ) if membership else None
+    return scope_with_band_visibility(BandReadScope(
+        band_id=band.id, band_slug=band.slug, audience=current, membership=member_audience,
+    ), band)
 
 
 def _page_request():
@@ -323,6 +361,27 @@ def _song_graph_sql(scope):
 
 
 def _media_graph_sql(scope):
+    predicates = list(_media_tenant_graph_sql(scope))
+    if not scope.is_member:
+        song_is_public = exists().where(and_(
+            Song.id == Media.song_id, Song.band_id == scope.band_id, Song.visibility == 'PUBLIC',
+        ))
+        rehearsal_is_public = or_(
+            Media.rehearsal_id.is_(None),
+            exists().where(and_(Rehearsal.id == Media.rehearsal_id, Rehearsal.band_id == scope.band_id,
+                                Rehearsal.visibility == 'PUBLIC')),
+        )
+        no_member_song_rehearsal = ~exists().where(and_(
+            rehearsal_songs.c.song_id == Media.song_id,
+            rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+            Rehearsal.band_id == scope.band_id,
+            Rehearsal.visibility != 'PUBLIC',
+        ))
+        predicates.extend((song_is_public, rehearsal_is_public, no_member_song_rehearsal))
+    return predicates
+
+
+def _media_tenant_graph_sql(scope):
     song_is_scoped = exists().where(and_(Song.id == Media.song_id, Song.band_id == scope.band_id))
     rehearsal_is_scoped = or_(
         Media.rehearsal_id.is_(None),
@@ -333,26 +392,7 @@ def _media_graph_sql(scope):
         rehearsal_songs.c.rehearsal_id == Rehearsal.id,
         Rehearsal.band_id != scope.band_id,
     ))
-    predicates = [song_is_scoped, rehearsal_is_scoped, ~foreign_song_rehearsal]
-    if not scope.is_member:
-        song_is_public = exists().where(and_(
-            Song.id == Media.song_id, Song.band_id == scope.band_id, Song.visibility == 'PUBLIC',
-        ))
-        rehearsal_is_public = or_(
-            Media.rehearsal_id.is_(None),
-            exists().where(and_(
-                Rehearsal.id == Media.rehearsal_id, Rehearsal.band_id == scope.band_id,
-                Rehearsal.visibility == 'PUBLIC',
-            )),
-        )
-        no_member_song_rehearsal = ~exists().where(and_(
-            rehearsal_songs.c.song_id == Media.song_id,
-            rehearsal_songs.c.rehearsal_id == Rehearsal.id,
-            Rehearsal.band_id == scope.band_id,
-            Rehearsal.visibility != 'PUBLIC',
-        ))
-        predicates.extend((song_is_public, rehearsal_is_public, no_member_song_rehearsal))
-    return predicates
+    return [song_is_scoped, rehearsal_is_scoped, ~foreign_song_rehearsal]
 
 
 def _rehearsal_graph_sql(scope):
@@ -418,14 +458,18 @@ def list_songs(band_id):
         parent_visibility=scope.band_visibility,
     ).filter(*_song_graph_sql(scope))
     page, pagination = _page_query(query, (Song.id.asc(),), limit, offset)
-    return jsonify({'songs': [serialize_song(scope, song) for song in page], 'pagination': pagination})
+    can_feature = _can_feature_for_scope(scope)
+    songs = [dict(serialize_song(scope, song), can_feature=can_feature) for song in page]
+    return jsonify({'songs': songs, 'pagination': pagination})
 
 
 @content_reads_bp.get('/songs/<int:song_id>')
 @optional_auth
 def get_song(band_id, song_id):
     scope = _scope(band_id)
-    return jsonify({'song': serialize_song(scope, _song_or_404(song_id, scope))})
+    song = serialize_song(scope, _song_or_404(song_id, scope))
+    song['can_feature'] = _can_feature_for_scope(scope)
+    return jsonify({'song': song})
 
 
 @content_reads_bp.get('/songs/<int:song_id>/media')
@@ -442,6 +486,147 @@ def list_song_media(band_id, song_id):
     page, pagination = _page_query(query, (Media.vote_score.desc(), Media.id.asc()), limit, offset)
     viewer_votes = _page_viewer_votes(scope, page)
     return jsonify({'media': [serialize_media(scope, item, viewer_votes.get(item.id, 0)) for item in page], 'pagination': pagination})
+
+
+def _featured_media_query(scope):
+    return visible_query(
+        Media.query.options(selectinload(Media.rehearsal),
+                            selectinload(Media.song).selectinload(Song.rehearsals)),
+        Media, scope, parent_visibility=scope.band_visibility,
+    ).filter(
+        Media.is_featured.is_(True),
+        _media_playable_sql(),
+        *_media_graph_sql(scope),
+        *_media_valid_visibility_graph_sql(scope),
+        *_media_pending_deletes_sql(),
+    )
+
+
+def _media_playable_sql():
+    def present(column):
+        return func.nullif(func.trim(column), '').is_not(None)
+
+    playable_audio = and_(
+        Media.file_type == 'audio', Media.original_pruned_at.is_(None),
+        or_(present(Media.object_key), present(Media.filename)),
+    )
+    playable_video = and_(
+        Media.file_type == 'video',
+        or_(
+            and_(Media.original_pruned_at.is_(None),
+                 or_(present(Media.object_key), present(Media.filename))),
+            present(Media.video_720_object_key), present(Media.video_720_filename),
+        ),
+    )
+    return or_(playable_audio, playable_video)
+
+
+def _media_valid_visibility_graph_sql(scope):
+    valid_visibilities = ('PUBLIC', 'MEMBERS')
+    song_is_valid = exists().where(and_(
+        Song.id == Media.song_id, Song.band_id == scope.band_id,
+        Song.visibility.in_(valid_visibilities),
+    ))
+    rehearsal_is_valid = or_(
+        Media.rehearsal_id.is_(None),
+        exists().where(and_(
+            Rehearsal.id == Media.rehearsal_id, Rehearsal.band_id == scope.band_id,
+            Rehearsal.visibility.in_(valid_visibilities),
+        )),
+    )
+    no_invalid_song_rehearsal = ~exists().where(and_(
+        rehearsal_songs.c.song_id == Media.song_id,
+        rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+        Rehearsal.band_id == scope.band_id,
+        or_(Rehearsal.visibility.is_(None), Rehearsal.visibility.notin_(valid_visibilities)),
+    ))
+    return Media.visibility.in_(valid_visibilities), song_is_valid, rehearsal_is_valid, no_invalid_song_rehearsal
+
+
+def _media_pending_deletes_sql():
+    pending_direct_rehearsal = exists().where(and_(
+        Rehearsal.id == Media.rehearsal_id, Rehearsal.band_id == Media.band_id,
+        ~_not_pending_delete(Rehearsal, 'rehearsal'),
+    ))
+    pending_linked_rehearsal = exists().where(and_(
+        rehearsal_songs.c.song_id == Media.song_id,
+        rehearsal_songs.c.rehearsal_id == Rehearsal.id,
+        Rehearsal.band_id == Media.band_id,
+        ~_not_pending_delete(Rehearsal, 'rehearsal'),
+    ))
+    song_not_pending_delete = exists().where(and_(
+        Song.id == Media.song_id, Song.band_id == Media.band_id,
+        _not_pending_delete(Song, 'song'),
+    ))
+    return (
+        _not_pending_delete(Media, 'media'), song_not_pending_delete,
+        ~pending_direct_rehearsal, ~pending_linked_rehearsal,
+    )
+
+
+@content_reads_bp.get('/featured-media')
+@optional_auth
+def list_featured_media(band_id):
+    scope = _scope(band_id)
+    limit, offset = _page_request()
+    duplicate_song = db.session.query(Media.song_id).filter(
+        Media.band_id == scope.band_id, Media.is_featured.is_(True),
+    ).group_by(Media.song_id).having(func.count(Media.id) > 1).limit(1).first()
+    if duplicate_song is not None:
+        raise NotFoundError('Resource not found')
+    query = _featured_media_query(scope)
+    page, pagination = _page_query(query, (Media.created_at.desc(), Media.id.desc()), limit, offset)
+    can_feature = _can_feature_for_scope(scope)
+    values = []
+    for item in page:
+        if not graph_is_scoped(scope, item):
+            raise NotFoundError('Resource not found')
+        song = item.song
+        value = serialize_media(scope, item)
+        value['song_summary'] = {'id': song.id, 'title': song.title, 'artist': song.artist}
+        value['can_feature'] = can_feature
+        values.append(value)
+    return jsonify({'media': values, 'pagination': pagination})
+
+
+@content_reads_bp.get('/songs/<int:song_id>/featured-media/candidates')
+@optional_auth
+def list_featured_media_candidates(band_id, song_id):
+    scope = _featured_management_scope(band_id)
+    song = Song.query.filter_by(id=song_id, band_id=scope.band_id).one_or_none()
+    if song is None:
+        raise NotFoundError('Resource not found')
+    from content_restrictions import require_unrestricted
+    require_unrestricted(song)
+    if song.visibility not in {'PUBLIC', 'MEMBERS'}:
+        raise NotFoundError('Resource not found')
+    if db.session.query(_not_pending_delete(Song, 'song')).filter(Song.id == song.id).scalar() is not True:
+        raise NotFoundError('Resource not found')
+
+    limit, offset = _page_request()
+    query = Media.query.options(
+        selectinload(Media.rehearsal), selectinload(Media.song).selectinload(Song.rehearsals),
+    ).filter(
+        Media.band_id == scope.band_id, Media.song_id == song.id,
+        restriction_predicate(Media, band_id=scope.band_id), _media_playable_sql(),
+        *_media_tenant_graph_sql(scope), *_media_valid_visibility_graph_sql(scope),
+        *_media_pending_deletes_sql(),
+    )
+    page, pagination = _page_query(query, (Media.created_at.desc(), Media.id.desc()), limit, offset)
+    from v2_content_serializers import _media_display_name, media_visibility
+    values = []
+    for item in page:
+        if not graph_is_scoped(scope, item):
+            raise NotFoundError('Resource not found')
+        visibility = media_visibility(scope, item)
+        values.append({
+            'id': item.id, 'song_id': song.id, 'file_type': item.file_type,
+            'display_name': _media_display_name(item), 'is_featured': bool(item.is_featured),
+            'effective_visibility': visibility, 'can_feature': True,
+            'created_at': item.created_at.isoformat() if item.created_at else None,
+            'song_summary': {'id': song.id, 'title': song.title, 'artist': song.artist},
+        })
+    return jsonify({'media': values, 'pagination': pagination})
 
 
 @content_reads_bp.get('/rehearsals')

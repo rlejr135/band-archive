@@ -148,7 +148,7 @@ def test_email_outbox_revision_metadata_upgrade_and_populated_downgrade_guard(tm
     app = _migration_app(database_path)
     try:
         with app.app_context():
-            assert migration_head_revision() == '20261023_23'
+            assert migration_head_revision() == '20261024_24'
             assert _version(app) == migration_head_revision()
             with db.engine.connect() as connection:
                 assert 'band_request_email_outbox' in inspect(connection).get_table_names()
@@ -896,12 +896,14 @@ class _PostgresIndexesConnection:
     dialect = type('Dialect', (), {'name': 'postgresql'})()
 
     def __init__(self, owner_predicate, request_predicate, gallery_predicate='(is_featured IS TRUE)',
+                 featured_media_predicate='(is_featured IS TRUE)',
                  restriction_predicate="((state)::text = 'active'::text)",
                  upload_predicate="((event_type)::text = 'upload_policy_confirmed'::text)"):
         self.rows = [
             ('band_membership', 'uq_band_membership_active_owner', owner_predicate),
             ('band_creation_request', 'uq_band_creation_request_pending_user_slug', request_predicate),
             ('gallery_image', 'uq_gallery_image_featured_band', gallery_predicate),
+            ('media', 'uq_media_featured_band_song', featured_media_predicate),
             ('media_vote', 'uq_media_vote_membership', '(created_by_membership_id IS NOT NULL)'),
             ('song_suggestion_vote', 'uq_song_suggestion_vote_user', '(voter_user_id IS NOT NULL)'),
             ('legacy_band_claim_token', 'uq_legacy_band_claim_outstanding',

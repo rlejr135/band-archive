@@ -48,6 +48,7 @@ PHASE20_REVISION = '20261019_20'
 PHASE21_REVISION = '20261020_21'
 PHASE22_REVISION = '20261021_22'
 PHASE23_REVISION = '20261023_23'
+PHASE24_REVISION = '20261024_24'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -142,6 +143,16 @@ def baseline_metadata():
     _remove_future_admission_and_rehearsal_type(metadata)
     _remove_future_band_logo(metadata)
     _restore_pre_phase7_content_writes(metadata)
+    _remove_featured_media_index(metadata)
+    return metadata
+
+
+def _remove_featured_media_index(metadata):
+    media = metadata.tables.get('media')
+    if media is not None:
+        index = next((item for item in media.indexes if item.name == 'uq_media_featured_band_song'), None)
+        if index is not None:
+            media.indexes.remove(index)
     return metadata
 
 
@@ -510,6 +521,17 @@ def phase23_metadata():
     rehearsal.append_column(db.metadata.tables['rehearsal'].c.rehearsal_type._copy())
     rehearsal.append_constraint(CheckConstraint(
         "rehearsal_type IN ('REGULAR', 'EXTRA', 'LIVE', 'OTHER', 'UNCLASSIFIED')", name='ck_rehearsal_type'))
+    _remove_featured_media_index(metadata)
+    return metadata
+
+
+def phase24_metadata():
+    """Revision-24 snapshot with one featured media row per band and song."""
+    metadata = phase23_metadata()
+    media = metadata.tables['media']
+    Index('uq_media_featured_band_song', media.c.band_id, media.c.song_id, unique=True,
+          sqlite_where=text('is_featured IS TRUE'),
+          postgresql_where=text('is_featured IS TRUE'))
     return metadata
 
 
@@ -1910,52 +1932,54 @@ def metadata_for_recorded_revision(revision):
     if revision == BASELINE_REVISION:
         return baseline_metadata()
     if revision == AUTH_REVISION:
-        return auth_metadata()
+        return _remove_featured_media_index(auth_metadata())
     if revision == PHASE3_REVISION:
-        return phase3_metadata()
+        return _remove_featured_media_index(phase3_metadata())
     if revision == PHASE3_HARDENED_REVISION:
-        return phase3_hardened_metadata()
+        return _remove_featured_media_index(phase3_hardened_metadata())
     if revision == PHASE4_REVISION:
-        return phase4_metadata()
+        return _remove_featured_media_index(phase4_metadata())
     if revision == PHASE6_REVISION:
-        return phase6_metadata()
+        return _remove_featured_media_index(phase6_metadata())
     if revision == PHASE7_REVISION:
-        return phase7_metadata()
+        return _remove_featured_media_index(phase7_metadata())
     if revision == PHASE8_REVISION:
-        return phase8_metadata()
+        return _remove_featured_media_index(phase8_metadata())
     if revision == PHASE9_REVISION:
-        return phase9_metadata()
+        return _remove_featured_media_index(phase9_metadata())
     if revision == PHASE10_REVISION:
-        return phase10_metadata()
+        return _remove_featured_media_index(phase10_metadata())
     if revision == PHASE11_REVISION:
-        return phase11_metadata()
+        return _remove_featured_media_index(phase11_metadata())
     if revision == PHASE12_REVISION:
-        return phase12_metadata()
+        return _remove_featured_media_index(phase12_metadata())
     if revision == PHASE13_REVISION:
         # Revision 13 hardens PostgreSQL access only; its structural snapshot
         # is identical to revision 12. Keep this historical snapshot explicit
         # so upgrades from the recorded 13 head can be safely preflighted.
-        return phase12_metadata()
+        return _remove_featured_media_index(phase12_metadata())
     if revision == PHASE14_REVISION:
-        return phase14_metadata()
+        return _remove_featured_media_index(phase14_metadata())
     if revision == PHASE15_REVISION:
-        return phase15_metadata()
+        return _remove_featured_media_index(phase15_metadata())
     if revision == PHASE16_REVISION:
-        return phase16_metadata()
+        return _remove_featured_media_index(phase16_metadata())
     if revision == PHASE17_REVISION:
-        return phase17_metadata()
+        return _remove_featured_media_index(phase17_metadata())
     if revision == PHASE18_REVISION:
-        return phase18_metadata()
+        return _remove_featured_media_index(phase18_metadata())
     if revision == PHASE19_REVISION:
-        return phase19_metadata()
+        return _remove_featured_media_index(phase19_metadata())
     if revision == PHASE20_REVISION:
-        return phase20_metadata()
+        return _remove_featured_media_index(phase20_metadata())
     if revision == PHASE21_REVISION:
-        return phase21_metadata()
+        return _remove_featured_media_index(phase21_metadata())
     if revision == PHASE22_REVISION:
-        return phase22_metadata()
+        return _remove_featured_media_index(phase22_metadata())
     if revision == PHASE23_REVISION:
         return phase23_metadata()
+    if revision == PHASE24_REVISION:
+        return phase24_metadata()
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

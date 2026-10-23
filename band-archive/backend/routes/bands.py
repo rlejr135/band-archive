@@ -5,7 +5,7 @@ import json
 from flask import Blueprint, after_this_request, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
-from band_access import (BandReadScope, MembershipAudience, current_audience, optional_auth,
+from band_access import (BandReadScope, MembershipAudience, RequestAudience, current_audience, optional_auth,
                          read_scope_for_slug)
 from band_service import (
     ACTIVE, MANAGER_ROLES, approve_membership, band_dict, close_band, create_invite,
@@ -17,7 +17,7 @@ from band_service import (
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import Band, BandCreationRequest, BandInviteCode, BandLogo, BandMembership, GalleryImage
+from models import Band, BandCreationRequest, BandInviteCode, BandLogo, BandMembership, GalleryImage, Song
 from routes.search import search_places_for_member
 from voc_validation import stored_member_position_values
 
@@ -266,6 +266,69 @@ def get_band_logo_management(band_slug):
                     'permissions': {'can_manage_logo': True}, 'logo': logo, 'gallery': gallery,
                     'pagination': {'limit': limit, 'offset': offset, 'total': total,
                                    'has_more': offset + len(rows) < total}})
+
+
+@bands_bp.get('/bands/by-slug/<string:band_slug>/manage/representative-media')
+@optional_auth
+def get_representative_media_management(band_slug):
+    """Expose only the band/song metadata needed by the narrow manager UI."""
+    band = Band.query.filter_by(slug=band_slug).filter(Band.deleted_at.is_(None)).one_or_none()
+    if band is None:
+        raise NotFoundError('Resource not found')
+    audience = current_audience()
+    if not audience.authenticated:
+        raise ValidationError('Authentication is required.', 401)
+    user = current_app_user(required=True)
+    membership = BandMembership.query.filter_by(
+        band_id=band.id, user_id=user.id, status=ACTIVE,
+    ).one_or_none()
+    if user.status != ACTIVE or user.email_verified is not True:
+        raise ValidationError('An active, verified account is required.', 403)
+    if user.is_platform_admin is not True and not (membership and membership.role == 'owner'):
+        raise ValidationError('Only a band owner or platform administrator may manage featured media.', 403)
+
+    try:
+        limit = int(request.args.get('limit', 25))
+        offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        raise ValidationError('limit and offset must be integers.')
+    if not 1 <= limit <= 100 or not 0 <= offset <= 100_000:
+        raise ValidationError('limit must be 1-100 and offset must be between 0 and 100000.')
+
+    from content_restrictions import restriction_predicate
+    from routes.content_reads import _not_pending_delete, _song_graph_sql
+    from v2_content_serializers import scope_with_band_visibility
+
+    member_audience = MembershipAudience(
+        id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
+        user_subject=user.supabase_user_id, user_display_name=user.display_name, user_email=user.email,
+    ) if membership else None
+    scope = scope_with_band_visibility(BandReadScope(
+        band_id=band.id, band_slug=band.slug,
+        audience=RequestAudience(
+            user_id=user.id, subject=user.supabase_user_id, account_active=True,
+            email_verified=True, is_platform_admin=user.is_platform_admin is True,
+        ),
+        membership=member_audience,
+    ), band)
+    query = Song.query.filter(
+        Song.band_id == band.id,
+        Song.visibility.in_(('PUBLIC', 'MEMBERS')),
+        restriction_predicate(Song, band_id=band.id),
+        *_song_graph_sql(scope),
+        _not_pending_delete(Song, 'song'),
+    )
+    total = query.count()
+    songs = query.order_by(Song.id.asc()).offset(offset).limit(limit).all()
+    return jsonify({
+        'band': {'id': band.id, 'slug': band.slug, 'name': band.name, 'can_feature': True},
+        'songs': [
+            {'id': song.id, 'title': song.title, 'artist': song.artist, 'can_feature': True}
+            for song in songs
+        ],
+        'pagination': {'limit': limit, 'offset': offset, 'total': total,
+                       'has_more': offset + len(songs) < total},
+    })
 
 
 @bands_bp.get('/bands/by-slug/<string:band_slug>/introduction')
