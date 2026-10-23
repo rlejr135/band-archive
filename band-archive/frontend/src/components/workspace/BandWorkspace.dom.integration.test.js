@@ -63,11 +63,12 @@ test('active member roster marks self, edits optional profile and refreshes card
     assert.match(view.getByText('다른 멤버').closest('article').textContent, /드럼/);
     assert.equal(view.getByText('다른 멤버').closest('article').querySelector('button'), null);
     await userEvent.click(view.getAllByRole('button', { name: '내 프로필 수정' })[0]);
+    await view.findByLabelText('밴드에서 사용할 이름'); await userEvent.setup({ document: dom.window.document }).clear(view.getByLabelText('밴드에서 사용할 이름')); await userEvent.type(view.getByLabelText('밴드에서 사용할 이름'), '새 밴드 이름');
     await view.findByLabelText('간단한 소개'); await userEvent.type(view.getByLabelText('간단한 소개'), '함께 연주해요');
     await userEvent.click(view.getByRole('checkbox', { name: '베이스', exact: true }));
     await userEvent.click(view.getByRole('button', { name: '저장', exact: true }));
-    await view.findByText('내 프로필을 저장했습니다.'); await view.findByText('함께 연주해요');
-    assert.equal(listReads, 2); assert.equal(writes.length, 1); assert.deepEqual(writes[0].positions, ['BASS']);
+    await view.findByText('내 프로필을 저장했습니다.'); await view.findByText('함께 연주해요'); await view.findByText('새 밴드 이름');
+    assert.equal(listReads, 2); assert.equal(writes.length, 1); assert.deepEqual(writes[0], { name: '새 밴드 이름', biography: '함께 연주해요', positions: ['BASS'], profile_revision: 0 });
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -86,8 +87,10 @@ test('self detail updates its biography immediately while other member profile r
     const member = { user: { id: 'self' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
     const view = render(createElement(ReadOnlyApp, { entry: '/bands/profile-detail/members/51', authValue: member }));
     await view.findByText('기존 소개'); await userEvent.click(view.getByRole('button', { name: '내 프로필 수정' }));
-    await view.findByLabelText('간단한 소개'); await userEvent.setup({ document: dom.window.document }).clear(view.getByLabelText('간단한 소개')); await userEvent.type(view.getByLabelText('간단한 소개'), '변경한 소개');
-    await userEvent.click(view.getByRole('button', { name: '저장', exact: true })); await view.findByText('변경한 소개'); assert.equal(view.queryByRole('button', { name: '삭제' }), null);
+    const user = userEvent.setup({ document: dom.window.document });
+    await view.findByLabelText('밴드에서 사용할 이름'); await user.clear(view.getByLabelText('밴드에서 사용할 이름')); await user.type(view.getByLabelText('밴드에서 사용할 이름'), '상세 이름 변경');
+    await view.findByLabelText('간단한 소개'); await user.clear(view.getByLabelText('간단한 소개')); await user.type(view.getByLabelText('간단한 소개'), '변경한 소개');
+    await userEvent.click(view.getByRole('button', { name: '저장', exact: true })); await view.findByText('변경한 소개'); await view.findByText('상세 이름 변경'); assert.equal(view.queryByRole('button', { name: '삭제' }), null);
     view.unmount();
     const other = render(createElement(ReadOnlyApp, { entry: '/bands/profile-detail/members/52', authValue: member }));
     await other.findByText('다른 사람'); await other.findByText(/현재 밴드 멤버가 아닙니다/); assert.equal(other.queryByRole('button', { name: '내 프로필 수정' }), null);

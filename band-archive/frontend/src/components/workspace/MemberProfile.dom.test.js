@@ -16,6 +16,7 @@ const load = async () => { if (module) return; vite = await createServer({ serve
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 const profile = (overrides = {}) => ({ id: 4, name: '기덕', biography: '', positions: [], custom_position: '', profile_revision: 0, is_self: true, can_edit_profile: true, ...overrides });
+const user = userEvent.setup({ document: dom.window.document });
 const editor = (api, props = {}) => createElement(module.MemberProfileEditor, { band: { id: 8 }, api, onSaved: () => {}, onCancel: () => {}, ...props });
 
 test('own profile editor loads authenticated me endpoint and saves only biography, multiple positions and revision', async () => {
@@ -33,6 +34,52 @@ test('own profile editor loads authenticated me endpoint and saves only biograph
   await waitFor(() => assert.ok(saved));
   assert.deepEqual(JSON.parse(calls[1].options.body), { biography: '<b>함께 합주해요</b>', positions: ['VOCAL', 'GUITAR'], profile_revision: 0 });
   assert.equal(calls[1].options.method, 'PATCH'); assert.equal(calls[1].options.headers['Content-Type'], 'application/json');
+});
+
+test('band-local name loads from the member profile and saves its normalized value with the revision', async () => {
+  await load(); const writes = []; let saved;
+  const api = { requestJson: async (_path, options) => { if (options.method) { const body = JSON.parse(options.body); writes.push(body); return { member: profile({ ...body, name: body.name || '기덕', profile_revision: 1 }) }; } return { member: profile({ name: '기덕' }) }; } };
+  const view = render(editor(api, { onSaved: (member) => { saved = member; } }));
+  const name = await view.findByLabelText('밴드에서 사용할 이름'); assert.equal(name.value, '기덕'); assert.equal(name.required, true); assert.equal(name.maxLength, 200);
+  await user.click(name); await user.clear(name); await user.type(name, '  기타이름  ');
+  await user.click(view.getByRole('button', { name: '저장', exact: true })); await waitFor(() => assert.ok(saved));
+  assert.deepEqual(writes[0], { name: '기타이름', profile_revision: 0 }); assert.equal(saved.name, '기타이름');
+});
+
+test('band-local name rejects whitespace and invisible characters, recovers, and enforces the 100-character boundary', async () => {
+  await load(); let writes = 0; let payload;
+  const api = { requestJson: async (_path, options) => { if (options.method) { writes += 1; payload = JSON.parse(options.body); return { member: profile({ profile_revision: 1 }) }; } return { member: profile() }; } };
+  const view = render(editor(api)); const name = await view.findByLabelText('밴드에서 사용할 이름');
+  await user.click(name); await user.clear(name); await user.type(name, '   ');
+  assert.equal(name.value, '   '); assert.equal(name.getAttribute('aria-invalid'), 'true'); assert.match(view.getByRole('alert').textContent, /공백만으로 저장할 수 없습니다/);
+  assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true);
+  fireEvent.submit(view.container.querySelector('form')); assert.equal(writes, 0);
+
+  await user.clear(name); await user.type(name, '\u200b');
+  assert.equal(name.value, '\u200b'); assert.equal(name.getAttribute('aria-invalid'), 'true'); assert.match(view.getByRole('alert').textContent, /표시할 수 없는 문자/);
+  fireEvent.submit(view.container.querySelector('form')); assert.equal(writes, 0);
+
+  await user.clear(name); await user.type(name, 'x'.repeat(101));
+  assert.equal(name.value.length, 101); assert.equal(name.getAttribute('aria-invalid'), 'true'); assert.match(view.getByRole('alert').textContent, /100자 이내/);
+  assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true);
+  fireEvent.submit(view.container.querySelector('form')); assert.equal(writes, 0);
+  await user.clear(name); await user.type(name, 'x'.repeat(100));
+  assert.equal(name.value.length, 100); assert.equal(name.getAttribute('aria-invalid'), 'false');
+  assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
+  await user.click(view.getByRole('button', { name: '저장', exact: true }));
+  await waitFor(() => assert.equal(writes, 1)); assert.deepEqual(payload, { name: 'x'.repeat(100), profile_revision: 0 });
+});
+
+test('band-local name accepts 100 supplementary Unicode characters within the UTF-16 input ceiling', async () => {
+  await load(); let payload;
+  const api = { requestJson: async (_path, options) => { if (options.method) payload = JSON.parse(options.body); return { member: profile(options.method ? { ...payload, profile_revision: 1 } : {}) }; } };
+  const view = render(editor(api)); const name = await view.findByLabelText('밴드에서 사용할 이름'); const hundredEmoji = '😀'.repeat(100);
+  assert.equal(name.maxLength, 200);
+  await user.clear(name); await user.type(name, hundredEmoji);
+  assert.equal(Array.from(name.value).length, 100); assert.equal(name.value.length, 200); assert.equal(name.getAttribute('aria-invalid'), 'false');
+  assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
+  await user.click(view.getByRole('button', { name: '저장', exact: true })); await waitFor(() => assert.ok(payload));
+  assert.equal(payload.name, hundredEmoji); assert.equal(payload.profile_revision, 0);
 });
 
 test('optional profile fields may stay blank and custom text clears when OTHER is deselected', async () => {
