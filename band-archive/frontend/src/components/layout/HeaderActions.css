@@ -6,7 +6,6 @@
 .header-chevron { color: var(--color-text-muted); }
 .header-account { position: relative; flex: 0 0 auto; }
 .header-account-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 100; display: grid; gap: 3px; width: min(240px, calc(100vw - 32px)); padding: 8px; border: 1px solid var(--color-border); border-radius: var(--radius-md, 12px); background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-md); }
-.header-account-caption { padding: 7px 9px; font-size: .69rem; color: var(--color-text-muted); }
 .header-account-panel a,.header-account-panel button { box-sizing: border-box; width: 100%; display: block; padding: 10px; border: 0; border-radius: var(--radius-default, 8px); background: transparent; color: var(--color-text); font: inherit; font-size: .8rem; text-align: left; text-decoration: none; cursor: pointer; }
 .header-account-panel a:hover,.header-account-panel button:hover { background: var(--color-surface-raised); color: var(--color-accent); }
 .header-account-panel button:disabled { opacity: .65; cursor: wait; }

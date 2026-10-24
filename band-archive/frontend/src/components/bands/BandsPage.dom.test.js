@@ -40,6 +40,49 @@ test('account hub reads memberships once and renders platform review link only f
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('settings account and band management anchors focus and scroll to the existing sections on the same account page', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const previousScroll = dom.window.HTMLElement.prototype.scrollIntoView;
+  const scrolled = [];
+  dom.window.HTMLElement.prototype.scrollIntoView = function () { scrolled.push(this.id); };
+  globalThis.fetch = async () => response({ user: { is_platform_admin: false } });
+  const authValue = { user: { id: 'anchor-user' }, getAccessToken: async () => 'synthetic-token', refreshSession: async () => 'synthetic-token', loading: false, signOut: async () => {} };
+  const bandValue = { activeBands: [], pendingMemberships: [], selectedBand: null, selectBand: () => {}, loading: false, error: '', reload: () => {} };
+  try {
+    const view = render(createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: ['/account#profile-heading'] }, createElement(page.BandsPage)))));
+    await waitFor(() => assert.equal(document.activeElement?.id, 'profile-heading'));
+    assert.equal(scrolled.at(-1), 'profile-heading');
+    await userEvent.click(view.getByRole('button', { name: '설정' }));
+    await userEvent.click(view.getByRole('link', { name: '밴드 관리', exact: true }));
+    await waitFor(() => assert.equal(document.activeElement?.id, 'memberships-heading'));
+    assert.equal(scrolled.at(-1), 'memberships-heading');
+    assert.equal(view.queryByRole('button', { name: '로그아웃' }), null);
+    await userEvent.click(view.getByRole('button', { name: '설정' }));
+    await userEvent.click(view.getByRole('link', { name: '계정', exact: true }));
+    await waitFor(() => assert.equal(document.activeElement?.id, 'profile-heading'));
+    assert.equal(scrolled.at(-1), 'profile-heading');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousScroll) dom.window.HTMLElement.prototype.scrollIntoView = previousScroll;
+    else delete dom.window.HTMLElement.prototype.scrollIntoView;
+  }
+});
+
+test('the band management anchor waits for memberships to finish loading before moving focus', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({ user: { is_platform_admin: false } });
+  const authValue = { user: { id: 'loading-anchor-user' }, getAccessToken: async () => 'synthetic-token', refreshSession: async () => 'synthetic-token', loading: false, signOut: async () => {} };
+  const tree = (loading) => createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: { activeBands: [], pendingMemberships: [], selectedBand: null, selectBand: () => {}, loading, error: '', reload: () => {} } }, createElement(MemoryRouter, { initialEntries: ['/account#memberships-heading'] }, createElement(page.BandsPage))));
+  try {
+    const view = render(tree(true));
+    assert.notEqual(document.activeElement?.id, 'memberships-heading');
+    view.rerender(tree(false));
+    await waitFor(() => assert.equal(document.activeElement?.id, 'memberships-heading'));
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('account hub shows the superadmin label and management link only for a strict server true', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => String(url).endsWith('/api/v2/me') ? response({ user: { is_platform_admin: true } }) : response({ bands: [], pending_memberships: [] });

@@ -1,4 +1,6 @@
 .bands-shell { min-height: 100vh; padding: 0 clamp(14px, 4vw, 52px) 48px; background: var(--color-background); color: var(--color-text); }
+.account-section-heading h2[id] { scroll-margin-top: 24px; }
+.account-section-heading h2[id]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 5px; border-radius: var(--radius-default); }
 .bands-header { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 18px; max-width: 1160px; margin: 0 auto; border-bottom: 1px solid var(--color-border); border-bottom-color: color-mix(in srgb, var(--color-border) 55%, transparent); }
 .bands-brand { flex: 0 0 auto; color: var(--color-text); font-weight: 700; text-decoration: none; letter-spacing: -.03em; }
 .bands-brand { display: inline-flex; align-items: center; gap: 9px; }

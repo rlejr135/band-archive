@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useBands } from '../../context/BandContext.jsx';
@@ -148,9 +148,22 @@ export const BandsPage = () => {
   const { user } = useAuth();
   const { activeBands, pendingMemberships, selectedBand, selectBand, loading, error, reload } = useBands();
   const navigate = useNavigate();
+  const location = useLocation();
+  const profileHeading = useRef(null);
+  const membershipsHeading = useRef(null);
   const name = profileName(user);
   const email = profileEmail(user);
   const { admin: isPlatformAdmin } = usePlatformAdmin();
+  const anchorReady = location.hash !== '#memberships-heading' || !loading;
+
+  useEffect(() => {
+    if (!anchorReady) return;
+    const target = location.hash === '#profile-heading' ? profileHeading.current
+      : location.hash === '#memberships-heading' ? membershipsHeading.current : null;
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'start', behavior: 'auto' });
+  }, [location.hash, location.key, anchorReady]);
 
   const openBand = (band) => {
     if (!band?.slug) return;
@@ -170,7 +183,7 @@ export const BandsPage = () => {
       </div>
 
       <section className="account-profile" aria-labelledby="profile-heading">
-        <div className="account-section-heading"><div><p className="account-eyebrow">PROFILE</p><h2 id="profile-heading">계정 정보</h2></div><Link to="/forgot-password">비밀번호 재설정</Link></div>
+        <div className="account-section-heading"><div><p className="account-eyebrow">PROFILE</p><h2 id="profile-heading" ref={profileHeading} tabIndex={-1}>계정 정보</h2></div><Link to="/forgot-password">비밀번호 재설정</Link></div>
         <dl className="profile-details">
           {name && <div><dt>표시 이름</dt><dd>{name}</dd></div>}
           <div><dt>이메일</dt><dd>{email || '이메일 정보 없음'}</dd></div>
@@ -179,7 +192,7 @@ export const BandsPage = () => {
       </section>
 
       <section className="account-memberships" aria-labelledby="memberships-heading">
-        <div className="account-section-heading"><div><p className="account-eyebrow">WORKSPACES</p><h2 id="memberships-heading">내 밴드</h2>{isPlatformAdmin && <span className="account-role">Superadmin</span>}</div><div className="account-section-actions">{isPlatformAdmin && <Link className="secondary-btn" to="/platform/band-requests">밴드 생성 요청 관리</Link>}<button type="button" className="secondary-btn" onClick={() => navigate('/bands/discover')}>공개 밴드 찾기</button><button type="button" className="primary-btn" onClick={() => navigate('/bands/request')}>밴드 생성 요청</button></div></div>
+        <div className="account-section-heading"><div><p className="account-eyebrow">WORKSPACES</p><h2 id="memberships-heading" ref={membershipsHeading} tabIndex={-1}>내 밴드</h2>{isPlatformAdmin && <span className="account-role">Superadmin</span>}</div><div className="account-section-actions">{isPlatformAdmin && <Link className="secondary-btn" to="/platform/band-requests">밴드 생성 요청 관리</Link>}<button type="button" className="secondary-btn" onClick={() => navigate('/bands/discover')}>공개 밴드 찾기</button><button type="button" className="primary-btn" onClick={() => navigate('/bands/request')}>밴드 생성 요청</button></div></div>
         {loading ? <p aria-live="polite">밴드 정보를 불러오는 중입니다…</p> : error ? <div className="account-error" role="alert"><span>{error}</span><button type="button" className="secondary-btn" onClick={reload}>다시 시도</button></div> : activeBands.length === 0 ? <div className="account-empty"><h3>아직 가입한 밴드가 없습니다</h3><p>공개 밴드를 둘러보거나 밴드 관리자에게 초대 링크를 요청해 주세요.</p></div> : <ul className="account-band-list">
           {activeBands.map((band) => <BandMembershipCard key={`${user?.id}:${band.id}`} band={band} userId={user?.id} selected={selectedBand?.id === band.id} onOpen={openBand} onLeave={() => {}} />)}
         </ul>}

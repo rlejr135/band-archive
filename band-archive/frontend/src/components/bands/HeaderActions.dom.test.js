@@ -54,13 +54,16 @@ test('loading and error are separate states and errors expose an explicit retry'
   assert.equal(retries, 1);
 });
 
-test('account disclosure closes on Escape and outside press and keeps logout operational', async () => {
+test('settings has exactly four ordered actions, closes on Escape and outside press, and keeps logout operational', async () => {
   let signouts = 0;
   const view = await mount({}, { signOut: async () => { signouts += 1; } });
-  const trigger = view.getByRole('button', { name: '계정 메뉴' });
+  const trigger = view.getByRole('button', { name: '설정' });
   fireEvent.click(trigger);
   assert.equal(trigger.getAttribute('aria-expanded'), 'true');
-  assert.equal(view.getByRole('link', { name: '홈으로' }).getAttribute('href'), '/portal');
+  assert.equal(view.queryByRole('button', { name: '계정 메뉴' }), null);
+  assert.deepEqual([...view.container.querySelectorAll('.header-account-panel > a, .header-account-panel > button')].map((item) => [item.textContent, item.getAttribute('href')]), [
+    ['홈', '/portal'], ['계정', '/account#profile-heading'], ['밴드 관리', '/account#memberships-heading'], ['로그아웃', null],
+  ]);
   fireEvent.keyDown(document, { key: 'Escape' });
   assert.equal(trigger.getAttribute('aria-expanded'), 'false');
   assert.equal(document.activeElement, trigger);
@@ -81,13 +84,13 @@ test('active band selection preserves the band id selection and slug route', asy
 
 test('leaving a route and returning through history does not reopen its old account disclosure', async () => {
   const view = await mount();
-  fireEvent.click(view.getByRole('button', { name: '계정 메뉴' }));
-  assert.equal(view.getByRole('button', { name: '계정 메뉴' }).getAttribute('aria-expanded'), 'true');
+  fireEvent.click(view.getByRole('button', { name: '설정' }));
+  assert.equal(view.getByRole('button', { name: '설정' }).getAttribute('aria-expanded'), 'true');
   fireEvent.click(view.getByRole('button', { name: '다른 경로 이동' }));
   assert.equal(view.getByTestId('location').textContent, '/guide');
-  assert.equal(view.getByRole('button', { name: '계정 메뉴' }).getAttribute('aria-expanded'), 'false');
+  assert.equal(view.getByRole('button', { name: '설정' }).getAttribute('aria-expanded'), 'false');
   fireEvent.click(view.getByRole('button', { name: '뒤로 이동' }));
   assert.equal(view.getByTestId('location').textContent, '/portal');
-  assert.equal(view.getByRole('button', { name: '계정 메뉴' }).getAttribute('aria-expanded'), 'false');
+  assert.equal(view.getByRole('button', { name: '설정' }).getAttribute('aria-expanded'), 'false');
   assert.equal(view.queryByRole('button', { name: '로그아웃' }), null);
 });
