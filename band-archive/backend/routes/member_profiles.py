@@ -2,7 +2,7 @@
 from flask import Blueprint, current_app, jsonify
 from auth_service import current_app_user, require_auth
 from member_profile_service import own_profile
-from routes.availability import payload
+from http_request_json import payload
 
 member_profiles_bp = Blueprint('member_profiles', __name__,
                                url_prefix='/api/v2/bands/<int:band_id>/members')

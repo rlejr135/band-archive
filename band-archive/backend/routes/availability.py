@@ -1,10 +1,9 @@
 """Authenticated band availability endpoints, deliberately absent from v1."""
-import json
-
 from flask import Blueprint, current_app, jsonify, request
 
 from auth_service import current_app_user, require_auth
 from errors import ValidationError
+from http_request_json import payload
 import availability_service as service
 
 availability_bp = Blueprint('availability', __name__, url_prefix='/api/v2/bands/<int:band_id>/availability')
@@ -21,28 +20,6 @@ def private_response(response):
 def schema_ready():
     if not current_app.config.get('BAND_API_SCHEMA_READY', False):
         return jsonify({'error': 'band_schema_unavailable'}), 503
-
-
-def payload():
-    if request.content_length is not None and request.content_length > 32768:
-        raise ValidationError('Calendar request too large.', 413)
-    raw = request.stream.read(32769)
-    if len(raw) > 32768:
-        raise ValidationError('Calendar request too large.', 413)
-    try:
-        def no_duplicates(pairs):
-            result = {}
-            for key, value in pairs:
-                if key in result:
-                    raise ValueError('Duplicate JSON key')
-                result[key] = value
-            return result
-        value = json.loads(raw, object_pairs_hook=no_duplicates)
-    except (ValueError, TypeError, UnicodeError, RecursionError):
-        raise ValidationError('A valid JSON object is required.')
-    if not isinstance(value, dict):
-        raise ValidationError('A JSON object is required.')
-    return value
 
 
 @availability_bp.get('')
