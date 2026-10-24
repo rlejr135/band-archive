@@ -63,8 +63,8 @@
   .global-header { min-height: 68px; flex-wrap: wrap; gap: 10px 14px; padding: 12px 0; }
   .global-brand { margin-right: auto; }
   .global-nav { order: 3; width: 100%; gap: 18px; }
-  .global-header-actions { gap: 7px; }
-  .global-header-actions .band-switcher { min-width: 125px; max-width: 150px; }
+  .global-header-actions { gap: 7px; width: 100%; order: 2; }
+  .global-header-actions .band-switcher { min-width: 0; max-width: none; }
   .global-header-actions .band-switcher label { font-size: 9px; }
   .global-header-actions .auth-account { display: none; }
   .portal-spaces { grid-template-columns: 1fr; gap: 9px; padding-bottom: 40px; }

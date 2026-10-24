@@ -9,7 +9,7 @@
 .account-settings-link:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
 .account-settings-link svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
 .bands-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 18px; }
-.bands-header .band-switcher { min-width: 160px; }
+.bands-header .band-switcher { min-width: 0; }
 .bands-header .band-switcher select { max-width: 220px; color: var(--color-text); background: var(--color-surface-raised); border-color: var(--color-border); }
 .bands-header .auth-account { color: var(--color-text-muted); font-size: .82rem; }
 .bands-header .nav-btn { padding: 7px 11px; color: var(--color-text-muted); font-size: .82rem; }

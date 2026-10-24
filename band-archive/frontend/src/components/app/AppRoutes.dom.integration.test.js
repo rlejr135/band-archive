@@ -165,7 +165,8 @@ test('workspace navigation stays on one horizontal scroll row at narrow widths',
   const css = readFileSync(new URL('../workspace/BandWorkspace.css', import.meta.url), 'utf8');
   assert.match(css, /\.workspace-header nav\{[^}]*flex-wrap:nowrap[^}]*overflow-x:auto/);
   assert.match(css, /@media \(max-width: 900px\)/);
-  assert.match(css, /\.workspace-actions \.band-switcher\{flex:0 0 142px\}/);
+  assert.match(css, /\.workspace-actions>\.header-actions\{flex:1 1 280px\}/);
+  assert.match(css, /\.workspace-actions\{[^}]*flex-wrap:wrap/);
   assert.doesNotMatch(css, /@media[^}]*workspace-header nav[^}]*display:\s*none/);
 });
 

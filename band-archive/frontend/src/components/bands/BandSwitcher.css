@@ -1,5 +1,11 @@
-.band-switcher { min-width: 150px; display: flex; flex-direction: column; gap: 3px; color: var(--text-secondary); font-size: .72rem; line-height: 1.2; }
-.band-switcher select { width: 100%; min-width: 0; max-width: 230px; padding: 8px 30px 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); background: var(--background-color); font: inherit; font-size: .86rem; font-weight: 600; }
-.band-switcher select:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-.band-switcher select:disabled { opacity: .76; cursor: wait; }
-.band-switcher-retry { width: max-content; border: 0; padding: 3px 0; color: var(--primary-color); background: transparent; font: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
+.band-switcher { min-width: 0; width: clamp(145px, 20vw, 220px); position: relative; color: var(--color-text-muted); font-size: .72rem; line-height: 1.2; }
+.band-switcher > label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.band-switcher select,.band-switcher-empty { box-sizing: border-box; width: 100%; min-width: 0; min-height: 40px; padding: 9px 28px 9px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-default, 8px); color: var(--color-text); background: var(--color-surface-raised); font: inherit; font-size: .78rem; font-weight: 650; text-overflow: ellipsis; }
+.band-switcher select:focus-visible,.band-switcher-empty:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.band-switcher select:disabled { opacity: .76; cursor: not-allowed; }
+.band-switcher[aria-busy="true"] select { cursor: wait; }
+.band-switcher-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; padding: 6px 10px; text-decoration: none; }
+.band-switcher-empty > span { color: var(--color-text-muted); font-size: .66rem; }
+.band-switcher-empty strong { color: var(--color-accent); font-size: .72rem; }
+.band-switcher-empty:hover { border-color: var(--color-accent); }
+.band-switcher-retry { width: 100%; margin-top: 4px; border: 1px solid var(--color-border); border-radius: var(--radius-default, 8px); padding: 5px 7px; color: var(--color-accent); background: var(--color-surface); font: inherit; text-align: left; cursor: pointer; }

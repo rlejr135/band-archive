@@ -151,7 +151,7 @@ test('resolved band title survives nested workspace routes and resets outside th
     await userEvent.click(view.getByRole('link', { name: '대표 미디어' }));
     await view.findByText('등록된 대표 미디어가 없습니다.');
     await waitFor(() => assert.equal(document.title, '미디어 밴드 · Band Archive'));
-    await userEvent.click(view.getByRole('link', { name: '내 계정' }));
+    await userEvent.click(view.getByRole('link', { name: '계정 설정' }));
     await view.findByText('계정 경로');
     await waitFor(() => assert.equal(document.title, 'Band Archive'));
   } finally { globalThis.fetch = previousFetch; }

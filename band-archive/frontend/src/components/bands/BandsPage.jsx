@@ -8,8 +8,7 @@ import { isUploadInProgress } from '../../services/uploadPresentation.js';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { memberPositionLabels } from '../workspace/memberPositions.js';
 import { InviteLinkGuidance } from './BandOnboarding.jsx';
-import BandSwitcher from './BandSwitcher.jsx';
-import AuthStatus from '../layout/AuthStatus.jsx';
+import HeaderActions from '../layout/HeaderActions.jsx';
 import './BandsPage.css';
 import { usePlatformAdmin } from './usePlatformAdmin.js';
 
@@ -162,7 +161,7 @@ export const BandsPage = () => {
   return <div className="bands-shell">
     <header className="bands-header">
       <Link to="/portal" className="bands-brand"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 24V8h8a5 5 0 0 1 3.5 8.6A5 5 0 0 1 17 26H8m5-13h3a2 2 0 1 0 0-4h-3m0 12h4a2 2 0 1 0 0-4h-4" /></svg></span>Band Archive</Link>
-      <div className="bands-header-actions"><BandSwitcher accountMode /><Link className="account-settings-link" to="/account" aria-label="계정 설정" title="계정 설정"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8 3.5a8.1 8.1 0 0 0-.1-1.3l1.5-1.2-1.5-2.6-1.8.7a7.9 7.9 0 0 0-2.2-1.3L15.6 4h-3.1l-.3 1.9A7.9 7.9 0 0 0 10 7.2l-1.8-.7-1.5 2.6 1.5 1.2a8.1 8.1 0 0 0 0 2.6l-1.5 1.2 1.5 2.6 1.8-.7a7.9 7.9 0 0 0 2.2 1.3l.3 1.9h3.1l.3-1.9a7.9 7.9 0 0 0 2.2-1.3l1.8.7 1.5-2.6-1.5-1.2c.1-.4.1-.8.1-1.2Z" /></svg></Link><AuthStatus /></div>
+      <div className="bands-header-actions"><HeaderActions accountMode /></div>
     </header>
     <main className="account-hub" aria-labelledby="account-hub-title">
       <div className="account-heading">

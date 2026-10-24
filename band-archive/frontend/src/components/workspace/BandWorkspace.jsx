@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useServicePolicy } from '../../context/ServicePolicyContext.jsx';
 import { reviewPublicVisibility } from '../../services/uploadPolicy.js';
 import { useBands } from '../../context/BandContext.jsx';
-import BandSwitcher from '../bands/BandSwitcher.jsx';
+import HeaderActions from '../layout/HeaderActions.jsx';
 import BandActivityDashboard from '../dashboard/BandActivityDashboard.jsx';
 import AvailabilityCalendar, { RehearsalTabs } from './AvailabilityCalendar.jsx';
 import { availabilityFingerprint, availabilityPath, PERIOD_LABELS, validDay } from './availabilityState.js';
@@ -62,7 +62,7 @@ export const BandWorkspace = () => {
   const { bandSlug } = useParams();
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { user, getAccessToken, refreshSession, signOut } = useAuth();
+  const { user, getAccessToken, refreshSession } = useAuth();
   const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
   const [state, setState] = useState({ loading: true, error: '', band: null });
   const requestGate = useRef(createWorkspaceRequestGate());
@@ -145,9 +145,7 @@ export const BandWorkspace = () => {
         </button>
         <div className="workspace-actions">
           <UploadCenter />
-          <BandSwitcher currentSlug={state.band.slug} />
-          <Link className="nav-btn workspace-account-link" to="/account">내 계정</Link>
-          {user ? <button className="nav-btn" onClick={async () => { await signOut(); navigate('/', { replace: true }); }}>로그아웃</button> : <button className="nav-btn" onClick={() => navigate('/login')}>로그인</button>}
+          <HeaderActions currentSlug={state.band.slug} />
         </div>
         <nav aria-label="밴드 공간">
           <NavLink end to={`/bands/${encodeURIComponent(state.band.slug)}`}>대시보드</NavLink>
