@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { API_URL } from '../services/api.js';
+import { API_URL } from '../services/apiConfig.js';
 import { validateServicePolicy } from '../services/servicePolicy.js';
 
 // eslint-disable-next-line react-refresh/only-export-components

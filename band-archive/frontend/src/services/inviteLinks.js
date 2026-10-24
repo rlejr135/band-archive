@@ -1,4 +1,4 @@
-import { API_URL } from './api.js';
+import { API_URL } from './apiConfig.js';
 
 const RESUME_STORAGE_KEY = 'band-invite-resume-context';
 const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';

@@ -1,7 +1,9 @@
 import { getVoterId } from './voterIdentity.js';
 import { withCommentTimestamp } from './commentTimestamp.js';
+import { API_URL } from './apiConfig.js';
 
-export const API_URL = import.meta.env?.VITE_API_URL || 'http://localhost:5000';
+// Preserve the existing import contract for legacy API consumers.
+export { API_URL };
 
 export const voterHeaders = (voterId = getVoterId()) => ({
   'X-Voter-ID': voterId,

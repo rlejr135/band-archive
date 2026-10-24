@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { UploadContext } from '../context/UploadContext';
 import { useAuth } from '../context/AuthContext';
-import { API_URL } from '../services/api';
+import { API_URL } from '../services/apiConfig.js';
 import { abortMultipartUpload, createUploadTarget, fetchMediaProcessing, getUploadTransport, getWebUploadTransport, MULTIPART_THRESHOLD_BYTES, nativeTargetPayload, normalizeMedia, retryMediaAudio, uploadBandMediaFile, uploadMediaFile } from '../services/mediaUploadManager';
 import { isNativeDurableVideo, mapUploadState, shouldUseNativeUpload } from '../services/uploadTransport';
 import { createBandUploadTransport } from '../services/bandUploadTransport';

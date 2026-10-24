@@ -1,4 +1,4 @@
-import { API_URL } from './api.js';
+import { API_URL } from './apiConfig.js';
 import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
 import { initiateMultipartSession } from './multipartSession.js';
 import { createBandGalleryUploadTransport } from './bandUploadTransport.js';

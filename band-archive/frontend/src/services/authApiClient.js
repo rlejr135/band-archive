@@ -1,4 +1,4 @@
-import { API_URL } from './api.js';
+import { API_URL } from './apiConfig.js';
 
 export class ApiRequestError extends Error {
   constructor(message, status, code = null) {
