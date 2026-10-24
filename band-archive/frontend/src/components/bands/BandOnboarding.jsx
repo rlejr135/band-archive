@@ -7,7 +7,7 @@ import { createSubmissionGuard } from '../../services/authSubmission.js';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
 import { formatInviteCreatedAt } from '../../services/bandDateTime.js';
 import { inviteManagerPath } from '../../services/inviteLinks.js';
-import { AnnouncementEditor } from '../workspace/BandWorkspace.jsx';
+import { AnnouncementEditor } from '../workspace/announcements/AnnouncementEditor.jsx';
 import { memberPositionLabels } from '../workspace/memberPositions.js';
 import { MemberRemovalButton } from './MemberRemoval.jsx';
 import { membershipName } from '../../services/memberManagement.js';

@@ -18,6 +18,7 @@ import BandPlacePicker from './BandPlacePicker.jsx';
 import { MemberProfileEditor, MemberProfileSummary } from './MemberProfile.jsx';
 import { BandDeleteAction } from './BandDeleteAction.jsx';
 import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
+import { AnnouncementEditor } from './announcements/AnnouncementEditor.jsx';
 import UploadCenter from '../common/UploadCenter.jsx';
 import MediaPlayer from '../common/MediaPlayer.jsx';
 import FileUpload from '../common/FileUpload.jsx';
@@ -25,6 +26,8 @@ import { UploadContext } from '../../context/UploadContext.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
 import { strictPositiveId } from './bandDashboardState.js';
 import './BandWorkspace.css';
+
+export { AnnouncementEditor };
 
 // This file intentionally starts request state from effects: each state reset
 // prevents a previous band/selection from rendering while its replacement is
@@ -615,43 +618,6 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
   return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2>{candidate.current && <p className="availability-notice">조율 후보: {candidate.current.date} · {PERIOD_LABELS[candidate.current.period]}. 정확한 합주 시각은 직접 입력해 주세요. 저장 직전 가능 상태를 다시 확인하지만 예약이나 참석을 보장하지는 않습니다.</p>}<label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>합주 유형<select name="rehearsal_type" value={value.rehearsal_type} onChange={change}>{REHEARSAL_TYPES.map(([type, text]) => <option key={type} value={type}>{type === 'UNCLASSIFIED' ? `${text} (유형 선택)` : text}</option>)}</select></label>{value.rehearsal_type === 'UNCLASSIFIED' && <p className="workspace-muted">기존 합주 유형은 추정하지 않았습니다. 실제 유형을 선택해 주세요.</p>}<label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label><BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} /><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving || resultUnknown}>{saving ? '저장 중…' : '저장'}</button></div></form>;
 };
 
-export const AnnouncementEditor = ({ announcement, band, api, workspaceKey, onSaved, onForbidden }) => {
-  const { config } = useServicePolicy();
-  const [editing, setEditing] = useState(false); const [content, setContent] = useState(''); const [visibility, setVisibility] = useState('MEMBERS'); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
-  const savingRef = useRef(false); const generation = useRef(0); const controllerRef = useRef(null);
-  const defaultVisibility = announcement?.visibility === 'PUBLIC' || announcement?.visibility === 'MEMBERS' ? announcement.visibility : band.default_visibility === 'PUBLIC' ? 'PUBLIC' : 'MEMBERS';
-  useEffect(() => {
-    generation.current += 1;
-    controllerRef.current?.abort(); controllerRef.current = null;
-    savingRef.current = false;
-    setEditing(false); setContent(announcement?.content || ''); setVisibility(defaultVisibility); setSaving(false); setError('');
-    return () => { generation.current += 1; controllerRef.current?.abort(); controllerRef.current = null; savingRef.current = false; };
-  }, [announcement?.content, announcement?.visibility, defaultVisibility, workspaceKey]);
-  const save = async (event) => {
-    event.preventDefault(); if (savingRef.current || !content.trim()) return;
-    const decision = reviewPublicVisibility(config, { previous: announcement?.visibility, next: visibility });
-    if (!decision.proceed) { if (decision.error) setError(decision.error); return; }
-    const token = ++generation.current; const controller = new AbortController();
-    controllerRef.current?.abort(); controllerRef.current = controller;
-    savingRef.current = true; setSaving(true); setError('');
-    try {
-      const response = await api.requestJson(bandWorkspacePaths.announcement(band.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: content.trim(), visibility, ...(decision.confirmation ? { visibility_confirm: decision.confirmation } : {}) }), signal: controller.signal });
-      if (controller.signal.aborted || token !== generation.current) return;
-      if (response?.announcement) onSaved?.(response.announcement);
-      setEditing(false);
-    } catch (saveError) {
-      if (controller.signal.aborted || token !== generation.current) return;
-      if (saveError?.status === 403) onForbidden?.();
-      else setError('공지사항을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    } finally {
-      if (!controller.signal.aborted && token === generation.current) { savingRef.current = false; controllerRef.current = null; setSaving(false); }
-    }
-  };
-  const canManage = announcement ? announcement.can_manage : band.can_manage;
-  return <section className="workspace-announcement" aria-label="공지사항"><div className="detail-heading"><h2>공지사항</h2>{canManage && !editing && <button type="button" className="secondary-btn" onClick={() => setEditing(true)}>{announcement ? '공지 수정' : '공지 작성'}</button>}<BandDeleteAction band={band} workspaceKey={`${workspaceKey}:announcement`} canDelete={Boolean(announcement?.content) && announcement?.can_delete} label="공지사항" path={bandWorkspacePaths.announcement(band.id)} onDeleted={() => onSaved?.({ ...announcement, content: '', visibility: defaultVisibility })} /></div>
-    {editing ? <form className="workspace-form" onSubmit={save}><label>공지 내용<textarea aria-label="공지 내용" maxLength={10000} value={content} onChange={(event) => setContent(event.target.value)} /></label><label>공개 범위<select aria-label="공지 공개 범위" value={visibility} onChange={(event) => setVisibility(event.target.value)}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={() => { setEditing(false); setContent(announcement?.content || ''); setVisibility(defaultVisibility); }}>취소</button><button className="primary-btn" disabled={saving || !content.trim()}>{saving ? '저장 중…' : '저장'}</button></div></form> : announcement?.content ? <p>{announcement.content}</p> : <p className="workspace-muted">현재 공개된 공지사항이 없습니다.</p>}
-  </section>;
-};
 
 const dedupeEntries = (entries) => {
   const seen = new Set();
