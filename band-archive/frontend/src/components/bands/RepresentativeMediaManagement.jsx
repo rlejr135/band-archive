@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
-import { FeaturedMediaEditor } from '../workspace/BandWorkspace.jsx';
+import { FeaturedMediaEditor } from '../workspace/featured-media/FeaturedMediaEditor.jsx';
 import './BandsPage.css';
 
 const PAGE_SIZE = 20;
