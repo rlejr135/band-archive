@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useServicePolicy } from '../../context/ServicePolicyContext.jsx';
@@ -11,7 +11,6 @@ import { availabilityFingerprint, availabilityPath, PERIOD_LABELS, validDay } fr
 import { createAuthenticatedApiClient } from '../../services/authApiClient.js';
 import { bandWorkspacePaths, rehearsalPayload, songPayload } from '../../services/bandWorkspaceApi.js';
 import { normalizeRehearsalType, REHEARSAL_TYPES } from '../../services/rehearsalTypes.js';
-import { uploadBandGalleryImageFile } from '../../services/mediaUploadManager.js';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import { MediaEngagement } from './MediaEngagement.jsx';
 import BandPlacePicker from './BandPlacePicker.jsx';
@@ -22,6 +21,8 @@ import { AnnouncementEditor } from './announcements/AnnouncementEditor.jsx';
 import { FeaturedMediaEditor } from './featured-media/FeaturedMediaEditor.jsx';
 import { formatRepresentativeDate, mediaPlayerFile, mergeUniqueEntries } from './featured-media/featuredMediaPresentation.js';
 import { SuggestionsWorkspace } from './suggestions/SuggestionsWorkspace.jsx';
+import { GalleryWorkspace } from './gallery/GalleryWorkspace.jsx';
+import { BandUploadInput } from './BandUploadInput.jsx';
 import { ErrorState } from './WorkspaceFeedback.jsx';
 import { WorkspaceContext, useWorkspace } from './WorkspaceContext.jsx';
 import { useCollection } from './useCollection.js';
@@ -30,8 +31,6 @@ import { WriteGuidance } from './WorkspaceWriteGuidance.jsx';
 import { genericError, PAGE_SIZE, requestOptions } from './workspaceReadSupport.js';
 import UploadCenter from '../common/UploadCenter.jsx';
 import MediaPlayer from '../common/MediaPlayer.jsx';
-import FileUpload from '../common/FileUpload.jsx';
-import { UploadContext } from '../../context/UploadContext.jsx';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh, WorkspacePaintGate, workspaceIdentityKey } from './workspaceRouteState.js';
 import { strictPositiveId } from './bandDashboardState.js';
 import './BandWorkspace.css';
@@ -39,16 +38,12 @@ import './BandWorkspace.css';
 export { AnnouncementEditor };
 export { FeaturedMediaEditor };
 export { SuggestionsWorkspace };
+export { GalleryWorkspace };
 
 // This file intentionally starts request state from effects: each state reset
 // prevents a previous band/selection from rendering while its replacement is
 // being resolved. The guarded async callbacks then own the terminal state.
 /* eslint-disable react-hooks/set-state-in-effect */
-
-// The application shell always supplies this context. Keeping this boundary
-// inert without it also lets read-only embedded/SSR workspace surfaces remain
-// genuinely read-only instead of creating an unscoped upload task.
-const BandUploadInput = (props) => useContext(UploadContext) ? <FileUpload {...props} /> : null;
 
 // React Router reuses a route element when only params change. Keying this
 // boundary makes the old workspace (including open forms/details) unmount
@@ -537,57 +532,4 @@ const PersonalLogPlayback = ({ log, workspaceKey, onRefresh, onDeleted }) => {
   return <article className="workspace-media"><div className="detail-heading"><h3>{log.title || '개인 연습 기록'}</h3><BandDeleteAction band={band} workspaceKey={`${workspaceKey}:log:${log.id}`} canDelete={log.can_delete} label="개인 연습 기록" path={bandWorkspacePaths.personalLog(band.id, log.id)} asynchronous resourceType="personal_log" onDeleted={onDeleted} /></div>{source ? log.file_type === 'video' ? <video controls preload="metadata" src={source} onError={refreshExpiredUrl}>브라우저가 영상을 지원하지 않습니다.</video> : <audio controls preload="metadata" src={source} onError={refreshExpiredUrl}>브라우저가 오디오를 지원하지 않습니다.</audio> : <p className="workspace-muted">현재 재생 가능한 파일이 없습니다.</p>}
     {processing?.status && <p className="workspace-muted">처리 상태: {processing.status === 'failed' ? '처리에 실패했습니다.' : processing.status}</p>}{processingError && <p className="workspace-muted">처리 상태를 확인하지 못했습니다.</p>}
   </article>;
-};
-
-export const GalleryWorkspace = () => {
-  const { band, api, workspaceKey } = useWorkspace();
-  const fetchGallery = useCallback(async (page, signal) => {
-    const response = await api.requestJson(bandWorkspacePaths.gallery(band.id, page), requestOptions(signal));
-    return { entries: response?.gallery, pagination: response?.pagination };
-  }, [api, band.id]);
-  const gallery = usePagedRead('gallery', fetchGallery);
-  const [featured, setFeatured] = useState(null);
-  const staleAttempts = useRef(new Set());
-  const featuredGate = useRef(createWorkspaceRequestGate());
-  const uploadGate = useRef(createWorkspaceRequestGate());
-  const refreshFeatured = useCallback(() => {
-    const controller = new AbortController(); let live = true;
-    const token = featuredGate.current.begin(`${workspaceKey}:featured`);
-    api.requestJson(bandWorkspacePaths.featuredGallery(band.id), requestOptions(controller.signal)).then((response) => {
-      if (live && !controller.signal.aborted && featuredGate.current.accepts(`${workspaceKey}:featured`, token)) setFeatured(response?.gallery ?? null);
-    }).catch(() => {
-      // A missing or no-longer-visible featured image is an ordinary empty state.
-      if (live && !controller.signal.aborted && featuredGate.current.accepts(`${workspaceKey}:featured`, token)) setFeatured(null);
-    });
-    return () => { live = false; controller.abort(); };
-  }, [api, band.id, workspaceKey]);
-  useEffect(() => { setFeatured(null); return refreshFeatured(); }, [refreshFeatured]);
-  const refreshImage = (imageId, kind = 'gallery') => {
-    if (!takeOneStaleRefresh(staleAttempts.current, kind, imageId)) return;
-    if (kind === 'featured') refreshFeatured();
-    else gallery.refresh();
-  };
-  const uploadGallery = useCallback(async (file, onProgress, { uploadPolicy, isCurrent: reviewIsCurrent = () => true } = {}) => {
-    // Capture both the band id and account-scoped workspace identity before
-    // initiating. A late B completion must never refresh A's gallery.
-    const capturedBandId = band.id;
-    const requestKey = `${workspaceKey}:gallery-upload`;
-    const token = uploadGate.current.begin(requestKey);
-    const isCurrent = () => reviewIsCurrent() && uploadGate.current.accepts(requestKey, token);
-    const result = await uploadBandGalleryImageFile({
-      file, bandId: capturedBandId, api, uploadPolicy, onProgress, isCurrent,
-    });
-    if (isCurrent()) {
-      gallery.refresh();
-      refreshFeatured();
-    }
-    return result?.gallery || result;
-  }, [api, band.id, gallery, refreshFeatured, workspaceKey]);
-  return <section className="workspace-page" aria-labelledby="workspace-gallery-title"><div className="workspace-page-heading"><div><h1 id="workspace-gallery-title">갤러리</h1><p>밴드에서 공개한 사진입니다.</p></div></div>
-    {band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active' && <BandUploadInput band={band} parentVisibility={band.default_visibility} onUpload={uploadGallery} accept="image/*,.png,.jpg,.jpeg,.gif,.webp" multiple={true} />}
-    {featured?.url && <section className="workspace-featured"><h2>대표 사진</h2><img src={featured.url} alt="대표 갤러리 이미지" onError={() => refreshImage(featured.id, 'featured')} />{!gallery.entries.some((image) => Number(image.id) === Number(featured.id)) && <BandDeleteAction band={band} workspaceKey={`${workspaceKey}:gallery:${featured.id}`} canDelete={featured.can_delete} label="갤러리 사진" path={bandWorkspacePaths.galleryImage(band.id, featured.id)} asynchronous resourceType="gallery" onDeleted={() => { gallery.refresh(); refreshFeatured(); }} />}</section>}
-    {gallery.loading && gallery.entries.length === 0 ? <p aria-live="polite">갤러리를 불러오는 중입니다…</p> : gallery.error && gallery.entries.length === 0 ? <ErrorState message={genericError} retry={gallery.refresh} /> : gallery.entries.length === 0 ? <div className="workspace-empty"><p>표시할 사진이 없습니다.</p></div> : <div className="workspace-gallery-grid">{gallery.entries.map((image) => <figure className="workspace-gallery-item" key={image.id}>{image.url ? <img src={image.url} alt="갤러리 이미지" onError={() => refreshImage(image.id)} /> : <div className="workspace-gallery-missing">표시할 사진이 없습니다.</div>}<BandDeleteAction band={band} workspaceKey={`${workspaceKey}:gallery:${image.id}`} canDelete={image.can_delete} label="갤러리 사진" path={bandWorkspacePaths.galleryImage(band.id, image.id)} asynchronous resourceType="gallery" onDeleted={() => { gallery.refresh(); refreshFeatured(); }} /></figure>)}</div>}
-    {gallery.pagination?.has_more && <button className="secondary-btn" disabled={gallery.loading} onClick={gallery.loadMore}>{gallery.loading ? '사진을 불러오는 중…' : '사진 더 불러오기'}</button>}
-    {gallery.error && gallery.entries.length > 0 && <ErrorState message={genericError} retry={gallery.refresh} />}
-  </section>;
 };
