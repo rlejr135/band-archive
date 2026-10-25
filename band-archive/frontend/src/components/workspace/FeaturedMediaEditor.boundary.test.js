@@ -13,13 +13,15 @@ test('standalone featured editor and its shared leaves do not depend back on the
   const presentation = await readFile(new URL('./featured-media/featuredMediaPresentation.js', import.meta.url), 'utf8');
   const feedback = await readFile(new URL('./WorkspaceFeedback.jsx', import.meta.url), 'utf8');
   const workspace = await readFile(new URL('./BandWorkspace.jsx', import.meta.url), 'utf8');
+  const songs = await readFile(new URL('./songs/SongWorkspace.jsx', import.meta.url), 'utf8');
+  const rehearsals = await readFile(new URL('./rehearsals/RehearsalWorkspace.jsx', import.meta.url), 'utf8');
   const featured = await readFile(new URL('./featured-media/FeaturedMediaWorkspace.jsx', import.meta.url), 'utf8');
   for (const source of [editor, presentation, feedback]) assert.doesNotMatch(source, /from ['"][^'"]*BandWorkspace\.jsx['"]/);
   assert.match(editor, /import '\.\.\/BandWorkspace\.css'/);
   assert.match(editor, /import \{ ErrorState \} from '\.\.\/WorkspaceFeedback\.jsx'/);
   assert.match(editor, /from '\.\/featuredMediaPresentation\.js'/);
   assert.match(featured, /from '\.\/featuredMediaPresentation\.js'/);
-  assert.match(workspace, /import \{ ErrorState \} from '\.\/WorkspaceFeedback\.jsx'/);
+  for (const source of [songs, rehearsals]) assert.match(source, /import \{ ErrorState \} from '\.\.\/WorkspaceFeedback\.jsx'/);
   assert.match(workspace, /export \{ FeaturedMediaEditor \}/);
   assert.doesNotMatch(workspace, /export const FeaturedMediaEditor = |const mediaPlayerFile = |const mergeUniqueEntries = |const formatRepresentativeDate = |const ErrorState = /);
 });
