@@ -78,14 +78,14 @@ def test_proceed_failure_rolls_back_song_suggestion_vote_and_audit(
     path = f'/api/v2/bands/{band_id}/suggestions/{suggestion_id}/proceed'
     phases = []
     entry_transactions = []
-    original_run = writes._run_write
+    original_proceed = writes.proceed_song_suggestion
 
-    def observed_run(callback):
+    def observed_proceed(**kwargs):
         session = db.session()
         entry_transactions.append(session.in_transaction())
         session.info['proceed_under_test'] = True
         try:
-            return original_run(callback)
+            return original_proceed(**kwargs)
         finally:
             session.info.pop('proceed_under_test', None)
 
@@ -109,7 +109,7 @@ def test_proceed_failure_rolls_back_song_suggestion_vote_and_audit(
     def fail_jsonify(*args, **kwargs):
         raise RuntimeError('injected jsonify failure')
 
-    monkeypatch.setattr(writes, '_run_write', observed_run)
+    monkeypatch.setattr(writes, 'proceed_song_suggestion', observed_proceed)
     if failure == 'serializer':
         monkeypatch.setattr(writes, 'serialize_song', fail_serializer)
     if failure == 'jsonify':

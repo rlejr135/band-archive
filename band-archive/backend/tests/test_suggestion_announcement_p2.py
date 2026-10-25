@@ -183,13 +183,13 @@ def test_proceed_failed_transaction_keeps_the_candidate(
         access_app, write_client, principals, monkeypatch):
     band_id = _band_id(access_app)
     rollback_id = _candidate(write_client, band_id, principals['member'], title='must roll back')
-    import routes.content_writes as content_writes
-    original_audit = content_writes.audit
-    monkeypatch.setattr(content_writes, 'audit', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('inject')))
+    import song_suggestion_service
+    original_audit = song_suggestion_service.audit
+    monkeypatch.setattr(song_suggestion_service, 'audit', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('inject')))
     with pytest.raises(RuntimeError):
         write_client.post(f'/api/v2/bands/{band_id}/suggestions/{rollback_id}/proceed',
                           headers=principals['owner'], json={})
-    monkeypatch.setattr(content_writes, 'audit', original_audit)
+    monkeypatch.setattr(song_suggestion_service, 'audit', original_audit)
     with access_app.app_context():
         assert SongSuggestion.query.get(rollback_id) is not None
         assert Song.query.filter_by(band_id=band_id, title='must roll back').count() == 0

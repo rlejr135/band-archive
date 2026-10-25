@@ -21,6 +21,7 @@ from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
 from content_queries import _media_pending_deletes_sql, _media_playable_sql
+from content_write_scope import active_member_write_scope
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comment, DirectUploadSession,
@@ -30,6 +31,7 @@ from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comme
 from validators import validate_external_http_url
 from voc_validation import validate_rehearsal_type
 from policy_service import confirm_public_expansion, upload_policy_enabled
+from song_suggestion_service import proceed_song_suggestion
 from v2_content_serializers import (
     media_visibility, song_visibility, rehearsal_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
@@ -163,37 +165,7 @@ def _payload():
 def _scope_for_write(band_id, *, lock=False, lock_actor=False):
     """Return an active-member scope; writes use 403 for a known nonmember."""
     user = current_app_user(required=True)
-    band_query = Band.query.filter(Band.id == band_id, Band.deleted_at.is_(None))
-    membership_query = BandMembership.query.filter_by(band_id=band_id, user_id=user.id, status=ACTIVE)
-    if lock and db.engine.dialect.name != 'sqlite':
-        band_query = band_query.with_for_update()
-        membership_query = membership_query.with_for_update()
-    band = band_query.one_or_none()
-    if band is None:
-        raise NotFoundError('Band not found')
-    membership = membership_query.one_or_none()
-    if membership is None:
-        raise ValidationError('An active band membership is required.', 403)
-    if lock_actor:
-        actor_query = AppUser.query.filter_by(id=user.id)
-        if lock and db.engine.dialect.name != 'sqlite':
-            actor_query = actor_query.with_for_update()
-        user = actor_query.populate_existing().one_or_none()
-        if user is None:
-            raise ValidationError('An active band membership is required.', 403)
-    audience = RequestAudience(
-        user_id=user.id, subject=user.supabase_user_id,
-        account_active=user.status == ACTIVE,
-        email_verified=user.email_verified is True,
-        is_platform_admin=user.is_platform_admin is True,
-    )
-    member_audience = MembershipAudience(
-        id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
-        user_subject=user.supabase_user_id, user_display_name=user.display_name, user_email=user.email,
-    )
-    return scope_with_band_visibility(BandReadScope(
-        band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
-    ), band), band, membership, user
+    return active_member_write_scope(band_id, user, lock=lock, lock_actor=lock_actor)
 
 
 def _begin_write():
@@ -874,26 +846,12 @@ def proceed_suggestion_v2(band_id, suggestion_id):
     # This endpoint accepts only a visibility decision; title/artist/link
     # always come from the reviewed suggestion and cannot be substituted.
     _check_fields(data, {'visibility'})
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        if membership.role not in MANAGER_ROLES:
-            raise ValidationError('Insufficient band role.', 403)
-        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
-        if not _can_delete(scope, suggestion):
-            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
-        song = Song(
-            band_id=band.id, created_by_membership_id=membership.id,
-            visibility=_visibility(data.get('visibility'), suggestion.visibility or band.default_visibility),
-            title=suggestion.title, artist=suggestion.artist,
-            link=_external_link(suggestion.link, required=True),
-            memo=suggestion.memo, status='Practice',
-        )
-        db.session.add(song); db.session.flush()
-        audit('content.suggestion.proceeded', user, band, song, {'suggestion_id': suggestion.id,
-                                                                   'visibility': song.visibility})
-        db.session.delete(suggestion)
+    def prepare_response(scope, song):
         return jsonify({'song': serialize_song(scope, song), 'proceeded': True}), 201
-    return _run_write(operation)
+    return proceed_song_suggestion(
+        band_id=band_id, suggestion_id=suggestion_id, actor=current_app_user(required=True),
+        visibility=data.get('visibility'), prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.put('/announcement')
