@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let auth; let bands;
+let vite; let workspace; let songScreen; let auth; let bands;
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const monthForTest = () => {
@@ -44,8 +44,8 @@ const selectCalendarDay = async (view, day) => {
 const visitor = { user: null, getAccessToken: async () => null, refreshSession: async () => null, signOut: async () => {} };
 const load = async () => {
   if (workspace) return;
-  vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
-  workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx');
+  vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
+  workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); songScreen = await vite.ssrLoadModule('/src/components/workspace/songs/SongWorkspace.jsx');
   auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx');
   bands = await vite.ssrLoadModule('/src/context/BandContext.jsx');
 };
@@ -59,7 +59,7 @@ const ReadOnlyApp = ({ entry, strict = false, queryNavigation = false, authValue
     createElement(Routes, null,
       createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
         createElement(Route, { index: true, element: createElement(workspace.BandDashboard) }),
-        createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }),
+        createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }),
         createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }),
       ),
     ),

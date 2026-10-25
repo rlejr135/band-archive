@@ -15,16 +15,16 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let auth; let bands; let policies; let members; let memberDetail;
+let vite; let workspace; let songScreen; let auth; let bands; let policies; let members; let memberDetail;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); members = await vite.ssrLoadModule('/src/components/workspace/members/MembersWorkspace.jsx'); memberDetail = await vite.ssrLoadModule('/src/components/workspace/members/MemberDetailWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
+const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); songScreen = await vite.ssrLoadModule('/src/components/workspace/songs/SongWorkspace.jsx'); members = await vite.ssrLoadModule('/src/components/workspace/members/MembersWorkspace.jsx'); memberDetail = await vite.ssrLoadModule('/src/components/workspace/members/MemberDetailWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 
 // The existing API-contract fixtures explicitly cover the disabled rollout.
 // Enabled and unavailable policy behavior has its own real-form DOM cases.
-const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(policies.ServicePolicyContext.Provider, { value: { config: { policies: { upload: { enabled: false } } } } }, createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null))))));
+const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(policies.ServicePolicyContext.Provider, { value: { config: { policies: { upload: { enabled: false } } } } }, createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null))))));
 const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => createElement(
   auth.AuthContext.Provider, { value: authValue },
   createElement(bands.BandContext.Provider, { value: bandValue },
@@ -36,7 +36,7 @@ const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => c
           createElement(Route, { path: 'members/:memberId', element: createElement(memberDetail.MemberDetailWorkspace) }),
           createElement(Route, { path: 'gallery', element: createElement(workspace.GalleryWorkspace) }),
           createElement(Route, { path: 'suggestions', element: createElement(workspace.SuggestionsWorkspace) }),
-          createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }),
+          createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }),
           createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }),
         ),
       ),
@@ -243,7 +243,7 @@ test('DOM route navigation drops a genuinely pending A resolution without mutati
     throw new Error(`unexpected request ${url}`);
   };
   const Go = () => { navigate = useNavigate(); return null; }; const authValue = { user: { id: 'account-a' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
-  const tree = createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: { activeBands: [] } }, createElement(MemoryRouter, { initialEntries: ['/bands/band-a/songs'] }, createElement(Go), createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }))))));
+  const tree = createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: { activeBands: [] } }, createElement(MemoryRouter, { initialEntries: ['/bands/band-a/songs'] }, createElement(Go), createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }))))));
   const view = render(tree); await waitFor(() => assert.deepEqual(calls, ['A band'])); assert.equal(aSettled, false);
   await act(async () => { navigate('/bands/band-b/songs'); }); assert.equal(view.queryByText('A 비밀 밴드'), null); await waitFor(() => assert.deepEqual(calls, ['A band', 'B band']));
   await act(async () => { b.resolve(response({ band: { id: 2, slug: 'band-b', name: 'B 공개 밴드', default_visibility: 'MEMBERS', membership: { id: 2, role: 'member' } } })); }); await view.findByText('B 선택 곡'); await userEvent.click(view.getByText('B 선택 곡')); await userEvent.click(view.getByRole('button', { name: '수정' })); await userEvent.type(view.getByLabelText('제목'), ' 초안'); assert.deepEqual(calls, ['A band', 'B band', 'B songs', 'B media']);
@@ -426,6 +426,30 @@ test('account change remounts the workspace and clears the prior form, media, an
   await view.findByText('B 새 곡'); assert.equal(view.queryByText('A 선택 곡'), null); view.unmount(); globalThis.fetch = previousFetch;
 });
 
+test('direct song entry aborts a pending save when the account changes', async () => {
+  await load(); const previousFetch = globalThis.fetch; const pending = deferred(); let saveSignal; let oldListReads = 0;
+  const account = (id) => ({ user: { id }, getAccessToken: async () => id, refreshSession: async () => id, signOut: async () => {} });
+  globalThis.fetch = async (url, options = {}) => {
+    const oldAccount = options.headers?.Authorization === 'Bearer account-a';
+    if (url.includes('/by-slug/save-race')) return response({ band: { id: oldAccount ? 141 : 142, slug: 'save-race', name: oldAccount ? 'A 밴드' : 'B 밴드', default_visibility: 'MEMBERS', membership: { id: oldAccount ? 141 : 142, role: 'member' } } });
+    if (url.includes('/bands/141/songs') && options.method === 'POST') { saveSignal = options.signal; return pending.promise; }
+    if (url.includes('/bands/141/songs?')) { oldListReads += 1; return response({ songs: [], pagination: { has_more: false } }); }
+    if (url.includes('/bands/142/songs?')) return response({ songs: [{ id: 1421, title: 'B 전용 곡', artist: 'B' }], pagination: { has_more: false } });
+    throw new Error(`unexpected request ${url}`);
+  };
+  try {
+    const view = render(createElement(App, { entry: '/bands/save-race/songs', authValue: account('account-a'), bandValue: { activeBands: [] }, songs: true }));
+    await view.findByRole('button', { name: '곡 추가' }); await userEvent.click(view.getByRole('button', { name: '곡 추가' }));
+    await userEvent.type(view.getByLabelText('제목'), 'A 초안'); await userEvent.type(view.getByLabelText('아티스트'), 'A');
+    await userEvent.click(view.getByRole('button', { name: '저장' })); await waitFor(() => assert.ok(saveSignal));
+    view.rerender(createElement(App, { entry: '/bands/save-race/songs', authValue: account('account-b'), bandValue: { activeBands: [] }, songs: true }));
+    await view.findByText('B 전용 곡'); assert.equal(saveSignal.aborted, true); assert.equal(view.queryByDisplayValue('A 초안'), null);
+    await act(async () => { pending.resolve(response({ song: { id: 1411, title: 'A 초안' } }, 201)); });
+    assert.equal(view.queryByText('A 초안'), null); assert.equal(view.getByText('B 전용 곡').textContent, 'B 전용 곡'); assert.equal(oldListReads, 1);
+    view.unmount();
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('song media uses type-safe playback fallbacks and stable display names', async () => {
   await load(); const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -546,7 +570,7 @@ test('a stale playback refresh cannot repaint media after navigating to another 
       createElement(MemoryRouter, { initialEntries: ['/bands/old-media/songs'] }, createElement(Go),
         createElement(Routes, null,
           createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
-            createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }))))));
+            createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }))))));
   const view = render(tree);
   await view.findByText('이전 미디어'); await userEvent.click(view.getByText('이전 미디어')); await waitFor(() => assert.ok(view.container.querySelector('video'))); fireEvent.error(view.container.querySelector('video')); await waitFor(() => assert.equal(mediaCalls, 2)); await act(async () => { navigate('/bands/new-media/songs'); }); await view.findByText('새 미디어'); await act(async () => { oldRefresh.resolve(response({ media: [{ id: 902, file_type: 'video', playback: { video_url: 'https://media.invalid/old-refreshed.mp4' } }], pagination: { has_more: false } })); });
   assert.equal(view.queryByText('이전 미디어'), null); assert.equal(view.container.querySelector('video'), null); view.unmount(); globalThis.fetch = previousFetch;

@@ -17,12 +17,12 @@ const deferred = () => { let resolve; const promise = new Promise((done) => { re
 const policy = (enabled = true) => ({ service: { name: 'Archive', contact_email: 'contact@example.test', operator_name: 'Operator' }, policies: { ready: enabled, terms_version: 't1', privacy_version: 'p1', retention_notice: '검증된 보관 안내', providers_notice: '검증된 공급자 안내', upload: { enabled, version: 'u1', default_visibility: 'MEMBERS', notice_url: '/upload-policy' } } });
 const band = { id: 7, name: '들뜬', slug: 'sample', membership: { status: 'active' } };
 const file = (name = 'recording.mp4') => new dom.window.File(['video'], name, { type: 'video/mp4' });
-let vite; let upload; let auth; let service; let input; let pages; let workspace; let bands;
+let vite; let upload; let auth; let service; let input; let pages; let workspace; let songScreen; let bands;
 const load = async () => {
   if (input) return;
-  vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
+  vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
   input = await vite.ssrLoadModule('/src/components/common/FileUpload.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); upload = await vite.ssrLoadModule('/src/context/UploadContext.jsx'); service = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); pages = await vite.ssrLoadModule('/src/components/auth/PolicyPages.jsx');
-  workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx');
+  workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); songScreen = await vite.ssrLoadModule('/src/components/workspace/songs/SongWorkspace.jsx');
   bands = await vite.ssrLoadModule('/src/context/BandContext.jsx');
 };
 after(async () => { await vite?.close(); dom.window.close(); }); afterEach(() => cleanup());
@@ -37,7 +37,7 @@ const workspaceApp = ({ kind = 'songs', config = policy() } = {}) => createEleme
   createElement(auth.AuthContext.Provider, { value: workspaceAuth }, createElement(bands.BandContext.Provider, { value: { activeBands: [] } },
     createElement(MemoryRouter, { initialEntries: [`/bands/sample/${kind}`] }, createElement(Routes, null,
       createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
-        createElement(Route, { path: kind, element: createElement(kind === 'songs' ? workspace.SongWorkspace : workspace.RehearsalWorkspace) })))))));
+        createElement(Route, { path: kind, element: createElement(kind === 'songs' ? songScreen.SongWorkspace : workspace.RehearsalWorkspace) })))))));
 
 test('actual song edit blocks unavailable policy and cancelled public expansion before sending an attestation', async () => {
   await load(); const previous = globalThis.fetch; const previousConfirm = window.confirm; const writes = [];
