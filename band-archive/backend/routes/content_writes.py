@@ -17,6 +17,7 @@ from sqlalchemy.orm import joinedload
 
 from auth_service import current_app_user
 from band_access import BandReadScope, MembershipAudience, RequestAudience, content_capabilities
+from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -70,7 +71,6 @@ def authenticated_write(view):
 @authenticated_write
 def set_band_logo(band_id):
     from deletion_service import actor_is_eligible, load_current_actor, lock_band_and_membership
-    from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
     from band_access import BandReadScope, MembershipAudience, RequestAudience
 
     data = _payload()
@@ -1101,7 +1101,7 @@ def set_song_featured_media_v2(band_id, song_id):
         if song.visibility not in _VISIBILITIES:
             raise NotFoundError('Resource not found')
 
-        from routes.content_reads import _media_pending_deletes_sql, _media_playable_sql, _not_pending_delete
+        from routes.content_reads import _media_pending_deletes_sql, _media_playable_sql
         if db.session.query(_not_pending_delete(Song, 'song')).filter(Song.id == song.id).scalar() is not True:
             raise NotFoundError('Resource not found')
         candidate_query = Media.query.options(
@@ -1156,7 +1156,6 @@ def clear_song_featured_media_v2(band_id, song_id):
     def operation():
         from deletion_service import actor_is_eligible, load_current_actor, lock_band_and_membership
         from content_restrictions import require_unrestricted
-        from routes.content_reads import _not_pending_delete
 
         principal = current_app_user(required=True)
         band, membership = lock_band_and_membership(band_id, principal.id, require_member=False)

@@ -207,9 +207,9 @@ def test_featured_gallery_fails_closed_on_mixed_visibility_duplicates_before_sig
 def test_postgres_contracts_keep_creator_comment_and_featured_queries_tenant_first(access_app):
     """Compile policy predicates for PostgreSQL without requiring a live PG server."""
     from band_access import BandReadScope, RequestAudience
+    from band_content_predicates import _creator_is_scoped_sql
     from routes.content_reads import (
-        _creator_is_scoped_sql, _featured_gallery_rows_query, _gallery_query,
-        _personal_comment_graph_sql,
+        _featured_gallery_rows_query, _gallery_query, _personal_comment_graph_sql,
     )
 
     scope = BandReadScope(

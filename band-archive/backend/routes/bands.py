@@ -170,7 +170,7 @@ def _logo_for_scope(scope, *, preserve_selection=False):
 
 def _logo_for_management_scope(scope):
     """Resolve a selected photo only inside the explicit logo-management capability."""
-    from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
+    from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
     from v2_content_serializers import scope_with_band_visibility
     from v2_remaining_read_serializers import serialize_gallery_image
     from content_restrictions import restriction_predicate
@@ -221,7 +221,7 @@ def _logo_management_access(band, audience):
 @optional_auth
 def get_band_logo_management(band_slug):
     from routes.content_reads import _gallery_query
-    from routes.content_reads import _creator_is_scoped_sql, _not_pending_delete
+    from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
     from v2_remaining_read_serializers import serialize_gallery_image
     from content_restrictions import restriction_predicate
 
@@ -296,7 +296,8 @@ def get_representative_media_management(band_slug):
         raise ValidationError('limit must be 1-100 and offset must be between 0 and 100000.')
 
     from content_restrictions import restriction_predicate
-    from routes.content_reads import _not_pending_delete, _song_graph_sql
+    from band_content_predicates import _not_pending_delete
+    from routes.content_reads import _song_graph_sql
     from v2_content_serializers import scope_with_band_visibility
 
     member_audience = MembershipAudience(

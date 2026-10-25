@@ -11,12 +11,13 @@ from band_access import (
     BandReadScope, MembershipAudience, RequestAudience, content_capabilities, current_audience,
     optional_auth, read_scope_for_id, visible_object_or_404, visible_query,
 )
+from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
 from errors import NotFoundError, ValidationError
 from extensions import db
 from member_profile_service import active_profile_condition
 from content_restrictions import prime_unrestricted_records, restriction_predicate
 from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
-                    Member, PersonalLog, Rehearsal, R2DeletionTask, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
+                    Member, PersonalLog, Rehearsal, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
     graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
@@ -37,13 +38,6 @@ MAX_PAGE_LIMIT = 100
 MAX_PAGE_OFFSET = 100_000
 KOREA_TZ = timezone(timedelta(hours=9))
 SONG_STATUSES = ('Practice', 'Completed', 'OnHold')
-
-
-def _not_pending_delete(entity, resource_type):
-    return ~exists().where(and_(R2DeletionTask.band_id == entity.band_id,
-                                R2DeletionTask.resource_type == resource_type,
-                                R2DeletionTask.resource_id == entity.id,
-                                R2DeletionTask.status != 'completed'))
 
 
 @content_reads_bp.before_request
@@ -275,18 +269,6 @@ def _page_suggestion_viewer_votes(scope, suggestion_page):
         SongSuggestionVote.suggestion_id.in_(ids),
     ).all()
     return {row.suggestion_id: row.value for row in rows if row.value in (-1, 1)}
-
-
-def _creator_is_scoped_sql(entity, scope):
-    """Reject a corrupt cross-band creator pointer without rejecting legacy NULLs."""
-    creator_id = getattr(entity, 'created_by_membership_id', None)
-    if creator_id is None:
-        return True
-    return or_(
-        creator_id.is_(None),
-        exists().where(and_(BandMembership.id == creator_id,
-                            BandMembership.band_id == scope.band_id)),
-    )
 
 
 def _roster_visible_or_404(scope):
