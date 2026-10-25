@@ -15,16 +15,16 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let songScreen; let auth; let bands; let policies; let members; let memberDetail;
+let vite; let workspace; let songScreen; let rehearsalScreen; let auth; let bands; let policies; let members; let memberDetail;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); songScreen = await vite.ssrLoadModule('/src/components/workspace/songs/SongWorkspace.jsx'); members = await vite.ssrLoadModule('/src/components/workspace/members/MembersWorkspace.jsx'); memberDetail = await vite.ssrLoadModule('/src/components/workspace/members/MemberDetailWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
+const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); songScreen = await vite.ssrLoadModule('/src/components/workspace/songs/SongWorkspace.jsx'); rehearsalScreen = await vite.ssrLoadModule('/src/components/workspace/rehearsals/RehearsalWorkspace.jsx'); members = await vite.ssrLoadModule('/src/components/workspace/members/MembersWorkspace.jsx'); memberDetail = await vite.ssrLoadModule('/src/components/workspace/members/MemberDetailWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 
 // The existing API-contract fixtures explicitly cover the disabled rollout.
 // Enabled and unavailable policy behavior has its own real-form DOM cases.
-const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(policies.ServicePolicyContext.Provider, { value: { config: { policies: { upload: { enabled: false } } } } }, createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }) : null))))));
+const App = ({ entry, authValue, bandValue, songs = false, rehearsals = false }) => createElement(policies.ServicePolicyContext.Provider, { value: { config: { policies: { upload: { enabled: false } } } } }, createElement(auth.AuthContext.Provider, { value: authValue }, createElement(bands.BandContext.Provider, { value: bandValue }, createElement(MemoryRouter, { initialEntries: [entry] }, createElement(Routes, null, createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) }, songs ? createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }) : null, rehearsals ? createElement(Route, { path: 'rehearsals', element: createElement(rehearsalScreen.RehearsalWorkspace) }) : null))))));
 const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => createElement(
   auth.AuthContext.Provider, { value: authValue },
   createElement(bands.BandContext.Provider, { value: bandValue },
@@ -37,7 +37,7 @@ const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => c
           createElement(Route, { path: 'gallery', element: createElement(workspace.GalleryWorkspace) }),
           createElement(Route, { path: 'suggestions', element: createElement(workspace.SuggestionsWorkspace) }),
           createElement(Route, { path: 'songs', element: createElement(songScreen.SongWorkspace) }),
-          createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }),
+          createElement(Route, { path: 'rehearsals', element: createElement(rehearsalScreen.RehearsalWorkspace) }),
         ),
       ),
     ),
@@ -304,7 +304,7 @@ test('the v2 rehearsal type draft resets when changing bands or accounts', async
           createElement(Go),
           createElement(Routes, null,
             createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
-              createElement(Route, { path: 'rehearsals', element: createElement(workspace.RehearsalWorkspace) }),
+              createElement(Route, { path: 'rehearsals', element: createElement(rehearsalScreen.RehearsalWorkspace) }),
             ),
           ),
         ),

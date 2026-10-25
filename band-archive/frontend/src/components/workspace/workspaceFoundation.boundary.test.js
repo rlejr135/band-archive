@@ -17,8 +17,10 @@ test('workspace context is a leaf and the shell keeps the existing provider and 
 });
 
 test('workspace hooks are leaf modules and preserve their distinct pagination contracts', async () => {
-  const [workspace, collection, pagedRead, support, members, detail] = await Promise.all([
+  const [workspace, songs, rehearsals, collection, pagedRead, support, members, detail] = await Promise.all([
     read('./BandWorkspace.jsx'),
+    read('./songs/SongWorkspace.jsx'),
+    read('./rehearsals/RehearsalWorkspace.jsx'),
     read('./useCollection.js'),
     read('./usePagedRead.js'),
     read('./workspaceReadSupport.js'),
@@ -26,9 +28,10 @@ test('workspace hooks are leaf modules and preserve their distinct pagination co
     read('./members/MemberDetailWorkspace.jsx'),
   ]);
   for (const source of [collection, pagedRead]) assert.doesNotMatch(source, /from ['"][^'"]*BandWorkspace\.jsx['"]/);
-  assert.match(workspace, /import \{ useCollection \} from '\.\/useCollection\.js'/);
+  for (const source of [songs, rehearsals]) assert.match(source, /import \{ useCollection \} from '\.\.\/useCollection\.js'/);
+  assert.doesNotMatch(workspace, /import \{ useCollection \} from '\.\/useCollection\.js'/);
   for (const source of [members, detail]) assert.match(source, /import \{ usePagedRead \} from '\.\.\/usePagedRead\.js'/);
-  assert.doesNotMatch(workspace, /const useCollection = |const usePagedRead = /);
+  for (const source of [workspace, songs, rehearsals]) assert.doesNotMatch(source, /const useCollection = |const usePagedRead = /);
   assert.match(collection, /append \? \[\.\.\.previous\.entries, \.\.\.next\] : next/);
   assert.match(collection, /if \(token !== version\.current\) return/);
   assert.doesNotMatch(collection, /dedupeEntries/);
@@ -40,13 +43,15 @@ test('workspace hooks are leaf modules and preserve their distinct pagination co
 });
 
 test('write guidance is independent of the workspace implementation', async () => {
-  const [guidance, workspace] = await Promise.all([
+  const [guidance, workspace, songs, rehearsals] = await Promise.all([
     read('./WorkspaceWriteGuidance.jsx'),
     read('./BandWorkspace.jsx'),
+    read('./songs/SongWorkspace.jsx'),
+    read('./rehearsals/RehearsalWorkspace.jsx'),
   ]);
   assert.doesNotMatch(guidance, /from ['"][^'"]*BandWorkspace\.jsx['"]|from ['"][^'"]*WorkspaceWriteGuidance\.jsx['"]/);
   assert.match(guidance, /useWorkspace\(\)/);
   assert.match(guidance, /navigate\('\/login'\)/);
-  assert.match(workspace, /import \{ WriteGuidance \} from '\.\/WorkspaceWriteGuidance\.jsx'/);
-  assert.doesNotMatch(workspace, /const WriteGuidance = /);
+  for (const source of [songs, rehearsals]) assert.match(source, /import \{ WriteGuidance \} from '\.\.\/WorkspaceWriteGuidance\.jsx'/);
+  for (const source of [workspace, songs, rehearsals]) assert.doesNotMatch(source, /const WriteGuidance = /);
 });
