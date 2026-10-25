@@ -13,15 +13,16 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let auth; let bands; let upload;
+let vite; let workspace; let featured; let auth; let bands; let upload;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const authValue = { user: { id: 'owner-1' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
 const uploadValue = { watch: () => () => {}, retryAudio: async () => {} };
 const band = { id: 41, slug: 'media-band', name: '미디어 밴드', membership: { role: 'owner' }, permissions: {} };
 const load = async () => {
   if (workspace) return;
-  vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
+  vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } });
   workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx');
+  featured = await vite.ssrLoadModule('/src/components/workspace/featured-media/FeaturedMediaWorkspace.jsx');
   auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx');
   bands = await vite.ssrLoadModule('/src/context/BandContext.jsx');
   upload = await vite.ssrLoadModule('/src/context/UploadContext.jsx');
@@ -33,7 +34,7 @@ const app = (entry) => createElement(auth.AuthContext.Provider, { value: authVal
         createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
           createElement(Route, { index: true, element: createElement('p', null, '밴드 대시보드') }),
           createElement(Route, { path: 'songs', element: createElement('p', null, '곡 경로') }),
-          createElement(Route, { path: 'representative-media', element: createElement(workspace.RepresentativeMediaWorkspace) }),
+          createElement(Route, { path: 'representative-media', element: createElement(featured.RepresentativeMediaWorkspace) }),
         ),
         createElement(Route, { path: '/account', element: createElement('p', null, '계정 경로') }),
       )),
