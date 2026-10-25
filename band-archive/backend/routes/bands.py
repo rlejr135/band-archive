@@ -147,7 +147,7 @@ def get_band_by_slug(band_slug):
 
 
 def _logo_for_scope(scope, *, preserve_selection=False):
-    from routes.content_reads import _gallery_query
+    from content_queries import _gallery_query
     from v2_content_serializers import scope_with_band_visibility
     from v2_remaining_read_serializers import serialize_gallery_image
 
@@ -220,7 +220,7 @@ def _logo_management_access(band, audience):
 @bands_bp.get('/bands/by-slug/<string:band_slug>/logo-management')
 @optional_auth
 def get_band_logo_management(band_slug):
-    from routes.content_reads import _gallery_query
+    from content_queries import _gallery_query
     from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
     from v2_remaining_read_serializers import serialize_gallery_image
     from content_restrictions import restriction_predicate
@@ -297,7 +297,7 @@ def get_representative_media_management(band_slug):
 
     from content_restrictions import restriction_predicate
     from band_content_predicates import _not_pending_delete
-    from routes.content_reads import _song_graph_sql
+    from content_queries import _song_graph_sql
     from v2_content_serializers import scope_with_band_visibility
 
     member_audience = MembershipAudience(

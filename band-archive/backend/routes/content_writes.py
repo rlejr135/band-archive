@@ -20,6 +20,7 @@ from band_access import BandReadScope, MembershipAudience, RequestAudience, cont
 from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
+from content_queries import _media_pending_deletes_sql, _media_playable_sql
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comment, DirectUploadSession,
@@ -1056,7 +1057,6 @@ def set_song_featured_media_v2(band_id, song_id):
         if song.visibility not in _VISIBILITIES:
             raise NotFoundError('Resource not found')
 
-        from routes.content_reads import _media_pending_deletes_sql, _media_playable_sql
         if db.session.query(_not_pending_delete(Song, 'song')).filter(Song.id == song.id).scalar() is not True:
             raise NotFoundError('Resource not found')
         candidate_query = Media.query.options(

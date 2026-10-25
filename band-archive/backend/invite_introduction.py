@@ -2,6 +2,9 @@
 from sqlalchemy import func
 
 from band_access import BandReadScope, RequestAudience
+from content_queries import (
+    _announcement_query, _featured_gallery_rows_query, _gallery_query, _song_query,
+)
 from errors import NotFoundError
 from extensions import db
 from models import Announcement, BandMembership, GalleryImage, Song
@@ -30,9 +33,6 @@ def introduction_payload(band, actor=None, *, audience=None):
 
 def render_introduction(scope, band):
     """Aggregate the shared introduction after caller resolves visibility scope."""
-    from routes.content_reads import (
-        _announcement_query, _featured_gallery_rows_query, _gallery_query, _song_query,
-    )
     from v2_remaining_read_serializers import serialize_announcement, serialize_gallery_image
 
     scope = scope_with_band_visibility(scope, band)

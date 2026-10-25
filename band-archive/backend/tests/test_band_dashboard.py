@@ -71,7 +71,7 @@ def test_dashboard_aggregates_only_visible_current_band_graph(access_app, signer
         assert db.session.execute(text('SELECT band_id, created_by_membership_id FROM song WHERE id = :song'),
                                   {'song': corrupt.id}).one() == (band.id, other_owner.id)
         from band_access import current_audience, read_scope_for_id
-        from routes.content_reads import _song_query
+        from content_queries import _song_query
         with access_app.test_request_context('/'):
             scope = read_scope_for_id(band.id, current_audience())
             from v2_content_serializers import scope_with_band_visibility

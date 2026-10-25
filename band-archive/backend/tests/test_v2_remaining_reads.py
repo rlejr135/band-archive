@@ -1,7 +1,9 @@
 """Contracts for the remaining tenant-scoped Phase 6 read domains."""
 
 from datetime import datetime, timezone
+import ast
 import re
+from pathlib import Path
 import pytest
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
@@ -208,9 +210,8 @@ def test_postgres_contracts_keep_creator_comment_and_featured_queries_tenant_fir
     """Compile policy predicates for PostgreSQL without requiring a live PG server."""
     from band_access import BandReadScope, RequestAudience
     from band_content_predicates import _creator_is_scoped_sql
-    from routes.content_reads import (
-        _featured_gallery_rows_query, _gallery_query, _personal_comment_graph_sql,
-    )
+    from content_queries import _featured_gallery_rows_query, _gallery_query
+    from routes.content_reads import _personal_comment_graph_sql
 
     scope = BandReadScope(
         band_id=71, band_slug='compiled', audience=RequestAudience(user_id=None, subject=None), membership=None,
@@ -241,6 +242,38 @@ def test_postgres_contracts_keep_creator_comment_and_featured_queries_tenant_fir
     # The duplicate detector sees every same-band featured row before any
     # audience predicate. The second audience query then applies PUBLIC.
     assert 'gallery_image.band_id = 71' in featured_sql
-    assert 'gallery_image.visibility' not in featured_sql.split('WHERE', 1)[1]
+    assert 'gallery_image.is_featured IS true' in featured_sql
+    assert 'r2_deletion_task.band_id = gallery_image.band_id' in featured_sql
+    assert "r2_deletion_task.resource_type = 'gallery'" in featured_sql
+    assert 'r2_deletion_task.resource_id = gallery_image.id' in featured_sql
+    assert "r2_deletion_task.status != 'completed'" in featured_sql
+    assert 'ORDER BY gallery_image.id ASC' in featured_sql
+    assert 'LIMIT 2' in featured_sql
+    featured_where = featured_sql.split('WHERE', 1)[1]
+    assert 'gallery_image.visibility' not in featured_where
+    assert 'created_by_membership_id' not in featured_where
+    assert 'content_restriction' not in featured_where
     assert 'gallery_image.band_id = 71' in audience_sql
     assert "gallery_image.visibility = 'PUBLIC'" in audience_sql
+
+
+def test_content_query_builders_keep_a_route_free_dependency_boundary():
+    import content_queries
+
+    source = Path(content_queries.__file__).read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    imported_roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_roots.update(alias.name.split('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split('.')[0])
+
+    assert imported_roots <= {'sqlalchemy', 'band_access', 'band_content_predicates', 'models'}
+    assert {
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } == {
+        '_announcement_query', '_featured_gallery_rows_query', '_gallery_query', '_song_query',
+        '_song_graph_sql', '_media_pending_deletes_sql', '_media_playable_sql',
+    }
