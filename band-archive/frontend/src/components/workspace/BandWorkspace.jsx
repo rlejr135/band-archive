@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useServicePolicy } from '../../context/ServicePolicyContext.jsx';
@@ -22,6 +22,11 @@ import { AnnouncementEditor } from './announcements/AnnouncementEditor.jsx';
 import { FeaturedMediaEditor } from './featured-media/FeaturedMediaEditor.jsx';
 import { formatRepresentativeDate, mediaPlayerFile, mergeUniqueEntries } from './featured-media/featuredMediaPresentation.js';
 import { ErrorState } from './WorkspaceFeedback.jsx';
+import { WorkspaceContext, useWorkspace } from './WorkspaceContext.jsx';
+import { useCollection } from './useCollection.js';
+import { usePagedRead } from './usePagedRead.js';
+import { WriteGuidance } from './WorkspaceWriteGuidance.jsx';
+import { genericError, PAGE_SIZE, requestOptions } from './workspaceReadSupport.js';
 import UploadCenter from '../common/UploadCenter.jsx';
 import MediaPlayer from '../common/MediaPlayer.jsx';
 import FileUpload from '../common/FileUpload.jsx';
@@ -38,22 +43,10 @@ export { FeaturedMediaEditor };
 // being resolved. The guarded async callbacks then own the terminal state.
 /* eslint-disable react-hooks/set-state-in-effect */
 
-const WorkspaceContext = createContext(null);
-const PAGE_SIZE = 20;
-
-const useWorkspace = () => {
-  const value = useContext(WorkspaceContext);
-  if (!value) throw new Error('useWorkspace must be used in BandWorkspace');
-  return value;
-};
-
 // The application shell always supplies this context. Keeping this boundary
 // inert without it also lets read-only embedded/SSR workspace surfaces remain
 // genuinely read-only instead of creating an unscoped upload task.
 const BandUploadInput = (props) => useContext(UploadContext) ? <FileUpload {...props} /> : null;
-
-const requestOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
-const genericError = '정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
 
 // React Router reuses a route element when only params change. Keying this
 // boundary makes the old workspace (including open forms/details) unmount
@@ -170,39 +163,9 @@ export const BandWorkspace = () => {
   </WorkspaceContext.Provider>;
 };
 
-const useCollection = (kind) => {
-  const { band, api, workspaceKey } = useWorkspace();
-  const [state, setState] = useState({ loading: true, error: '', entries: [], pagination: null });
-  const version = useRef(0);
-  const resource = kind === 'songs' ? 'songs' : 'rehearsals';
-  const load = useCallback(async ({ append = false, offset = 0 } = {}) => {
-    const controller = new AbortController();
-    const token = ++version.current;
-    setState((previous) => ({ ...previous, loading: true, error: '' }));
-    try {
-      const response = await api.requestJson(bandWorkspacePaths[resource](band.id, { limit: PAGE_SIZE, offset }), requestOptions(controller.signal));
-      if (token !== version.current) return;
-      const next = Array.isArray(response?.[resource]) ? response[resource] : [];
-      setState((previous) => ({ loading: false, error: '', entries: append ? [...previous.entries, ...next] : next, pagination: response?.pagination ?? null }));
-    } catch {
-      if (token === version.current) setState((previous) => ({ ...previous, loading: false, error: genericError }));
-    }
-  }, [api, band.id, resource]);
-  useEffect(() => { version.current += 1; load(); }, [load, workspaceKey]);
-  const refresh = useCallback(() => load(), [load]);
-  const loadMore = useCallback(() => load({ append: true, offset: state.pagination?.next_offset ?? state.entries.length }), [load, state.entries.length, state.pagination?.next_offset]);
-  return { ...state, refresh, loadMore };
-};
-
 export const BandDashboard = () => {
   const { band, api, workspaceKey } = useWorkspace();
   return <BandActivityDashboard key={workspaceKey} band={band} api={api} workspaceKey={workspaceKey} />;
-};
-
-const WriteGuidance = () => {
-  const { band } = useWorkspace(); const { user } = useAuth(); const navigate = useNavigate();
-  if (band.membership) return null;
-  return <aside className="workspace-guidance">{user ? '이 밴드의 멤버가 되면 곡과 합주를 작성할 수 있습니다.' : <><span>작성하려면 로그인 후 밴드에 가입해 주세요.</span><button className="secondary-btn" onClick={() => navigate('/login')}>로그인</button></>}</aside>;
 };
 
 export const SongWorkspace = () => {
@@ -480,53 +443,6 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
   return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2>{candidate.current && <p className="availability-notice">조율 후보: {candidate.current.date} · {PERIOD_LABELS[candidate.current.period]}. 정확한 합주 시각은 직접 입력해 주세요. 저장 직전 가능 상태를 다시 확인하지만 예약이나 참석을 보장하지는 않습니다.</p>}<label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>합주 유형<select name="rehearsal_type" value={value.rehearsal_type} onChange={change}>{REHEARSAL_TYPES.map(([type, text]) => <option key={type} value={type}>{type === 'UNCLASSIFIED' ? `${text} (유형 선택)` : text}</option>)}</select></label>{value.rehearsal_type === 'UNCLASSIFIED' && <p className="workspace-muted">기존 합주 유형은 추정하지 않았습니다. 실제 유형을 선택해 주세요.</p>}<label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label><BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} /><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving || resultUnknown}>{saving ? '저장 중…' : '저장'}</button></div></form>;
 };
 
-
-const dedupeEntries = (entries) => {
-  const seen = new Set();
-  return entries.filter((entry) => {
-    if (seen.has(entry.id)) return false;
-    seen.add(entry.id);
-    return true;
-  });
-};
-
-// The route shell keys every workspace by slug and account. This hook adds an
-// abort plus a generation fence for pagination, so a late page cannot paint
-// after either a resource selection or the workspace itself has changed.
-const usePagedRead = (resourceKey, fetchPage) => {
-  const { workspaceKey } = useWorkspace();
-  const [state, setState] = useState({ loading: true, error: '', notFound: false, entries: [], pagination: null });
-  const gate = useRef(createWorkspaceRequestGate());
-  const controllers = useRef(new Set());
-  const readKey = `${workspaceKey}:${resourceKey}`;
-  const load = useCallback(async ({ offset = 0, append = false } = {}) => {
-    const controller = new AbortController();
-    controllers.current.add(controller);
-    const token = gate.current.begin(`${readKey}:${offset}`);
-    setState((previous) => ({ ...previous, loading: true, error: '', notFound: false }));
-    try {
-      const response = await fetchPage({ limit: PAGE_SIZE, offset }, controller.signal);
-      if (controller.signal.aborted || !gate.current.accepts(`${readKey}:${offset}`, token)) return;
-      const next = Array.isArray(response?.entries) ? response.entries : [];
-      setState((previous) => ({ loading: false, error: '', notFound: false, entries: dedupeEntries(append ? [...previous.entries, ...next] : next), pagination: response?.pagination ?? null }));
-    } catch (error) {
-      if (!controller.signal.aborted && gate.current.accepts(`${readKey}:${offset}`, token)) {
-        setState((previous) => ({ ...previous, loading: false, error: genericError, notFound: error?.status === 404 }));
-      }
-    } finally { controllers.current.delete(controller); }
-  }, [fetchPage, readKey]);
-  useEffect(() => {
-    const activeControllers = controllers.current;
-    setState({ loading: true, error: '', notFound: false, entries: [], pagination: null });
-    load();
-    return () => { activeControllers.forEach((controller) => controller.abort()); activeControllers.clear(); };
-  }, [load, readKey]);
-  return {
-    ...state,
-    refresh: useCallback(() => load(), [load]),
-    loadMore: useCallback(() => load({ offset: state.pagination?.next_offset ?? state.entries.length, append: true }), [load, state.entries.length, state.pagination?.next_offset]),
-  };
-};
 
 const RosterUnavailable = () => <section className="workspace-page workspace-empty" role="status"><h1>멤버</h1><p>요청한 밴드 정보는 현재 표시할 수 없습니다.</p></section>;
 

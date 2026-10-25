@@ -18,7 +18,7 @@ dom.window.HTMLElement.prototype.detachEvent = () => {};
 let vite; let workspace; let auth; let bands; let policies;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-const load = async () => { if (workspace) return; vite = await createServer({ server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
+const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 
