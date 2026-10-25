@@ -17,7 +17,9 @@ import { BandLogoManagementRoute } from './components/bands/BandLogoManagement.j
 import { RepresentativeMediaManagementRoute } from './components/bands/RepresentativeMediaManagement.jsx';
 import { BandCreationRequestPage, BandManageRoute, DiscoverBandsPage } from './components/bands/BandOnboarding.jsx';
 import RequireAuth from './components/layout/RequireAuth.jsx';
-import { AvailabilityWorkspace, BandDashboard, BandWorkspaceRoute, GalleryWorkspace, MemberDetailWorkspace, MembersWorkspace, RehearsalWorkspace, RepresentativeMediaWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
+import { AvailabilityWorkspace, BandDashboard, BandWorkspaceRoute, GalleryWorkspace, RehearsalWorkspace, RepresentativeMediaWorkspace, SongWorkspace, SuggestionsWorkspace } from './components/workspace/BandWorkspace.jsx';
+import { MembersWorkspace } from './components/workspace/members/MembersWorkspace.jsx';
+import { MemberDetailWorkspace } from './components/workspace/members/MemberDetailWorkspace.jsx';
 import './App.css';
 import './components/bands/BandsPage.css';
 import './components/home/WelcomeLanding.css';

@@ -14,7 +14,8 @@ import { normalizeRehearsalType, REHEARSAL_TYPES } from '../../services/rehearsa
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import { MediaEngagement } from './MediaEngagement.jsx';
 import BandPlacePicker from './BandPlacePicker.jsx';
-import { MemberProfileEditor, MemberProfileSummary } from './MemberProfile.jsx';
+import { MembersWorkspace } from './members/MembersWorkspace.jsx';
+import { MemberDetailWorkspace } from './members/MemberDetailWorkspace.jsx';
 import { BandDeleteAction } from './BandDeleteAction.jsx';
 import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
 import { AnnouncementEditor } from './announcements/AnnouncementEditor.jsx';
@@ -26,7 +27,6 @@ import { BandUploadInput } from './BandUploadInput.jsx';
 import { ErrorState } from './WorkspaceFeedback.jsx';
 import { WorkspaceContext, useWorkspace } from './WorkspaceContext.jsx';
 import { useCollection } from './useCollection.js';
-import { usePagedRead } from './usePagedRead.js';
 import { WriteGuidance } from './WorkspaceWriteGuidance.jsx';
 import { genericError, PAGE_SIZE, requestOptions } from './workspaceReadSupport.js';
 import UploadCenter from '../common/UploadCenter.jsx';
@@ -39,6 +39,8 @@ export { AnnouncementEditor };
 export { FeaturedMediaEditor };
 export { SuggestionsWorkspace };
 export { GalleryWorkspace };
+// Compatibility exports: remove after all consumers use the members entry points.
+export { MembersWorkspace, MemberDetailWorkspace };
 
 // This file intentionally starts request state from effects: each state reset
 // prevents a previous band/selection from rendering while its replacement is
@@ -438,98 +440,4 @@ const ContentForm = ({ kind, item, onDone, onCancel }) => {
     finally { savingRef.current = false; if (live.current) setSaving(false); }
   };
   return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2>{candidate.current && <p className="availability-notice">조율 후보: {candidate.current.date} · {PERIOD_LABELS[candidate.current.period]}. 정확한 합주 시각은 직접 입력해 주세요. 저장 직전 가능 상태를 다시 확인하지만 예약이나 참석을 보장하지는 않습니다.</p>}<label>제목<input required name="title" value={value.title} onChange={change} /></label>{kind === 'songs' ? <><label>아티스트<input required name="artist" value={value.artist} onChange={change} /></label><label>상태<select name="status" value={value.status} onChange={change}><option>Practice</option><option>Completed</option><option>OnHold</option></select></label><label>장르<input name="genre" value={value.genre} onChange={change} /></label><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></> : <><label>합주 유형<select name="rehearsal_type" value={value.rehearsal_type} onChange={change}>{REHEARSAL_TYPES.map(([type, text]) => <option key={type} value={type}>{type === 'UNCLASSIFIED' ? `${text} (유형 선택)` : text}</option>)}</select></label>{value.rehearsal_type === 'UNCLASSIFIED' && <p className="workspace-muted">기존 합주 유형은 추정하지 않았습니다. 실제 유형을 선택해 주세요.</p>}<label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label><BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} /><fieldset><legend>연결할 곡</legend>{songs.map((song) => <label className="check-row" key={song.id}><input type="checkbox" checked={value.song_ids.includes(String(song.id))} onChange={(event) => setValue((previous) => ({ ...previous, song_ids: event.target.checked ? [...previous.song_ids, String(song.id)] : previous.song_ids.filter((id) => id !== String(song.id)) }))} />{song.title} — {song.artist}</label>)}</fieldset><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label></>}<label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving || resultUnknown}>{saving ? '저장 중…' : '저장'}</button></div></form>;
-};
-
-
-const RosterUnavailable = () => <section className="workspace-page workspace-empty" role="status"><h1>멤버</h1><p>요청한 밴드 정보는 현재 표시할 수 없습니다.</p></section>;
-
-export const MembersWorkspace = () => {
-  const { band, api, workspaceKey } = useWorkspace();
-  const [editing, setEditing] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const activeMember = band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active';
-  const fetchMembers = useCallback(async (page, signal) => {
-    const response = await api.requestJson(bandWorkspacePaths.members(band.id, page), requestOptions(signal));
-    return { entries: response?.members, pagination: response?.pagination };
-  }, [api, band.id]);
-  const { loading, error, notFound, entries, pagination, refresh, loadMore } = usePagedRead('members', fetchMembers);
-  const rosterUnavailable = !loading && notFound;
-  if (rosterUnavailable) return <RosterUnavailable />;
-  const startEditing = () => { setSaved(false); setEditing(true); };
-  return <section className="workspace-page" aria-labelledby="workspace-members-title"><div className="workspace-page-heading"><div><h1 id="workspace-members-title">멤버</h1><p>밴드에서 공개한 멤버와 연습 기록입니다.</p></div>{activeMember && !editing && <button type="button" className="secondary-btn" onClick={startEditing}>내 프로필 수정</button>}</div>
-    {saved && <p role="status">내 프로필을 저장했습니다.</p>}
-    {editing && <MemberProfileEditor key={workspaceKey} band={band} api={api} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); setSaved(true); refresh(); }} />}
-    {loading && entries.length === 0 ? <p aria-live="polite">멤버를 불러오는 중입니다…</p> : error && entries.length === 0 ? <ErrorState message={genericError} retry={refresh} /> : entries.length === 0 ? <div className="workspace-empty"><p>표시할 멤버가 없습니다.</p></div> : <div className="workspace-cards">{entries.map((member) => <article className="workspace-card member-profile-card" key={member.id}><NavLink className="workspace-card-link" to={`/bands/${encodeURIComponent(band.slug)}/members/${member.id}`}><strong>{member.name || '멤버'}{member.is_self && <small className="member-self-badge">나</small>}</strong><MemberProfileSummary member={member} compact /></NavLink>{member.is_self && member.can_edit_profile && !editing && <button type="button" className="secondary-btn" onClick={startEditing}>내 프로필 수정</button>}</article>)}</div>}
-    {pagination?.has_more && <button className="secondary-btn" disabled={loading} onClick={loadMore}>{loading ? '멤버를 불러오는 중…' : '멤버 더 불러오기'}</button>}
-    {error && entries.length > 0 && <ErrorState message={genericError} retry={refresh} />}
-  </section>;
-};
-
-export const MemberDetailWorkspace = () => {
-  const { memberId } = useParams();
-  const { workspaceKey } = useWorkspace();
-  return <MemberDetailReadOnly key={`${workspaceKey}:member:${memberId}`} memberId={memberId} />;
-};
-
-const MemberDetailReadOnly = ({ memberId }) => {
-  const { band, api, workspaceKey } = useWorkspace();
-  const navigate = useNavigate();
-  const [memberState, setMemberState] = useState({ loading: true, error: '', member: null });
-  const [editing, setEditing] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const memberGate = useRef(createWorkspaceRequestGate());
-  useEffect(() => {
-    const controller = new AbortController();
-    const key = `${workspaceKey}:member:${memberId}`;
-    const token = memberGate.current.begin(key);
-    setMemberState({ loading: true, error: '', member: null });
-    api.requestJson(bandWorkspacePaths.member(band.id, memberId), requestOptions(controller.signal)).then((response) => {
-      if (!controller.signal.aborted && memberGate.current.accepts(key, token)) setMemberState({ loading: false, error: '', member: response?.member ?? null });
-    }).catch(() => {
-      if (!controller.signal.aborted && memberGate.current.accepts(key, token)) setMemberState({ loading: false, error: genericError, member: null });
-    });
-    return () => controller.abort();
-  }, [api, band.id, memberId, workspaceKey]);
-  const fetchLogs = useCallback(async (page, signal) => {
-    const response = await api.requestJson(bandWorkspacePaths.memberLogs(band.id, memberId, page), requestOptions(signal));
-    return { entries: response?.logs, pagination: response?.pagination };
-  }, [api, band.id, memberId]);
-  const logs = usePagedRead(`member-logs:${memberId}`, fetchLogs);
-  const [selectedLogId, setSelectedLogId] = useState(null);
-  // Refreshing a log page also renews its short-lived signed URL. Keep only
-  // the id in local state so a successful refresh replaces the rendered URL,
-  // rather than continuing to play the expired object from a stale snapshot.
-  const selectedLog = logs.entries.find((log) => log.id === selectedLogId) ?? null;
-  if (!memberState.loading && (memberState.error || !memberState.member)) return <RosterUnavailable />;
-  return <section className="workspace-page" aria-labelledby="workspace-member-title">
-    {memberState.loading ? <p aria-live="polite">멤버 정보를 불러오는 중입니다…</p> : <><div className="workspace-page-heading"><div><h1 id="workspace-member-title">{memberState.member.name || '멤버'}{memberState.member.is_self && <small className="member-self-badge">나</small>}</h1></div><NavLink className="secondary-btn workspace-button-link" to={`/bands/${encodeURIComponent(band.slug)}/members`}>목록으로</NavLink></div>
-      <MemberProfileSummary member={memberState.member} />
-      {['inactive', 'left', 'pending', 'rejected'].includes(memberState.member.membership_status) && <p className="workspace-muted" role="status">현재 밴드 멤버가 아닙니다. 이전 연습 기록은 보존됩니다.</p>}
-      {memberState.member.is_self && memberState.member.can_edit_profile && !editing && <button type="button" className="secondary-btn" onClick={() => { setSaved(false); setEditing(true); }}>내 프로필 수정</button>}
-      {saved && <p role="status">내 프로필을 저장했습니다.</p>}
-      {editing && <MemberProfileEditor key={`${workspaceKey}:${memberId}`} band={band} api={api} expectedMemberId={memberId} onCancel={() => setEditing(false)} onSaved={(member) => { setMemberState({ loading: false, error: '', member }); setEditing(false); setSaved(true); }} />}
-      <div className="detail-heading"><h2>개인 연습 기록</h2><BandDeleteAction band={band} workspaceKey={`${workspaceKey}:member:${memberId}`} canDelete={memberState.member.can_delete} label="멤버 프로필" path={bandWorkspacePaths.member(band.id, memberId)} onDeleted={() => navigate(`/bands/${encodeURIComponent(band.slug)}/members`, { replace: true })} /></div>
-      {logs.loading && logs.entries.length === 0 ? <p aria-live="polite">기록을 불러오는 중입니다…</p> : logs.entries.length === 0 ? <p className="workspace-muted">표시할 개인 연습 기록이 없습니다.</p> : <div className="workspace-grid"><div className="workspace-list"><ul>{logs.entries.map((log) => <li key={log.id}><button className={selectedLog?.id === log.id ? 'workspace-row selected' : 'workspace-row'} onClick={() => setSelectedLogId(log.id)}><strong>{log.title || '개인 연습 기록'}</strong><span>{log.created_at ? new Date(log.created_at).toLocaleString() : ''}</span><small>{log.file_type === 'video' ? '영상' : '오디오'}</small></button></li>)}</ul>{logs.pagination?.has_more && <button className="secondary-btn" disabled={logs.loading} onClick={logs.loadMore}>{logs.loading ? '기록을 불러오는 중…' : '기록 더 불러오기'}</button>}</div><div className="workspace-detail">{selectedLog ? <PersonalLogPlayback log={selectedLog} workspaceKey={`${workspaceKey}:member:${memberId}`} onRefresh={logs.refresh} onDeleted={() => { setSelectedLogId(null); logs.refresh(); }} /> : <p className="workspace-placeholder">기록을 선택하면 재생할 수 있습니다.</p>}</div></div>}
-      {logs.error && <ErrorState message={genericError} retry={logs.refresh} />}</>}
-  </section>;
-};
-
-const PersonalLogPlayback = ({ log, workspaceKey, onRefresh, onDeleted }) => {
-  const { band, api } = useWorkspace();
-  const [processing, setProcessing] = useState(null);
-  const [processingError, setProcessingError] = useState(false);
-  const staleAttempt = useRef(false);
-  useEffect(() => {
-    const controller = new AbortController(); let live = true;
-    setProcessing(null); setProcessingError(false);
-    api.requestJson(bandWorkspacePaths.personalLogProcessing(band.id, log.id), requestOptions(controller.signal)).then((response) => {
-      if (live && !controller.signal.aborted) setProcessing(response?.processing ?? null);
-    }).catch(() => { if (live && !controller.signal.aborted) setProcessingError(true); });
-    return () => { live = false; controller.abort(); };
-  }, [api, band.id, log.id, workspaceKey]);
-  const source = log.file_type === 'video' ? (log.playback?.video_url || log.playback?.url) : (log.playback?.audio_url || log.playback?.url);
-  const refreshExpiredUrl = () => { if (!staleAttempt.current) { staleAttempt.current = true; onRefresh(); } };
-  return <article className="workspace-media"><div className="detail-heading"><h3>{log.title || '개인 연습 기록'}</h3><BandDeleteAction band={band} workspaceKey={`${workspaceKey}:log:${log.id}`} canDelete={log.can_delete} label="개인 연습 기록" path={bandWorkspacePaths.personalLog(band.id, log.id)} asynchronous resourceType="personal_log" onDeleted={onDeleted} /></div>{source ? log.file_type === 'video' ? <video controls preload="metadata" src={source} onError={refreshExpiredUrl}>브라우저가 영상을 지원하지 않습니다.</video> : <audio controls preload="metadata" src={source} onError={refreshExpiredUrl}>브라우저가 오디오를 지원하지 않습니다.</audio> : <p className="workspace-muted">현재 재생 가능한 파일이 없습니다.</p>}
-    {processing?.status && <p className="workspace-muted">처리 상태: {processing.status === 'failed' ? '처리에 실패했습니다.' : processing.status}</p>}{processingError && <p className="workspace-muted">처리 상태를 확인하지 못했습니다.</p>}
-  </article>;
 };

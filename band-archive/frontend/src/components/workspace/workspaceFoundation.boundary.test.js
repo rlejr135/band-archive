@@ -17,15 +17,17 @@ test('workspace context is a leaf and the shell keeps the existing provider and 
 });
 
 test('workspace hooks are leaf modules and preserve their distinct pagination contracts', async () => {
-  const [workspace, collection, pagedRead, support] = await Promise.all([
+  const [workspace, collection, pagedRead, support, members, detail] = await Promise.all([
     read('./BandWorkspace.jsx'),
     read('./useCollection.js'),
     read('./usePagedRead.js'),
     read('./workspaceReadSupport.js'),
+    read('./members/MembersWorkspace.jsx'),
+    read('./members/MemberDetailWorkspace.jsx'),
   ]);
   for (const source of [collection, pagedRead]) assert.doesNotMatch(source, /from ['"][^'"]*BandWorkspace\.jsx['"]/);
   assert.match(workspace, /import \{ useCollection \} from '\.\/useCollection\.js'/);
-  assert.match(workspace, /import \{ usePagedRead \} from '\.\/usePagedRead\.js'/);
+  for (const source of [members, detail]) assert.match(source, /import \{ usePagedRead \} from '\.\.\/usePagedRead\.js'/);
   assert.doesNotMatch(workspace, /const useCollection = |const usePagedRead = /);
   assert.match(collection, /append \? \[\.\.\.previous\.entries, \.\.\.next\] : next/);
   assert.match(collection, /if \(token !== version\.current\) return/);

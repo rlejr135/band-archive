@@ -15,10 +15,10 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let auth; let bands; let policies;
+let vite; let workspace; let auth; let bands; let policies; let members; let memberDetail;
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
-const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
+const load = async () => { if (workspace) return; vite = await createServer({ envDir: false, server: { middlewareMode: true }, appType: 'custom', optimizeDeps: { noDiscovery: true } }); workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); members = await vite.ssrLoadModule('/src/components/workspace/members/MembersWorkspace.jsx'); memberDetail = await vite.ssrLoadModule('/src/components/workspace/members/MemberDetailWorkspace.jsx'); auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx'); bands = await vite.ssrLoadModule('/src/context/BandContext.jsx'); policies = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx'); };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
 
@@ -32,8 +32,8 @@ const ReadOnlyApp = ({ entry, authValue, bandValue = { activeBands: [] } }) => c
       createElement(Routes, null,
         createElement(Route, { path: '/bands/:bandSlug', element: createElement(workspace.BandWorkspaceRoute) },
           createElement(Route, { index: true, element: createElement(workspace.BandDashboard) }),
-          createElement(Route, { path: 'members', element: createElement(workspace.MembersWorkspace) }),
-          createElement(Route, { path: 'members/:memberId', element: createElement(workspace.MemberDetailWorkspace) }),
+          createElement(Route, { path: 'members', element: createElement(members.MembersWorkspace) }),
+          createElement(Route, { path: 'members/:memberId', element: createElement(memberDetail.MemberDetailWorkspace) }),
           createElement(Route, { path: 'gallery', element: createElement(workspace.GalleryWorkspace) }),
           createElement(Route, { path: 'suggestions', element: createElement(workspace.SuggestionsWorkspace) }),
           createElement(Route, { path: 'songs', element: createElement(workspace.SongWorkspace) }),
