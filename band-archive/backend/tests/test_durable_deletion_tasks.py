@@ -2,13 +2,14 @@
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 import json
+from sqlalchemy import text
 
 from app import create_app
 from deletion_worker import process_task
 from deletion_service import create_or_get_task
 from extensions import db
 from models import (AppUser, Band, BandMembership, DirectUploadSession, Media,
-                    Member, R2DeletionTask, Song, TenantBackfillState, Announcement, AuditEvent)
+                    Member, R2DeletionTask, Song, TenantBackfillState, Announcement, AuditEvent, Comment)
 from storage import storage
 from tests.test_auth import AuthTestBootstrapConfig, _install_jwks, _jwk, _token
 
@@ -202,6 +203,51 @@ def test_platform_announcement_clear_is_synchronous_and_audits_reason_atomically
         assert R2DeletionTask.query.count() == 0
         announcement = db.session.get(Announcement, announcement_id)
         assert announcement is not None and announcement.content == ''
+
+
+def test_platform_comment_delete_uses_same_corrupt_tree_guard(deletion_app, signer):
+    _install_jwks(deletion_app, [[_jwk(signer, 'key-1')]])
+    with deletion_app.app_context():
+        band_a = Band.query.filter_by(slug='band-a').one()
+        band_b = Band.query.filter_by(slug='band-b').one()
+        song_a = Song.query.filter_by(band_id=band_a.id).one()
+        song_b = Song.query.filter_by(band_id=band_b.id).one()
+        owner_a = BandMembership.query.filter_by(band_id=band_a.id, role='owner').one()
+        owner_b = BandMembership.query.filter_by(band_id=band_b.id, role='owner').one()
+        media_a = Media(band_id=band_a.id, created_by_membership_id=owner_a.id,
+                        song_id=song_a.id, filename='tree-a.mp3', file_type='audio')
+        media_b = Media(band_id=band_b.id, created_by_membership_id=owner_b.id,
+                        song_id=song_b.id, filename='tree-b.mp3', file_type='audio')
+        db.session.add_all((media_a, media_b))
+        db.session.flush()
+        parent = Comment(band_id=band_a.id, created_by_membership_id=owner_a.id,
+                         media_id=media_a.id, author='owner', content='parent')
+        db.session.add(parent)
+        db.session.flush()
+        child = Comment(band_id=band_b.id, created_by_membership_id=owner_b.id,
+                        media_id=media_b.id,
+                        author='owner', content='cross-band child')
+        db.session.add(child)
+        db.session.flush()
+        # Create the corrupt cross-band tree edge outside the ORM guard.
+        db.session.execute(text('UPDATE comment SET parent_id=:parent_id WHERE id=:id'),
+                           {'parent_id': parent.id, 'id': child.id})
+        operator = AppUser.query.filter_by(supabase_user_id='77777777-7777-7777-7777-777777777777').one()
+        operator.is_platform_admin = True
+        db.session.commit()
+        band_id, parent_id, child_id = band_a.id, parent.id, child.id
+
+    token = _token(signer, sub='77777777-7777-7777-7777-777777777777', email='operator@example.com')
+    response = deletion_app.test_client().post(
+        f'/api/v2/platform/bands/{band_id}/deletions',
+        headers={'Authorization': f'Bearer {token}'},
+        json={'resource_type': 'comment', 'resource_id': parent_id,
+              'reason': 'Corrupt comment tree', 'confirm': True},
+    )
+    assert response.status_code == 404
+    with deletion_app.app_context():
+        assert db.session.get(Comment, parent_id) is not None
+        assert db.session.get(Comment, child_id) is not None
 
 
 def test_owner_member_delete_is_synchronous_and_cleans_terminal_upload_session(deletion_app, signer):

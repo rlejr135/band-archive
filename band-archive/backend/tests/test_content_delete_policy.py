@@ -3,6 +3,7 @@
 from datetime import date
 
 import pytest
+from sqlalchemy import text
 
 from extensions import db
 from models import (Announcement, AppUser, Band, BandMembership, Comment,
@@ -297,6 +298,68 @@ def test_comment_cascade_suggestion_proceed_and_announcement_clear_policy(access
     with access_app.app_context():
         retained = db.session.get(Announcement, announcement_id)
         assert retained is not None and retained.content == ''
+
+
+@pytest.mark.parametrize('corruption', ('cross_band_descendant', 'wrong_target_descendant', 'cycle'))
+def test_comment_delete_rejects_corrupt_cascade_descendants(
+        access_app, delete_client, signer, corruption):
+    band_id = _band_id(access_app)
+    principals = _principals(signer)
+    with access_app.app_context():
+        band_a = db.session.get(Band, band_id)
+        band_b = Band.query.filter_by(slug='band-b').one()
+        owner_a = BandMembership.query.filter_by(band_id=band_a.id, role='owner', status='active').one()
+        owner_b = BandMembership.query.filter_by(band_id=band_b.id, role='owner', status='active').one()
+        song_a = Song(band_id=band_a.id, created_by_membership_id=owner_a.id,
+                      visibility='PUBLIC', title='safe comment target', artist='artist')
+        song_b = Song.query.filter_by(band_id=band_b.id).one()
+        db.session.add(song_a)
+        db.session.flush()
+        media_a = Media(band_id=band_a.id, created_by_membership_id=owner_a.id,
+                        visibility='PUBLIC', song_id=song_a.id,
+                        filename='comment-a.mp3', file_type='audio')
+        media_b = Media(band_id=band_b.id, created_by_membership_id=owner_b.id,
+                        visibility='PUBLIC', song_id=song_b.id,
+                        filename='comment-b.mp3', file_type='audio')
+        media_other_a = Media(band_id=band_a.id, created_by_membership_id=owner_a.id,
+                              visibility='PUBLIC', song_id=song_a.id,
+                              filename='comment-a-other.mp3', file_type='audio')
+        db.session.add_all((media_a, media_b, media_other_a))
+        db.session.flush()
+        parent = Comment(band_id=band_a.id, created_by_membership_id=owner_a.id,
+                         media_id=media_a.id, author='owner', content='parent')
+        db.session.add(parent)
+        db.session.flush()
+
+        child_band_id = band_b.id if corruption == 'cross_band_descendant' else band_a.id
+        child_membership_id = owner_b.id if child_band_id == band_b.id else owner_a.id
+        child_media_id = (
+            media_b.id if corruption == 'cross_band_descendant'
+            else media_other_a.id if corruption == 'wrong_target_descendant'
+            else media_a.id
+        )
+        child = Comment(band_id=child_band_id, created_by_membership_id=child_membership_id,
+                        media_id=child_media_id,
+                        author='owner', content='corrupt child')
+        db.session.add(child)
+        db.session.flush()
+        # Construct an out-of-band parent edge with Core SQL. The ORM tenant
+        # guard correctly rejects this corruption on ordinary writes.
+        db.session.execute(text('UPDATE comment SET parent_id=:parent_id WHERE id=:id'),
+                           {'parent_id': parent.id, 'id': child.id})
+        if corruption == 'cycle':
+            db.session.execute(text('UPDATE comment SET parent_id=:parent_id WHERE id=:id'),
+                               {'parent_id': child.id, 'id': parent.id})
+        db.session.commit()
+        parent_id, child_id = parent.id, child.id
+
+    response = delete_client.delete(
+        f'/api/v2/bands/{band_id}/comments/{parent_id}', headers=principals['owner'],
+    )
+    assert response.status_code == 404
+    with access_app.app_context():
+        assert db.session.get(Comment, parent_id) is not None
+        assert db.session.get(Comment, child_id) is not None
 
 
 def test_direct_suggestion_delete_is_owner_only(access_app, delete_client, signer):

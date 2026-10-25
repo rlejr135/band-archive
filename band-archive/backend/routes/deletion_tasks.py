@@ -14,6 +14,7 @@ from deletion_service import (FILE_RESOURCES, RESOURCE_MODELS, actor_is_eligible
                               lock_target, load_current_actor, task_public_dict)
 from errors import NotFoundError, ValidationError
 from extensions import db
+from comment_rules import _assert_comment_tree_safe
 from models import (Announcement, AppUser, BandMembership, Comment, DirectUploadSession,
                     GalleryImage, Media, Member, MultipartUploadSession, PersonalLog,
                     PersonalLogMultipartUploadSession, Rehearsal, R2DeletionTask, Song,
@@ -275,7 +276,6 @@ def _platform_delete_text(band_id, resource_type, resource_id, reason):
         raise NotFoundError('Resource not found')
     _target_preconditions(resource_type, target)
     if resource_type == 'comment':
-        from routes.content_writes import _assert_comment_tree_safe
         _assert_comment_tree_safe(target)
     if resource_type == 'announcement':
         target.content = ''
