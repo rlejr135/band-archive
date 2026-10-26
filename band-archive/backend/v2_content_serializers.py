@@ -12,7 +12,7 @@ must never be used as display metadata.
 """
 
 from band_access import MEMBERS, PUBLIC, content_capabilities, effective_visibility
-from media_processing import select_media_source_keys
+from media_sources import select_media_source_keys
 from storage import storage
 
 

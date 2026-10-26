@@ -12,8 +12,8 @@ from legacy_scope import (legacy_band_id, legacy_get_or_404, legacy_query,
                           validate_legacy_graphs)
 from storage import storage
 from media_processing import (create_media, save_media_and_start, retry_audio_processing,
-                              delete_original_and_audio, processing_status_response,
-                              select_media_source_keys)
+                              delete_original_and_audio, processing_status_response)
+from media_sources import select_media_source_keys
 from voting import voter_hash, media_viewer_votes, parse_vote_payload
 from vote_service import apply_vote
 from upload_helpers import prepare_upload

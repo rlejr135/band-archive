@@ -11,8 +11,8 @@ from upload_helpers import prepare_upload
 from storage import storage
 from media_processing import (create_personal_log, save_personal_log_and_start,
                               retry_audio_processing_record, PERSONAL_LOG_SPEC,
-                              delete_original_and_audio, processing_status_response,
-                              select_media_source_keys)
+                              delete_original_and_audio, processing_status_response)
+from media_sources import select_media_source_keys
 from validators import (
     validate_required_string,
     validate_string_length,

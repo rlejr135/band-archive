@@ -17,10 +17,10 @@ from media_processing import (
     process_claimed_media,
     _run_command,
     stop_worker,
-    select_media_source_keys,
     utcnow,
 )
 from models import Media
+from media_sources import select_media_source_keys
 from storage import storage
 
 

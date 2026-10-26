@@ -980,7 +980,7 @@ def set_song_featured_media_v2(band_id, song_id):
 
     def operation():
         from deletion_service import actor_is_eligible, load_current_actor, lock_band_and_membership
-        from media_processing import select_media_source_keys
+        from media_sources import select_media_source_keys
         from content_restrictions import require_unrestricted
         from v2_content_serializers import graph_is_scoped
 

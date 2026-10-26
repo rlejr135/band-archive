@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from media_processing import select_media_source_keys
+from media_sources import select_media_source_keys
 
 
 @pytest.mark.parametrize(

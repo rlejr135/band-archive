@@ -5,7 +5,7 @@ the latter expose storage-era filenames and other mutable implementation data.
 """
 
 from band_access import MEMBERS, PUBLIC, content_capabilities, effective_visibility
-from media_processing import select_media_source_keys
+from media_sources import select_media_source_keys
 from storage import storage
 from v2_content_serializers import MEMBERS_URL_TTL, PUBLIC_URL_TTL, _iso
 from content_restrictions import require_unrestricted
