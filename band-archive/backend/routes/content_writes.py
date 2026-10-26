@@ -33,7 +33,7 @@ from voc_validation import validate_rehearsal_type
 from policy_service import confirm_public_expansion, upload_policy_enabled
 from song_suggestion_service import proceed_song_suggestion
 from v2_content_serializers import (
-    media_visibility, song_visibility, rehearsal_visibility, scope_with_band_visibility, serialize_comment, serialize_media,
+    media_visibility, song_visibility, rehearsal_visibility, serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
 )
 from v2_remaining_read_serializers import personal_log_visibility, serialize_personal_comment
@@ -102,9 +102,10 @@ def set_band_logo(band_id):
             user_id=actor.id, subject=actor.supabase_user_id, account_active=True,
             email_verified=True, is_platform_admin=is_admin,
         )
-        scope = scope_with_band_visibility(BandReadScope(
+        scope = BandReadScope(
             band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
-        ), band)
+            band_visibility=band.default_visibility,
+        )
         image = None
         if image_id is not None:
             image_query = GalleryImage.query.filter(
@@ -1001,9 +1002,10 @@ def set_song_featured_media_v2(band_id, song_id):
             id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
             user_subject=actor.supabase_user_id, user_display_name=actor.display_name, user_email=actor.email,
         ) if membership is not None else None
-        scope = scope_with_band_visibility(BandReadScope(
+        scope = BandReadScope(
             band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
-        ), band)
+            band_visibility=band.default_visibility,
+        )
 
         song_query = Song.query.filter_by(id=song_id, band_id=band.id)
         if db.engine.dialect.name != 'sqlite':

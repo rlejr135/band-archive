@@ -8,7 +8,6 @@ from content_queries import (
 from errors import NotFoundError
 from extensions import db
 from models import Announcement, BandMembership, GalleryImage, Song
-from v2_content_serializers import scope_with_band_visibility
 
 
 def introduction_payload(band, actor=None, *, audience=None):
@@ -22,7 +21,7 @@ def introduction_payload(band, actor=None, *, audience=None):
             email_verified=bool(actor and actor.email_verified is True),
             is_platform_admin=bool(actor and actor.is_platform_admin is True),
         )
-    scope = BandReadScope(band.id, band.slug, audience, None)
+    scope = BandReadScope(band.id, band.slug, audience, None, band.default_visibility)
     payload = render_introduction(scope, band)
     payload['viewer']['can_open_workspace'] = bool(
         audience.account_active and audience.email_verified
@@ -35,7 +34,6 @@ def render_introduction(scope, band):
     """Aggregate the shared introduction after caller resolves visibility scope."""
     from v2_remaining_read_serializers import serialize_announcement, serialize_gallery_image
 
-    scope = scope_with_band_visibility(scope, band)
     total_songs = _song_query(scope, with_rehearsals=False).order_by(None).with_entities(
         func.count(Song.id),
     ).scalar() or 0

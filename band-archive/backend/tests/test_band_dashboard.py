@@ -74,8 +74,6 @@ def test_dashboard_aggregates_only_visible_current_band_graph(access_app, signer
         from content_queries import _song_query
         with access_app.test_request_context('/'):
             scope = read_scope_for_id(band.id, current_audience())
-            from v2_content_serializers import scope_with_band_visibility
-            scope = scope_with_band_visibility(scope, band)
             assert _song_query(scope).filter(Song.id == corrupt.id).count() == 0
         db.session.commit()
         band_id = band.id

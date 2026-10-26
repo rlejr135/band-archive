@@ -148,13 +148,14 @@ def get_band_by_slug(band_slug):
 
 def _logo_for_scope(scope, *, preserve_selection=False):
     from content_queries import _gallery_query
-    from v2_content_serializers import scope_with_band_visibility
     from v2_remaining_read_serializers import serialize_gallery_image
 
     selected = db.session.get(BandLogo, scope.band_id)
     if selected is None:
         return None
-    visible_scope = scope_with_band_visibility(scope, db.session.get(Band, scope.band_id))
+    # Preserve the established lookup order; policy is already snapshotted.
+    _ = db.session.get(Band, scope.band_id)
+    visible_scope = scope
     image = _gallery_query(visible_scope).filter(
         GalleryImage.id == selected.gallery_image_id,
         GalleryImage.band_id == scope.band_id,
@@ -171,7 +172,6 @@ def _logo_for_scope(scope, *, preserve_selection=False):
 def _logo_for_management_scope(scope):
     """Resolve a selected photo only inside the explicit logo-management capability."""
     from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
-    from v2_content_serializers import scope_with_band_visibility
     from v2_remaining_read_serializers import serialize_gallery_image
     from content_restrictions import restriction_predicate
 
@@ -187,7 +187,9 @@ def _logo_for_management_scope(scope):
     ).one_or_none()
     if image is None:
         return None
-    visible_scope = scope_with_band_visibility(scope, db.session.get(Band, scope.band_id))
+    # Preserve the established lookup order; policy is already snapshotted.
+    _ = db.session.get(Band, scope.band_id)
+    visible_scope = scope
     try:
         serialized = serialize_gallery_image(visible_scope, image)
         return {'gallery_image_id': image.id, 'url': serialized.get('url')}
@@ -212,9 +214,9 @@ def _logo_management_access(band, audience):
     ) if membership else None
     scope = BandReadScope(
         band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
+        band_visibility=band.default_visibility,
     )
-    from v2_content_serializers import scope_with_band_visibility
-    return user, scope_with_band_visibility(scope, band)
+    return user, scope
 
 
 @bands_bp.get('/bands/by-slug/<string:band_slug>/logo-management')
@@ -298,20 +300,20 @@ def get_representative_media_management(band_slug):
     from content_restrictions import restriction_predicate
     from band_content_predicates import _not_pending_delete
     from content_queries import _song_graph_sql
-    from v2_content_serializers import scope_with_band_visibility
 
     member_audience = MembershipAudience(
         id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
         user_subject=user.supabase_user_id, user_display_name=user.display_name, user_email=user.email,
     ) if membership else None
-    scope = scope_with_band_visibility(BandReadScope(
+    scope = BandReadScope(
         band_id=band.id, band_slug=band.slug,
         audience=RequestAudience(
             user_id=user.id, subject=user.supabase_user_id, account_active=True,
             email_verified=True, is_platform_admin=user.is_platform_admin is True,
         ),
         membership=member_audience,
-    ), band)
+        band_visibility=band.default_visibility,
+    )
     query = Song.query.filter(
         Song.band_id == band.id,
         Song.visibility.in_(('PUBLIC', 'MEMBERS')),

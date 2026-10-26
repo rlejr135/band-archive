@@ -5,7 +5,6 @@ from band_service import ACTIVE
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, Band, BandMembership
-from v2_content_serializers import scope_with_band_visibility
 
 
 def active_member_write_scope(band_id, actor, *, lock=False, lock_actor=False):
@@ -42,6 +41,7 @@ def active_member_write_scope(band_id, actor, *, lock=False, lock_actor=False):
         id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
         user_subject=actor.supabase_user_id, user_display_name=actor.display_name, user_email=actor.email,
     )
-    return scope_with_band_visibility(BandReadScope(
+    return BandReadScope(
         band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
-    ), band), band, membership, actor
+        band_visibility=band.default_visibility,
+    ), band, membership, actor

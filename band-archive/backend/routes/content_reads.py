@@ -23,7 +23,7 @@ from content_restrictions import prime_unrestricted_records, restriction_predica
 from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
-    graph_is_scoped, media_visibility, rehearsal_visibility, scope_with_band_visibility,
+    graph_is_scoped, media_visibility, rehearsal_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
     serialize_song, song_visibility, visible_to_scope,
 )
@@ -55,10 +55,10 @@ def require_content_read_schema():
 
 def _scope(band_id):
     scope = read_scope_for_id(band_id, current_audience())
-    band = db.session.get(Band, scope.band_id)
-    # ``read_scope_for_id`` already proved this record is live.  The extra
-    # lookup only supplies the resolved policy to pure serializers.
-    return scope_with_band_visibility(scope, band)
+    # Keep the established identity-map lookup; the scope already snapshots
+    # this resolved band's policy at construction.
+    _ = db.session.get(Band, scope.band_id)
+    return scope
 
 
 def _can_feature_for_scope(scope):
@@ -94,9 +94,10 @@ def _featured_management_scope(band_id):
         id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
         user_subject=actor.supabase_user_id, user_display_name=actor.display_name, user_email=actor.email,
     ) if membership else None
-    return scope_with_band_visibility(BandReadScope(
+    return BandReadScope(
         band_id=band.id, band_slug=band.slug, audience=current, membership=member_audience,
-    ), band)
+        band_visibility=band.default_visibility,
+    )
 
 
 def _page_request():

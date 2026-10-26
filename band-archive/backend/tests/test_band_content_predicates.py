@@ -41,6 +41,7 @@ def test_creator_scope_allows_null_and_same_band_only(app):
         scope = BandReadScope(
             band_id=band_a.id, band_slug=band_a.slug,
             audience=RequestAudience(user_id=None, subject=None), membership=None,
+            band_visibility=band_a.default_visibility,
         )
         predicate = _creator_is_scoped_sql(targets.c, scope)
         allowed_by_target_id = {
@@ -129,6 +130,7 @@ def test_predicate_helpers_do_not_query_or_commit(app, monkeypatch):
         scope = BandReadScope(
             band_id=71, band_slug='predicates',
             audience=RequestAudience(user_id=None, subject=None), membership=None,
+            band_visibility='PUBLIC',
         )
 
         def unexpected(*args, **kwargs):

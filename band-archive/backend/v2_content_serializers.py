@@ -114,21 +114,9 @@ def media_visibility(scope, media):
 
 
 def _band_visibility(scope):
-    # BandReadScope represents a URL-resolved live band.  The route supplies
-    # this single field to keep serializers pure and avoids exposing models.
+    # BandReadScope snapshots the URL-resolved live band's policy at creation,
+    # keeping serializers independent of the Band ORM object.
     return getattr(scope, 'band_visibility', PUBLIC)
-
-
-def _attach_band_visibility(scope, visibility):
-    """Attach the URL-resolved band policy to this request-local scope."""
-    if hasattr(scope, 'band_visibility'):
-        return scope
-    object.__setattr__(scope, 'band_visibility', visibility)
-    return scope
-
-
-def scope_with_band_visibility(scope, band):
-    return _attach_band_visibility(scope, band.default_visibility)
 
 
 def media_playback(media, visibility):

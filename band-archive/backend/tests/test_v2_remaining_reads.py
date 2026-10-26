@@ -215,8 +215,8 @@ def test_postgres_contracts_keep_creator_comment_and_featured_queries_tenant_fir
 
     scope = BandReadScope(
         band_id=71, band_slug='compiled', audience=RequestAudience(user_id=None, subject=None), membership=None,
+        band_visibility='PUBLIC',
     )
-    object.__setattr__(scope, 'band_visibility', 'PUBLIC')
     dialect = postgresql.dialect()
     with access_app.app_context():
         creator_sql = str(select(PersonalLog.id).where(

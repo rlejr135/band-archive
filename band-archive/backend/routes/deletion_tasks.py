@@ -19,7 +19,6 @@ from models import (Announcement, AppUser, BandMembership, Comment, DirectUpload
                     GalleryImage, Media, Member, MultipartUploadSession, PersonalLog,
                     PersonalLogMultipartUploadSession, Rehearsal, R2DeletionTask, Song,
                     SongSuggestion)
-from v2_content_serializers import scope_with_band_visibility
 from sqlalchemy.exc import IntegrityError
 
 
@@ -84,9 +83,10 @@ def _authority(band_id, *, operator=False):
         account_active=True, email_verified=True,
         is_platform_admin=actor.is_platform_admin is True,
     )
-    scope = scope_with_band_visibility(BandReadScope(
+    scope = BandReadScope(
         band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
-    ), band)
+        band_visibility=band.default_visibility,
+    )
     return actor, band, membership, scope
 
 

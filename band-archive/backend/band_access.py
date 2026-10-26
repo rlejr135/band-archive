@@ -54,12 +54,13 @@ class MembershipAudience:
 
 @dataclass(frozen=True)
 class BandReadScope:
-    """The only context accepted by tenant-bound read helpers."""
+    """Tenant-bound identity and resolved band-policy snapshot for one request."""
 
     band_id: int
     band_slug: str
     audience: RequestAudience
     membership: MembershipAudience | None
+    band_visibility: str | None
 
     @property
     def is_member(self):
@@ -173,6 +174,7 @@ def read_scope_for_band(band, audience=None):
         band_slug=band.slug,
         audience=audience,
         membership=membership,
+        band_visibility=band.default_visibility,
     )
 
 
