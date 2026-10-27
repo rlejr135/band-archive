@@ -4,7 +4,11 @@ These deliberately use a separate module from legacy ``to_dict`` methods:
 the latter expose storage-era filenames and other mutable implementation data.
 """
 
-from band_access import MEMBERS, PUBLIC, content_capabilities, effective_visibility
+from band_access import MEMBERS, content_capabilities
+from content_visibility import (
+    announcement_visibility, gallery_visibility, personal_log_visibility,
+    suggestion_visibility,
+)
 from media_sources import select_media_source_keys
 from storage import storage
 from v2_content_serializers import MEMBERS_URL_TTL, PUBLIC_URL_TTL, _iso
@@ -17,26 +21,6 @@ def _flags(scope, item, visibility):
         'effective_visibility': visibility,
         **content_capabilities(scope, item),
     }
-
-
-def _band_visibility(scope):
-    return getattr(scope, 'band_visibility', PUBLIC)
-
-
-def personal_log_visibility(scope, log):
-    return effective_visibility(_band_visibility(scope), log.visibility)
-
-
-def gallery_visibility(scope, image):
-    return effective_visibility(_band_visibility(scope), image.visibility)
-
-
-def announcement_visibility(scope, announcement):
-    return effective_visibility(_band_visibility(scope), announcement.visibility)
-
-
-def suggestion_visibility(scope, suggestion):
-    return effective_visibility(_band_visibility(scope), suggestion.visibility)
 
 
 def _ttl(visibility):

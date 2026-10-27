@@ -6,19 +6,17 @@ import pytest
 
 from errors import ValidationError
 from models import Media, Rehearsal, Song
-from v2_content_serializers import (
+from content_visibility import (
+    announcement_visibility,
     belongs_to_scope,
+    gallery_visibility,
     graph_is_scoped,
     media_visibility,
+    personal_log_visibility,
     rehearsal_visibility,
     song_visibility,
-    visible_to_scope,
-)
-from v2_remaining_read_serializers import (
-    announcement_visibility,
-    gallery_visibility,
-    personal_log_visibility,
     suggestion_visibility,
+    visible_to_scope,
 )
 
 

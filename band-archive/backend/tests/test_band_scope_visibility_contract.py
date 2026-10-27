@@ -107,7 +107,7 @@ def test_private_invitation_preview_remains_public_only_even_for_active_owner(
 def test_legacy_read_scope_keeps_band_policy_snapshot_without_reassigning_scope(
         access_app, content_graph, signer):
     from legacy_read_visibility import legacy_read_scope
-    from v2_content_serializers import song_visibility
+    from content_visibility import song_visibility
     from models import Song
 
     with access_app.test_request_context(headers={'Authorization': f'Bearer {_token(signer)}'}):

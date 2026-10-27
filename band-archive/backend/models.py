@@ -1057,7 +1057,7 @@ class GalleryImage(db.Model):
         from flask import has_request_context
         if has_request_context():
             from legacy_read_visibility import legacy_item_visible, legacy_read_scope
-            from v2_remaining_read_serializers import gallery_visibility
+            from content_visibility import gallery_visibility
             scope = legacy_read_scope(self.band_id)
             visible = legacy_item_visible(scope, gallery_visibility(scope, self))
         return {

@@ -22,8 +22,7 @@ from validators import (
     ALLOWED_EXTENSIONS,
 )
 from legacy_read_visibility import legacy_item_visible, legacy_read_scope
-from v2_content_serializers import media_visibility, song_visibility
-from v2_content_serializers import rehearsal_visibility
+from content_visibility import media_visibility, rehearsal_visibility, song_visibility
 from voc_validation import validate_rehearsal_type
 
 rehearsals_bp = Blueprint('rehearsals', __name__)

@@ -20,15 +20,17 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from member_profile_service import active_profile_condition
 from content_restrictions import prime_unrestricted_records, restriction_predicate
+from content_visibility import (
+    graph_is_scoped, media_visibility, personal_log_visibility, rehearsal_visibility,
+    song_visibility, visible_to_scope,
+)
 from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
 from v2_content_serializers import (
-    graph_is_scoped, media_visibility, rehearsal_visibility,
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
-    serialize_song, song_visibility, visible_to_scope,
+    serialize_song,
 )
 from v2_remaining_read_serializers import (
-    personal_log_visibility,
     serialize_announcement, serialize_gallery_image, serialize_member,
     serialize_personal_comment, serialize_personal_log, serialize_personal_processing,
     serialize_suggestion,
@@ -533,7 +535,8 @@ def list_featured_media_candidates(band_id, song_id):
         *_media_pending_deletes_sql(),
     )
     page, pagination = _page_query(query, (Media.created_at.desc(), Media.id.desc()), limit, offset)
-    from v2_content_serializers import _media_display_name, media_visibility
+    from content_visibility import media_visibility
+    from v2_content_serializers import _media_display_name
     values = []
     for item in page:
         if not graph_is_scoped(scope, item):

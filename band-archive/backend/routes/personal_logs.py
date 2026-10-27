@@ -20,7 +20,7 @@ from validators import (
     detect_file_type,
 )
 from legacy_read_visibility import legacy_item_visible, legacy_read_scope
-from v2_remaining_read_serializers import personal_log_visibility
+from content_visibility import personal_log_visibility
 
 personal_logs_bp = Blueprint('personal_logs', __name__)
 

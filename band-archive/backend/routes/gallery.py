@@ -10,7 +10,7 @@ from upload_helpers import prepare_upload
 from validators import (IMAGE_EXTENSIONS, allowed_image_file, generate_secure_filename,
                         guess_content_type)
 from legacy_read_visibility import legacy_item_visible, legacy_read_scope
-from v2_remaining_read_serializers import gallery_visibility
+from content_visibility import gallery_visibility
 
 gallery_bp = Blueprint('gallery', __name__)
 

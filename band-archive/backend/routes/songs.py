@@ -30,7 +30,7 @@ from validators import (
     ALLOWED_EXTENSIONS,
 )
 from legacy_read_visibility import legacy_item_visible, legacy_read_scope
-from v2_content_serializers import media_visibility, rehearsal_visibility, song_visibility
+from content_visibility import media_visibility, rehearsal_visibility, song_visibility
 
 songs_bp = Blueprint('songs', __name__)
 

@@ -8,8 +8,7 @@ from errors import NotFoundError, ValidationError
 from legacy_scope import (legacy_get_or_404, legacy_query, reject_foreign_children,
                           reject_legacy_destructive_write, validate_legacy_graphs)
 from legacy_read_visibility import legacy_item_visible, legacy_read_scope
-from v2_content_serializers import media_visibility
-from v2_remaining_read_serializers import personal_log_visibility
+from content_visibility import media_visibility, personal_log_visibility
 
 comments_bp = Blueprint('comments', __name__)
 

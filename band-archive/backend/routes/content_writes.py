@@ -22,6 +22,10 @@ from band_service import ACTIVE, MANAGER_ROLES, audit
 from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
 from content_queries import _media_pending_deletes_sql, _media_playable_sql
 from content_write_scope import active_member_write_scope
+from content_visibility import (
+    graph_is_scoped, media_visibility, personal_log_visibility, rehearsal_visibility,
+    song_visibility,
+)
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comment, DirectUploadSession,
@@ -33,10 +37,10 @@ from voc_validation import validate_rehearsal_type
 from policy_service import confirm_public_expansion, upload_policy_enabled
 from song_suggestion_service import proceed_song_suggestion
 from v2_content_serializers import (
-    media_visibility, song_visibility, rehearsal_visibility, serialize_comment, serialize_media,
+    serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
 )
-from v2_remaining_read_serializers import personal_log_visibility, serialize_personal_comment
+from v2_remaining_read_serializers import serialize_personal_comment
 from v2_remaining_read_serializers import serialize_announcement, serialize_gallery_image, serialize_suggestion
 
 
@@ -982,8 +986,6 @@ def set_song_featured_media_v2(band_id, song_id):
         from deletion_service import actor_is_eligible, load_current_actor, lock_band_and_membership
         from media_sources import select_media_source_keys
         from content_restrictions import require_unrestricted
-        from v2_content_serializers import graph_is_scoped
-
         principal = current_app_user(required=True)
         band, membership = lock_band_and_membership(band_id, principal.id, require_member=False)
         if band is None:

@@ -8,8 +8,11 @@ import pytest
 import band_access
 from band_access import BandReadScope, RequestAudience, effective_visibility, read_scope_for_band
 from extensions import db
-from v2_content_serializers import _band_visibility as content_band_visibility, song_visibility
-from v2_remaining_read_serializers import _band_visibility as remaining_band_visibility
+from content_visibility import (
+    _band_visibility as content_band_visibility,
+    _band_visibility as remaining_band_visibility,
+    song_visibility,
+)
 
 
 def _audience():
