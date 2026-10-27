@@ -9,8 +9,7 @@ import sys
 BACKEND = Path(__file__).resolve().parents[1]
 CONSUMERS = (
     'media_processing.py',
-    'v2_content_serializers.py',
-    'v2_remaining_read_serializers.py',
+    'media_access_service.py',
     'routes/content_writes.py',
     'routes/songs.py',
     'routes/personal_logs.py',

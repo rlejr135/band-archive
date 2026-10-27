@@ -4,14 +4,15 @@ These deliberately use a separate module from legacy ``to_dict`` methods:
 the latter expose storage-era filenames and other mutable implementation data.
 """
 
-from band_access import MEMBERS, content_capabilities
+from band_access import content_capabilities
 from content_visibility import (
-    announcement_visibility, gallery_visibility, personal_log_visibility,
+    announcement_visibility, personal_log_visibility,
     suggestion_visibility,
 )
-from media_sources import select_media_source_keys
-from storage import storage
-from v2_content_serializers import MEMBERS_URL_TTL, PUBLIC_URL_TTL, _iso
+from media_access_service import (
+    gallery_image_url, personal_log_playback, prepare_gallery_access,
+)
+from v2_content_serializers import _iso
 from content_restrictions import require_unrestricted
 
 
@@ -20,31 +21,6 @@ def _flags(scope, item, visibility):
         'visibility': getattr(item, 'visibility', visibility),
         'effective_visibility': visibility,
         **content_capabilities(scope, item),
-    }
-
-
-def _ttl(visibility):
-    return MEMBERS_URL_TTL if visibility == MEMBERS else PUBLIC_URL_TTL
-
-
-def _personal_playback(log, visibility):
-    require_unrestricted(log)
-    from deletion_service import is_pending_deletion
-    if is_pending_deletion('personal_log', log.id, log.band_id):
-        return {'url': None, 'video_url': None, 'audio_url': None,
-                'original_pruned': bool(getattr(log, 'original_pruned_at', None))}
-    sources = select_media_source_keys(log, 'personal_logs')
-    # Personal logs do not currently have a 720p field.  The shared source
-    # selector still provides canonical-first, pruned-safe original/audio
-    # behavior and never exposes the selected keys themselves.
-    original = sources['original']
-    audio = sources['audio']
-    original_url = storage.generate_url(original, expires_in=_ttl(visibility)) if original else None
-    return {
-        'url': original_url,
-        'video_url': original_url if log.file_type == 'video' else None,
-        'audio_url': storage.generate_url(audio, expires_in=_ttl(visibility)) if audio else None,
-        'original_pruned': bool(getattr(log, 'original_pruned_at', None)),
     }
 
 
@@ -82,7 +58,7 @@ def serialize_personal_log(scope, log):
         'file_type': log.file_type,
         'file_size': log.file_size,
         'created_at': _iso(log.created_at),
-        'playback': _personal_playback(log, visibility),
+        'playback': personal_log_playback(log, visibility),
         **_flags(scope, log, visibility),
     }
 
@@ -119,17 +95,14 @@ def serialize_personal_comment(scope, comment, visibility):
 
 
 def serialize_gallery_image(scope, image):
-    require_unrestricted(image)
-    from deletion_service import is_pending_deletion
-    visibility = gallery_visibility(scope, image)
-    key = image.object_key or (f'gallery/{image.filename}' if image.filename else None)
-    pending = is_pending_deletion('gallery', image.id, image.band_id)
+    prepared = prepare_gallery_access(scope, image)
+    visibility = prepared.visibility
     return {
         'id': image.id,
         'file_size': image.file_size,
         'is_featured': bool(image.is_featured),
         'created_at': _iso(image.created_at),
-        'url': storage.generate_url(key, expires_in=_ttl(visibility)) if key and not pending else None,
+        'url': gallery_image_url(prepared),
         **_flags(scope, image, visibility),
     }
 

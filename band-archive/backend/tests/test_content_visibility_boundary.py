@@ -20,6 +20,7 @@ PRODUCT_CONSUMERS = (
     'routes/personal_logs.py',
     'routes/gallery.py',
     'media_processing.py',
+    'media_access_service.py',
     'models.py',
     'v2_content_serializers.py',
     'v2_remaining_read_serializers.py',

@@ -17,8 +17,11 @@ from models import (Band, BandMembership, ContentRestriction, GalleryImage, Medi
                     Member, PersonalLog, R2DeletionTask, Song)
 from storage import storage
 from tests.test_band_access_phase6 import access_app  # noqa: F401
-from v2_content_serializers import MEMBERS_URL_TTL, PUBLIC_URL_TTL, media_playback
-from v2_remaining_read_serializers import _personal_playback, serialize_gallery_image
+from media_access_service import (
+    MEMBERS_URL_TTL, PUBLIC_URL_TTL, media_playback,
+    personal_log_playback as _personal_playback,
+)
+from v2_remaining_read_serializers import serialize_gallery_image
 
 
 @pytest.fixture
