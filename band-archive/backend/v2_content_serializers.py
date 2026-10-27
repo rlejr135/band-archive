@@ -13,10 +13,10 @@ must never be used as display metadata.
 
 from band_access import content_capabilities
 from content_visibility import (
-    belongs_to_scope, graph_is_scoped, media_visibility, rehearsal_visibility,
+    belongs_to_scope, media_visibility, rehearsal_visibility,
     song_visibility, visible_to_scope,
 )
-from media_access_service import MEMBERS_URL_TTL, PUBLIC_URL_TTL, media_playback
+from media_access_service import MEMBERS_URL_TTL, PUBLIC_URL_TTL, media_playback, prepare_media_access
 
 
 def _iso(value):
@@ -69,11 +69,7 @@ def song_ref(scope, song):
 
 
 def serialize_media(scope, media, viewer_vote=0):
-    from content_restrictions import require_unrestricted
-    require_unrestricted(media)
-    if not graph_is_scoped(scope, media):
-        raise ValueError('Media graph is outside the resolved band scope.')
-    visibility = media_visibility(scope, media)
+    visibility = prepare_media_access(scope, media)
     return {
         'id': media.id,
         'song_id': media.song_id,

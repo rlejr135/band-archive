@@ -10,7 +10,7 @@ from content_visibility import (
     suggestion_visibility,
 )
 from media_access_service import (
-    gallery_image_url, personal_log_playback, prepare_gallery_access,
+    gallery_image_url, personal_log_playback, prepare_gallery_access, prepare_personal_log_access,
 )
 from v2_content_serializers import _iso
 from content_restrictions import require_unrestricted
@@ -48,8 +48,7 @@ def serialize_member(scope, member):
 
 
 def serialize_personal_log(scope, log):
-    require_unrestricted(log)
-    visibility = personal_log_visibility(scope, log)
+    visibility = prepare_personal_log_access(scope, log)
     return {
         'id': log.id,
         'member_id': log.member_id,

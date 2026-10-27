@@ -64,8 +64,8 @@ def _media_order(monkeypatch, events):
         return item.original_filename
 
     monkeypatch.setattr(content_restrictions, 'require_unrestricted', require)
-    monkeypatch.setattr(v2_content_serializers, 'graph_is_scoped', graph)
-    monkeypatch.setattr(v2_content_serializers, 'media_visibility', visibility)
+    monkeypatch.setattr(media_access_service, 'graph_is_scoped', graph)
+    monkeypatch.setattr(media_access_service, 'media_visibility', visibility)
     monkeypatch.setattr(content_visibility, 'graph_is_scoped', graph)
     monkeypatch.setattr(content_visibility, 'effective_visibility', effective_visibility)
     monkeypatch.setattr(v2_content_serializers, '_media_display_name', display_name)
@@ -214,8 +214,8 @@ def _personal_order(monkeypatch, events):
         events.append('metadata')
         return None
 
-    monkeypatch.setattr(v2_remaining_read_serializers, 'require_unrestricted', require)
-    monkeypatch.setattr(v2_remaining_read_serializers, 'personal_log_visibility', visibility)
+    monkeypatch.setattr(media_access_service, 'require_unrestricted', require)
+    monkeypatch.setattr(media_access_service, 'personal_log_visibility', visibility)
     monkeypatch.setattr(content_visibility, 'effective_visibility', effective_visibility)
     monkeypatch.setattr(v2_remaining_read_serializers, '_iso', iso)
     monkeypatch.setattr(v2_remaining_read_serializers, '_flags', lambda *_: {})
@@ -231,7 +231,6 @@ def _personal_playback_order(monkeypatch, events, *, pending=False, fail_restric
         if restriction_calls == fail_restriction_at:
             raise NotFoundError()
 
-    monkeypatch.setattr(v2_remaining_read_serializers, 'require_unrestricted', require)
     monkeypatch.setattr(media_access_service, 'require_unrestricted', require)
     monkeypatch.setattr(deletion_service, 'is_pending_deletion',
                         lambda *_: events.append('pending') or pending)
@@ -268,7 +267,7 @@ def test_personal_log_initial_restriction_failure_stops_before_visibility_metada
         events.append('restriction')
         raise NotFoundError()
 
-    monkeypatch.setattr(v2_remaining_read_serializers, 'require_unrestricted', reject)
+    monkeypatch.setattr(media_access_service, 'require_unrestricted', reject)
     monkeypatch.setattr(media_access_service.storage, 'generate_url',
                         lambda *_args, **_kwargs: events.append('sign'))
 
@@ -286,7 +285,7 @@ def test_personal_log_visibility_failure_occurs_before_metadata_and_signing(monk
         events.append('visibility')
         raise ValueError('visibility failure')
 
-    monkeypatch.setattr(v2_remaining_read_serializers, 'personal_log_visibility', broken_visibility)
+    monkeypatch.setattr(media_access_service, 'personal_log_visibility', broken_visibility)
     monkeypatch.setattr(media_access_service.storage, 'generate_url',
                         lambda *_args, **_kwargs: events.append('sign'))
 

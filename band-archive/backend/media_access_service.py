@@ -8,7 +8,9 @@ is not an authorization token. ORM attribute reads may trigger lazy loads.
 from dataclasses import dataclass
 
 from band_access import MEMBERS
-from content_visibility import gallery_visibility
+from content_visibility import (
+    gallery_visibility, graph_is_scoped, media_visibility, personal_log_visibility,
+)
 from media_sources import select_media_source_keys
 from storage import storage
 from content_restrictions import require_unrestricted
@@ -16,6 +18,21 @@ from content_restrictions import require_unrestricted
 
 PUBLIC_URL_TTL = 3600
 MEMBERS_URL_TTL = 300
+
+
+def prepare_media_access(scope, media):
+    """Return effective visibility after existing graph checks for authorized media."""
+    from content_restrictions import require_unrestricted
+    require_unrestricted(media)
+    if not graph_is_scoped(scope, media):
+        raise ValueError('Media graph is outside the resolved band scope.')
+    return media_visibility(scope, media)
+
+
+def prepare_personal_log_access(scope, log):
+    """Return effective visibility for an authorized log without adding graph checks."""
+    require_unrestricted(log)
+    return personal_log_visibility(scope, log)
 
 
 def media_playback(media, visibility):
