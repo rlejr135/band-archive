@@ -16,7 +16,7 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, Band, BandMembership, DirectUploadSession, Media, Song
 from direct_upload_service import complete_direct_session
-import routes.uploads as upload_routes
+import upload_authorization_service as upload_authorization
 
 from tests.test_preserve_identity_refresh_postgres import private_pg17, _upgrade_postgres
 
@@ -160,7 +160,7 @@ def test_postgres_transfer_role_and_leave_serialize_band_first(private_pg17, mon
     allow_materialize = threading.Event()
     completion_result = []
     monkeypatch.setattr(
-        upload_routes, 'current_app_user',
+        upload_authorization, 'current_app_user',
         lambda required=True: db.session.get(AppUser, upload_user_id),
     )
 
@@ -189,7 +189,7 @@ def test_postgres_transfer_role_and_leave_serialize_band_first(private_pg17, mon
 
                 item, status = complete_direct_session(
                     session, verify_size, create_media,
-                    before_materialize=lambda completing: upload_routes._v2_reauthorize_upload_session_owner(
+                    before_materialize=lambda completing: upload_authorization.reauthorize_upload_session_owner(
                         band_id, completing),
                 )
                 completion_result.append(('ok', item.id, status))

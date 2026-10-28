@@ -4,9 +4,8 @@ from flask import Blueprint, after_this_request, jsonify, request, current_app
 from sqlalchemy import func, inspect, text
 
 from auth_service import current_app_user
-from band_service import ACTIVE
 from extensions import db
-from models import (AppUser, Band, BandMembership, Media, Song, Rehearsal, Member,
+from models import (Band, Media, Song, Rehearsal, Member,
                     PersonalLog, GalleryImage, MultipartUploadSession,
                     PersonalLogMultipartUploadSession, DirectUploadSession)
 from direct_upload_service import (
@@ -20,6 +19,11 @@ from storage import storage
 from media_processing import (create_media, create_personal_log, save_media_and_start,
                               save_personal_log_and_start)
 from upload_record_service import create_uploaded_record
+from upload_authorization_service import (
+    active_upload_membership, validate_media_upload_target,
+    validate_personal_log_upload_target, require_upload_session_owner,
+    reauthorize_upload_session_owner,
+)
 from upload_materialization_service import (
     MAX_VIDEO_BYTES, materialize_multipart_upload, materialize_direct_upload,
     materialize_direct_gallery_upload,
@@ -34,7 +38,7 @@ from multipart_upload_service import (
     session_payload, spec_for_session,
 )
 from validators import (allowed_file, allowed_image_file, generate_secure_filename,
-                        detect_file_type, guess_content_type)
+                        detect_file_type, guess_content_type, require_int)
 from v2_upload_serializers import (
     serialize_direct_upload_completion, serialize_direct_gallery_completion,
     serialize_multipart_upload_completion,
@@ -43,16 +47,6 @@ from v2_upload_serializers import (
 uploads_bp = Blueprint('uploads', __name__)
 
 UPLOAD_CAPABILITY_HEADER = 'X-Upload-Capability'
-
-
-def _require_int(value, field_name, minimum=None, maximum=None):
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValidationError(f'{field_name} must be an integer')
-    if minimum is not None and value < minimum:
-        raise ValidationError(f'{field_name} must be at least {minimum}')
-    if maximum is not None and value > maximum:
-        raise ValidationError(f'{field_name} must be at most {maximum}')
-    return value
 
 
 def _legacy_upload_band_id():
@@ -83,23 +77,6 @@ def _v2_upload_write(view):
         current_app_user(required=True)
         return view(*args, **kwargs)
     return wrapped
-
-
-def _v2_active_membership(band_id, *, lock=False):
-    """Resolve the current actor only as an active member of this URL band."""
-    user = current_app_user(required=True)
-    band_query = Band.query.filter(Band.id == band_id, Band.deleted_at.is_(None))
-    member_query = BandMembership.query.filter_by(band_id=band_id, user_id=user.id, status=ACTIVE)
-    if lock and db.engine.dialect.name != 'sqlite':
-        band_query = band_query.with_for_update()
-        member_query = member_query.with_for_update()
-    band = band_query.one_or_none()
-    if band is None:
-        raise NotFoundError('Band not found')
-    membership = member_query.one_or_none()
-    if membership is None:
-        raise ValidationError('An active band membership is required.', status_code=403)
-    return band, membership
 
 
 def _v2_begin_write():
@@ -168,37 +145,6 @@ def _v2_used_and_reserved_bytes(band_id):
     return int(used), int(reserved)
 
 
-def _v2_media_target(band_id, data):
-    from content_restrictions import require_unrestricted
-    song_id = _require_int(data.get('song_id'), 'song_id', minimum=1)
-    song = Song.query.filter_by(id=song_id, band_id=band_id).one_or_none()
-    if song is None:
-        raise NotFoundError('Song not found')
-    require_unrestricted(song)
-    for linked_rehearsal in song.rehearsals:
-        if linked_rehearsal.band_id != band_id:
-            raise NotFoundError('Song not found')
-        require_unrestricted(linked_rehearsal)
-    rehearsal_id = data.get('rehearsal_id')
-    if rehearsal_id is not None:
-        rehearsal_id = _require_int(rehearsal_id, 'rehearsal_id', minimum=1)
-        rehearsal = Rehearsal.query.filter_by(id=rehearsal_id, band_id=band_id).one_or_none()
-        if rehearsal is None:
-            raise NotFoundError('Rehearsal not found')
-        require_unrestricted(rehearsal)
-    return song_id, rehearsal_id
-
-
-def _v2_personal_log_target(band_id, member_id):
-    from content_restrictions import require_unrestricted
-    member_id = _require_int(member_id, 'member_id', minimum=1)
-    member = Member.query.filter_by(id=member_id, band_id=band_id).one_or_none()
-    if member is None:
-        raise NotFoundError('Member not found')
-    require_unrestricted(member)
-    return member_id
-
-
 def _v2_direct_session_or_404(session_id, band_id):
     session = DirectUploadSession.query.filter_by(id=session_id, band_id=band_id).one_or_none()
     if session is None:
@@ -207,47 +153,20 @@ def _v2_direct_session_or_404(session_id, band_id):
     return db.session.get(DirectUploadSession, session.id)
 
 
-def _v2_require_upload_session_owner(band_id, session, membership):
-    """Bind completion to its active, verified creator before any R2 work."""
-    if (session.band_id != band_id
-            or session.created_by_membership_id != membership.id):
-        raise NotFoundError('Upload session not found')
-    owner = AppUser.query.filter_by(id=membership.user_id).with_for_update().populate_existing().one_or_none()
-    if owner is None or owner.status != ACTIVE or owner.email_verified is not True:
-        raise ValidationError('An active, verified upload owner is required.', status_code=403)
-    member_id = getattr(session, 'member_id', None)
-    song_id = getattr(session, 'song_id', None)
-    if member_id is not None:
-        _v2_personal_log_target(band_id, member_id)
-    elif song_id is not None:
-        _v2_media_target(band_id, {'song_id': song_id, 'rehearsal_id': session.rehearsal_id})
-    return membership
-
-
-def _v2_reauthorize_upload_session_owner(band_id, session):
-    """Recheck creator authority after the completion claim and R2 verify."""
-    from content_restrictions import clear_restriction_cache
-    # The completing claim committed and released the original band lock.
-    # A rights case may have been applied while object I/O was in flight.
-    clear_restriction_cache()
-    _, membership = _v2_active_membership(band_id, lock=True)
-    return _v2_require_upload_session_owner(band_id, session, membership)
-
-
 def _v2_direct_completion_session(session_id, band_id):
     """Authorize the original creator before expiry cleanup can touch R2."""
-    _, membership = _v2_active_membership(band_id, lock=True)
+    _, membership = active_upload_membership(band_id, lock=True)
     session = DirectUploadSession.query.filter_by(id=session_id, band_id=band_id).one_or_none()
     if session is None:
         raise NotFoundError('Upload session not found')
-    _v2_require_upload_session_owner(band_id, session, membership)
+    require_upload_session_owner(band_id, session, membership)
     expire_direct_session_if_needed(session)
     return db.session.get(DirectUploadSession, session.id)
 
 
 def _v2_multipart_completion_session(session_id, band_id):
     """Authorize the original creator before multipart recovery/expiry I/O."""
-    _, membership = _v2_active_membership(band_id, lock=True)
+    _, membership = active_upload_membership(band_id, lock=True)
     session = None
     for model in (MultipartUploadSession, PersonalLogMultipartUploadSession):
         session = model.query.filter_by(id=session_id, band_id=band_id).one_or_none()
@@ -255,7 +174,7 @@ def _v2_multipart_completion_session(session_id, band_id):
             break
     if session is None or session.is_legacy:
         raise NotFoundError('Upload session not found')
-    _v2_require_upload_session_owner(band_id, session, membership)
+    require_upload_session_owner(band_id, session, membership)
     return _v2_session_or_404(session_id, band_id, recover_aborting=False)
 
 
@@ -272,17 +191,17 @@ def _legacy_session_or_404(session_id, *, recover_aborting=True):
 
 def _validate_media_target(song_id, rehearsal_id):
     legacy_band_id = _legacy_upload_band_id()
-    song_id = _require_int(song_id, 'song_id', minimum=1)
+    song_id = require_int(song_id, 'song_id', minimum=1)
     song = legacy_get_or_404(Song, song_id, 'Song not found')
     if rehearsal_id is not None:
-        rehearsal_id = _require_int(rehearsal_id, 'rehearsal_id', minimum=1)
+        rehearsal_id = require_int(rehearsal_id, 'rehearsal_id', minimum=1)
         legacy_get_or_404(Rehearsal, rehearsal_id, 'Rehearsal not found')
     return song_id, rehearsal_id
 
 
 def _validate_personal_log_target(member_id):
     legacy_band_id = _legacy_upload_band_id()
-    member_id = _require_int(member_id, 'member_id', minimum=1)
+    member_id = require_int(member_id, 'member_id', minimum=1)
     legacy_get_or_404(Member, member_id, 'Member not found')
     return member_id
 
@@ -318,7 +237,7 @@ def _create_personal_log_from_object(member_id, filename, original_filename, tit
 def _verified_direct_upload_size(data, key_prefix, filename):
     actual_size = _object_size(f'{key_prefix}/{filename}')
     declared_size = data.get('file_size')
-    if declared_size is not None and _require_int(declared_size, 'file_size', minimum=0) != actual_size:
+    if declared_size is not None and require_int(declared_size, 'file_size', minimum=0) != actual_size:
         raise ValidationError('Uploaded object size does not match file_size.')
     return actual_size
 
@@ -351,7 +270,7 @@ def v2_initiate_direct_upload(band_id):
     filename = data.get('filename', '').strip() if isinstance(data.get('filename'), str) else ''
     if not filename or not allowed_file(filename):
         raise ValidationError('A supported filename is required.')
-    declared_bytes = _require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1,
+    declared_bytes = require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1,
                                   maximum=MAX_VIDEO_BYTES)
     has_member = data.get('member_id') is not None
     has_song_target = data.get('song_id') is not None or data.get('rehearsal_id') is not None
@@ -361,7 +280,7 @@ def v2_initiate_direct_upload(band_id):
     secure_name = generate_secure_filename(filename)
 
     def operation():
-        band, membership = _v2_active_membership(band_id, lock=True)
+        band, membership = active_upload_membership(band_id, lock=True)
         assertion = validate_upload_assertion(data, current_app_user(required=True))
         used, reserved = _v2_used_and_reserved_bytes(band.id)
         if used + reserved + declared_bytes > band.storage_quota_bytes:
@@ -379,10 +298,10 @@ def v2_initiate_direct_upload(band_id):
                 raise ValidationError('title must be 200 characters or less')
             return _v2_policy_session(create_direct_session, membership, assertion,
                 kind='personal_log', object_key=f'bands/{band.id}/personal_logs/{secure_name}',
-                member_id=_v2_personal_log_target(band.id, data.get('member_id')),
+                member_id=validate_personal_log_upload_target(band.id, data.get('member_id')),
                 title=title or filename, **common,
             )
-        song_id, rehearsal_id = _v2_media_target(band.id, data)
+        song_id, rehearsal_id = validate_media_upload_target(band.id, data)
         return _v2_policy_session(create_direct_session, membership, assertion,
             kind='media', object_key=f'bands/{band.id}/media/{secure_name}',
             song_id=song_id, rehearsal_id=rehearsal_id, **common,
@@ -405,7 +324,7 @@ def v2_complete_direct_upload(band_id, session_id):
         require_direct_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
         return complete_direct_session(
             session, _object_size, materialize_direct_upload,
-            before_materialize=lambda completing: _v2_reauthorize_upload_session_owner(band_id, completing),
+            before_materialize=lambda completing: reauthorize_upload_session_owner(band_id, completing),
         )
 
     item, status = _v2_write(operation)
@@ -422,13 +341,13 @@ def v2_initiate_direct_gallery_upload(band_id):
     filename = data.get('filename', '').strip() if isinstance(data.get('filename'), str) else ''
     if not filename or not allowed_image_file(filename):
         raise ValidationError('A supported image filename is required.')
-    declared_bytes = _require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1,
+    declared_bytes = require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1,
                                   maximum=MAX_VIDEO_BYTES)
     content_type = data.get('content_type', '').strip() if isinstance(data.get('content_type'), str) else ''
     secure_name = generate_secure_filename(filename)
 
     def operation():
-        band, membership = _v2_active_membership(band_id, lock=True)
+        band, membership = active_upload_membership(band_id, lock=True)
         assertion = validate_upload_assertion(data, current_app_user(required=True))
         used, reserved = _v2_used_and_reserved_bytes(band.id)
         if used + reserved + declared_bytes > band.storage_quota_bytes:
@@ -459,7 +378,7 @@ def v2_complete_direct_gallery_upload(band_id, session_id):
         require_direct_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
         return complete_direct_session(
             session, _object_size, materialize_direct_gallery_upload,
-            before_materialize=lambda completing: _v2_reauthorize_upload_session_owner(band_id, completing),
+            before_materialize=lambda completing: reauthorize_upload_session_owner(band_id, completing),
         )
 
     item, status = _v2_write(operation)
@@ -476,7 +395,7 @@ def v2_initiate_multipart_upload(band_id):
     filename = data.get('filename', '').strip() if isinstance(data.get('filename'), str) else ''
     if not filename or not allowed_file(filename) or detect_file_type(filename) != 'video':
         raise ValidationError('A supported video filename is required.')
-    declared_bytes = _require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1, maximum=MAX_VIDEO_BYTES)
+    declared_bytes = require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1, maximum=MAX_VIDEO_BYTES)
     has_member = data.get('member_id') is not None
     has_song_target = data.get('song_id') is not None or data.get('rehearsal_id') is not None
     if has_member == has_song_target:
@@ -485,7 +404,7 @@ def v2_initiate_multipart_upload(band_id):
     secure_name = generate_secure_filename(filename)
 
     def operation():
-        band, membership = _v2_active_membership(band_id, lock=True)
+        band, membership = active_upload_membership(band_id, lock=True)
         assertion = validate_upload_assertion(data, current_app_user(required=True))
         used, reserved = _v2_used_and_reserved_bytes(band.id)
         if used + reserved + declared_bytes > band.storage_quota_bytes:
@@ -500,11 +419,11 @@ def v2_initiate_multipart_upload(band_id):
             title = data.get('title', '').strip() if isinstance(data.get('title'), str) else ''
             if len(title or filename) > 200:
                 raise ValidationError('title must be 200 characters or less')
-            member_id = _v2_personal_log_target(band.id, data.get('member_id'))
+            member_id = validate_personal_log_upload_target(band.id, data.get('member_id'))
             common['object_key'] = common['object_key'].format(prefix='personal_logs')
             return _v2_policy_session(create_session, membership, assertion, PERSONAL_LOG_TARGET,
                                       member_id=member_id, title=title or filename, **common)
-        song_id, rehearsal_id = _v2_media_target(band.id, data)
+        song_id, rehearsal_id = validate_media_upload_target(band.id, data)
         common['object_key'] = common['object_key'].format(prefix='media')
         return _v2_policy_session(create_session, membership, assertion, MEDIA_TARGET,
                                   song_id=song_id, rehearsal_id=rehearsal_id, **common)
@@ -533,7 +452,7 @@ def v2_presign_multipart_part(band_id, session_id):
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         raise ValidationError('A JSON object is required.')
-    part, upload_url = issue_part(session, _require_int(data.get('part_number'), 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS))
+    part, upload_url = issue_part(session, require_int(data.get('part_number'), 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS))
     if upload_url is False:
         return jsonify(part_payload(part)), 409
     payload = part_payload(part); payload.update({'upload_url': upload_url, 'status': 'issued'})
@@ -555,8 +474,8 @@ def v2_acknowledge_multipart_part(band_id, session_id, part_number):
     checksum = data.get('checksum')
     if checksum is not None and (not isinstance(checksum, str) or not checksum.strip() or len(checksum) > 200):
         raise ValidationError('checksum must be a non-empty string of 200 characters or less.')
-    part = acknowledge_part(session, _require_int(part_number, 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS),
-                            etag.strip(), _require_int(size, 'bytes', minimum=1, maximum=MULTIPART_PART_SIZE),
+    part = acknowledge_part(session, require_int(part_number, 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS),
+                            etag.strip(), require_int(size, 'bytes', minimum=1, maximum=MULTIPART_PART_SIZE),
                             checksum.strip() if checksum else None)
     return jsonify(part_payload(part)), 200
 
@@ -569,7 +488,7 @@ def v2_complete_multipart_upload(band_id, session_id):
         require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
         return complete_session(
             session, _object_size, materialize_multipart_upload,
-            before_materialize=lambda completing: _v2_reauthorize_upload_session_owner(band_id, completing),
+            before_materialize=lambda completing: reauthorize_upload_session_owner(band_id, completing),
         )
     item, status = _v2_write(operation)
     session = _v2_session_or_404(session_id, band_id)
@@ -668,7 +587,7 @@ def complete_gallery():
         raise ValidationError('Image files only.')
     actual_size = _object_size(f'gallery/{filename}')
     declared_size = data.get('file_size')
-    if declared_size is not None and _require_int(declared_size, 'file_size', minimum=0) != actual_size:
+    if declared_size is not None and require_int(declared_size, 'file_size', minimum=0) != actual_size:
         raise ValidationError('Uploaded object size does not match file_size.')
     image = GalleryImage(
         band_id=legacy_band_id, filename=filename,
@@ -687,7 +606,7 @@ def initiate_multipart_media():
     filename = data.get('filename', '').strip()
     if not filename or not allowed_file(filename) or detect_file_type(filename) != 'video':
         raise ValidationError('A supported video filename is required.')
-    declared_bytes = _require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1, maximum=MAX_VIDEO_BYTES)
+    declared_bytes = require_int(data.get('declared_bytes'), 'declared_bytes', minimum=1, maximum=MAX_VIDEO_BYTES)
     has_member = data.get('member_id') is not None
     has_song_target = data.get('song_id') is not None or data.get('rehearsal_id') is not None
     if has_member and has_song_target:
@@ -732,7 +651,7 @@ def presign_multipart_part(session_id):
     data = request.get_json()
     if not data:
         raise ValidationError('Request body is required')
-    part_number = _require_int(data.get('part_number'), 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
+    part_number = require_int(data.get('part_number'), 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
     part, upload_url = issue_part(session, part_number)
     if upload_url is False:
         return jsonify(part_payload(part)), 409
@@ -747,14 +666,14 @@ def acknowledge_multipart_part(session_id, part_number):
     require_capability(session, request.headers.get(UPLOAD_CAPABILITY_HEADER))
     if session.status != 'initiated':
         raise ValidationError(f'Upload session is {session.status}.', status_code=409)
-    _require_int(part_number, 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
+    require_int(part_number, 'part_number', minimum=1, maximum=MAX_MULTIPART_PARTS)
     data = request.get_json()
     if not data:
         raise ValidationError('Request body is required')
     etag = data.get('etag')
     if not isinstance(etag, str) or not etag.strip() or len(etag) > 500:
         raise ValidationError('A valid ETag is required.')
-    uploaded_bytes = _require_int(data.get('bytes'), 'bytes', minimum=1, maximum=MULTIPART_PART_SIZE)
+    uploaded_bytes = require_int(data.get('bytes'), 'bytes', minimum=1, maximum=MULTIPART_PART_SIZE)
     checksum = data.get('checksum')
     if checksum is not None and (not isinstance(checksum, str) or not checksum.strip() or len(checksum) > 200):
         raise ValidationError('checksum must be a non-empty string of 200 characters or less.')

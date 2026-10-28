@@ -11,7 +11,8 @@ import pytest
 
 import content_restrictions
 from errors import NotFoundError, ValidationError
-import routes.uploads as authorization
+import upload_authorization_service as authorization
+from validators import require_int
 
 
 class Column:
@@ -86,7 +87,7 @@ def test_active_upload_membership_keeps_actor_queries_and_lock_order(monkeypatch
                       dialect=dialect)
     _actor(monkeypatch, events)
 
-    assert authorization._v2_active_membership(7, lock=lock) == (band, membership)
+    assert authorization.active_upload_membership(7, lock=lock) == (band, membership)
     assert filters == {
         'Band': (('Band.id', '=', 7), ('Band.deleted_at', 'is', None)),
         'BandMembership': {'band_id': 7, 'user_id': 12, 'status': 'active'},
@@ -108,7 +109,7 @@ def test_active_upload_membership_preserves_missing_band_before_membership_error
     })
     _actor(monkeypatch, events)
     with pytest.raises(exception) as caught:
-        authorization._v2_active_membership(7, lock=True)
+        authorization.active_upload_membership(7, lock=True)
     assert caught.value.message == message and caught.value.status_code == status
     assert events == ['actor', 'Band.filter', 'BandMembership.filter_by',
                       'Band.lock', 'BandMembership.lock', 'Band.read'] + (
@@ -121,7 +122,7 @@ def test_upload_owner_identity_mismatch_stops_before_owner_query(monkeypatch, ba
     _models(monkeypatch, events, {'AppUser': None})
     session = SimpleNamespace(band_id=band_id, created_by_membership_id=creator_id)
     with pytest.raises(NotFoundError, match='Upload session not found'):
-        authorization._v2_require_upload_session_owner(
+        authorization.require_upload_session_owner(
             7, session, SimpleNamespace(id=13, user_id=12))
     assert events == []
 
@@ -135,7 +136,7 @@ def test_upload_owner_requires_refreshed_active_account_and_exact_verified_true(
     events = []
     filters = _models(monkeypatch, events, {'AppUser': owner})
     with pytest.raises(ValidationError) as caught:
-        authorization._v2_require_upload_session_owner(
+        authorization.require_upload_session_owner(
             7, SimpleNamespace(band_id=7, created_by_membership_id=13),
             SimpleNamespace(id=13, user_id=12))
     assert caught.value.message == 'An active, verified upload owner is required.'
@@ -154,12 +155,12 @@ def test_upload_owner_preserves_personal_target_priority_and_gallery_no_parent_c
         monkeypatch, target, expected):
     events, targets = [], []
     _models(monkeypatch, events, {'AppUser': SimpleNamespace(status='active', email_verified=True)})
-    monkeypatch.setattr(authorization, '_v2_personal_log_target',
+    monkeypatch.setattr(authorization, 'validate_personal_log_upload_target',
                         lambda *args: targets.append(('personal', *args)))
-    monkeypatch.setattr(authorization, '_v2_media_target',
+    monkeypatch.setattr(authorization, 'validate_media_upload_target',
                         lambda *args: targets.append(('media', *args)))
     membership = SimpleNamespace(id=13, user_id=12)
-    assert authorization._v2_require_upload_session_owner(
+    assert authorization.require_upload_session_owner(
         7, SimpleNamespace(band_id=7, created_by_membership_id=13, **target), membership) is membership
     assert targets == expected
     assert events == ['AppUser.filter_by', 'AppUser.lock', 'AppUser.refresh', 'AppUser.read']
@@ -174,7 +175,7 @@ def test_upload_reauthorization_clears_restriction_cache_before_actor_and_parent
     })
     _actor(monkeypatch, events)
     monkeypatch.setattr(content_restrictions, 'clear_restriction_cache', lambda: events.append('clear'))
-    assert authorization._v2_reauthorize_upload_session_owner(
+    assert authorization.reauthorize_upload_session_owner(
         7, SimpleNamespace(band_id=7, created_by_membership_id=13)) is membership
     assert events == ['clear', 'actor', 'Band.filter', 'BandMembership.filter_by',
                       'Band.lock', 'BandMembership.lock', 'Band.read', 'BandMembership.read',
@@ -189,13 +190,13 @@ def test_upload_reauthorization_clears_restriction_cache_before_actor_and_parent
 ])
 def test_upload_integer_validation_preserves_types_bounds_and_error_text(value, message):
     with pytest.raises(ValidationError) as caught:
-        authorization._require_int(value, 'field', minimum=1, maximum=10)
+        require_int(value, 'field', minimum=1, maximum=10)
     assert caught.value.message == message and caught.value.status_code == 400
 
 
 @pytest.mark.parametrize('value,minimum,maximum', [(1, 1, 10), (10, 1, 10), (0, 0, None), (-1, None, None)])
 def test_upload_integer_validation_keeps_inclusive_and_unbounded_values(value, minimum, maximum):
-    assert authorization._require_int(value, 'field', minimum, maximum) == value
+    assert require_int(value, 'field', minimum, maximum) == value
 
 
 def _restrictions(monkeypatch, events, blocked):
@@ -221,7 +222,7 @@ def test_media_target_preserves_graph_restriction_order_and_not_found_errors(mon
         'song_blocked': 'song', 'linked_blocked': 'linked', 'rehearsal_blocked': 'rehearsal',
     }.get(case))
     with pytest.raises(NotFoundError) as caught:
-        authorization._v2_media_target(7, {'song_id': 21, 'rehearsal_id': 22})
+        authorization.validate_media_upload_target(7, {'song_id': 21, 'rehearsal_id': 22})
     expected = ['Song.filter_by', 'Song.read']
     if case != 'song_missing':
         expected += ['restriction:song']
@@ -245,7 +246,7 @@ def test_media_target_returns_existing_ids_with_band_scoped_queries(monkeypatch,
         'Rehearsal': SimpleNamespace(label='rehearsal'),
     })
     _restrictions(monkeypatch, events, None)
-    assert authorization._v2_media_target(7, {'song_id': 21, 'rehearsal_id': rehearsal_id}) == (21, rehearsal_id)
+    assert authorization.validate_media_upload_target(7, {'song_id': 21, 'rehearsal_id': rehearsal_id}) == (21, rehearsal_id)
     assert filters['Song'] == {'id': 21, 'band_id': 7}
     expected = ['Song.filter_by', 'Song.read', 'restriction:song', 'restriction:linked']
     if rehearsal_id is not None:
@@ -262,10 +263,10 @@ def test_personal_log_target_keeps_band_scope_and_restriction_guard(monkeypatch,
     })
     _restrictions(monkeypatch, events, 'member' if case == 'blocked' else None)
     if case == 'valid':
-        assert authorization._v2_personal_log_target(7, 23) == 23
+        assert authorization.validate_personal_log_upload_target(7, 23) == 23
     else:
         with pytest.raises(NotFoundError) as caught:
-            authorization._v2_personal_log_target(7, 23)
+            authorization.validate_personal_log_upload_target(7, 23)
         assert caught.value.message == ('Member not found' if case == 'missing' else 'Resource not found')
         assert caught.value.status_code == 404
     assert filters == {'Member': {'id': 23, 'band_id': 7}}

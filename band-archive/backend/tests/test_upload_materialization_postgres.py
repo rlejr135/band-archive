@@ -19,6 +19,7 @@ from models import (AppUser, BandMembership, DirectUploadSession, Media,
                     MultipartUploadPart, MultipartUploadSession, Song)
 from multipart_upload_service import complete_session
 import routes.uploads as uploads
+import upload_authorization_service as upload_authorization
 from storage import storage
 from tests.test_invite_link_concurrency import invite_pg
 from tests.test_data_api_security_migration import private_pg17  # noqa: F401
@@ -61,7 +62,7 @@ def test_authority_revoked_during_head_prevents_materialization(
 
     at_head, resume = threading.Event(), threading.Event()
     pids, outcome, materialized = {}, [], []
-    monkeypatch.setattr(uploads, 'current_app_user',
+    monkeypatch.setattr(upload_authorization, 'current_app_user',
                         lambda required=True: db.session.get(AppUser, ids['owner']))
     monkeypatch.setattr(storage, 'complete_multipart_upload', lambda *args: None)
 
@@ -89,7 +90,7 @@ def test_authority_revoked_during_head_prevents_materialization(
                 operation(
                     session, object_size, create_item,
                     before_materialize=lambda completing:
-                        uploads._v2_reauthorize_upload_session_owner(ids['band'], completing))
+                        upload_authorization.reauthorize_upload_session_owner(ids['band'], completing))
                 outcome.append('unexpected success')
             except ValidationError as error:
                 outcome.append(error.status_code)

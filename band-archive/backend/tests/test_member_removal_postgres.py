@@ -10,7 +10,7 @@ from direct_upload_service import complete_direct_session
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import AppUser, AuditEvent, BandMembership, DirectUploadSession, Media, Song
-import routes.uploads as upload_routes
+import upload_authorization_service as upload_authorization
 from tests.test_invite_link_concurrency import invite_pg, _ordered_contention
 from tests.test_data_api_security_migration import private_pg17
 
@@ -74,7 +74,7 @@ def test_removal_during_external_upload_verification_prevents_materialization(in
         db.session.remove()
     verified, release = threading.Event(), threading.Event()
     results = []
-    monkeypatch.setattr(upload_routes, 'current_app_user', lambda required=True: db.session.get(AppUser, ids['entrant']))
+    monkeypatch.setattr(upload_authorization, 'current_app_user', lambda required=True: db.session.get(AppUser, ids['entrant']))
 
     def complete():
         with app.app_context():
@@ -92,7 +92,7 @@ def test_removal_during_external_upload_verification_prevents_materialization(in
                     return item
 
                 complete_direct_session(db.session.get(DirectUploadSession, session_id), object_size, create_item,
-                    before_materialize=lambda session: upload_routes._v2_reauthorize_upload_session_owner(ids['band'], session))
+                    before_materialize=lambda session: upload_authorization.reauthorize_upload_session_owner(ids['band'], session))
                 results.append('unexpected success')
             except ValidationError as error:
                 results.append(error.status_code)
@@ -134,7 +134,7 @@ def test_completion_lock_wins_then_removal_retains_completed_media(invite_pg, mo
         db.session.commit()
         target_id, song_id, session_id = target.id, song.id, session.id
         db.session.remove()
-    monkeypatch.setattr(upload_routes, 'current_app_user', lambda required=True: db.session.get(AppUser, ids['entrant']))
+    monkeypatch.setattr(upload_authorization, 'current_app_user', lambda required=True: db.session.get(AppUser, ids['entrant']))
 
     def complete():
         def create_item(session, size):
@@ -144,7 +144,7 @@ def test_completion_lock_wins_then_removal_retains_completed_media(invite_pg, mo
             db.session.flush()
             return item
         item, status = complete_direct_session(db.session.get(DirectUploadSession, session_id), lambda _key: 1,
-            create_item, before_materialize=lambda session: upload_routes._v2_reauthorize_upload_session_owner(ids['band'], session))
+            create_item, before_materialize=lambda session: upload_authorization.reauthorize_upload_session_owner(ids['band'], session))
         return {'media_id': item.id, 'status': status}
 
     def remove():

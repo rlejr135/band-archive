@@ -14,6 +14,7 @@ from models import (AppUser, BandMembership, DirectUploadSession, Media,
                     MultipartUploadPart, MultipartUploadSession, Song)
 from multipart_upload_service import complete_session
 import routes.uploads as uploads
+import upload_authorization_service as upload_authorization
 from storage import storage
 from tests.test_invite_link_concurrency import invite_pg
 from tests.test_data_api_security_migration import private_pg17
@@ -51,7 +52,7 @@ def test_new_restriction_during_r2_window_invalidates_request_negative_cache(inv
 
     at_storage, resume = threading.Event(), threading.Event()
     outcome, materialized, signed, deleted = [], [], [], []
-    monkeypatch.setattr(uploads, 'current_app_user', lambda required=True: db.session.get(AppUser, ids['owner']))
+    monkeypatch.setattr(upload_authorization, 'current_app_user', lambda required=True: db.session.get(AppUser, ids['owner']))
     monkeypatch.setattr(storage, 'generate_url', lambda *args, **kwargs: signed.append(args) or 'unexpected')
     monkeypatch.setattr(storage, 'delete', lambda *args: deleted.append(args))
 
@@ -85,7 +86,7 @@ def test_new_restriction_during_r2_window_invalidates_request_negative_cache(inv
 
                 operation = complete_direct_session if kind == 'direct' else complete_session
                 operation(session, object_size, create_item,
-                          before_materialize=lambda item: uploads._v2_reauthorize_upload_session_owner(ids['band'], item))
+                          before_materialize=lambda item: upload_authorization.reauthorize_upload_session_owner(ids['band'], item))
                 outcome.append('unexpected success')
             except NotFoundError as error:
                 outcome.append(error.status_code)

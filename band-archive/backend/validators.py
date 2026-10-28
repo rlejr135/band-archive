@@ -19,6 +19,17 @@ ALLOWED_EXTENSIONS = IMAGE_EXTENSIONS | {
 VALID_STATUSES = {'Practice', 'Completed', 'OnHold'}
 
 
+def require_int(value, field_name, minimum=None, maximum=None):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f'{field_name} must be an integer')
+    if minimum is not None and value < minimum:
+        raise ValidationError(f'{field_name} must be at least {minimum}')
+    if maximum is not None and value > maximum:
+        raise ValidationError(f'{field_name} must be at most {maximum}')
+    return value
+
+
+
 def validate_status(status):
     if status not in VALID_STATUSES:
         raise ValidationError(f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}")
