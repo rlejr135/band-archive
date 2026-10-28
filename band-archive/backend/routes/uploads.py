@@ -31,6 +31,10 @@ from multipart_upload_service import (
 )
 from validators import (allowed_file, allowed_image_file, generate_secure_filename,
                         detect_file_type, guess_content_type)
+from v2_upload_serializers import (
+    serialize_direct_upload_completion, serialize_direct_gallery_completion,
+    serialize_multipart_upload_completion,
+)
 
 uploads_bp = Blueprint('uploads', __name__)
 
@@ -467,8 +471,7 @@ def v2_complete_direct_upload(band_id, session_id):
 
     item, status = _v2_write(operation)
     session = db.session.get(DirectUploadSession, session_id)
-    result_key = 'personal_log' if session.kind == 'personal_log' else 'media'
-    return jsonify({'session_id': session.id, 'status': 'completed', result_key: item.to_dict() if item else None}), status
+    return jsonify(serialize_direct_upload_completion(session, item)), status
 
 
 @uploads_bp.route('/api/v2/bands/<int:band_id>/gallery/direct/initiate', methods=['POST'])
@@ -522,7 +525,7 @@ def v2_complete_direct_gallery_upload(band_id, session_id):
 
     item, status = _v2_write(operation)
     session = db.session.get(DirectUploadSession, session_id)
-    return jsonify({'session_id': session.id, 'status': 'completed', 'gallery': item.to_dict() if item else None}), status
+    return jsonify(serialize_direct_gallery_completion(session, item)), status
 
 
 @uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/multipart/initiate', methods=['POST'])
@@ -631,7 +634,7 @@ def v2_complete_multipart_upload(band_id, session_id):
         )
     item, status = _v2_write(operation)
     session = _v2_session_or_404(session_id, band_id)
-    return jsonify(completion_payload(session, item)), status
+    return jsonify(serialize_multipart_upload_completion(session, item)), status
 
 
 @uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/multipart/<session_id>/abort', methods=['POST'])
