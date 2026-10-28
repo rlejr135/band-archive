@@ -16,7 +16,7 @@ import media_processing
 from models import (Band, BandMembership, DirectUploadSession, Media,
                     MultipartUploadPart, MultipartUploadSession, Song)
 import multipart_upload_service
-import routes.uploads as materialization
+import upload_materialization_service as materialization
 from tests.test_band_access_phase6 import access_app
 
 
@@ -76,8 +76,8 @@ def test_materialization_failure_preserves_current_recovery_without_duplicate_re
         event.listen(orm_session, 'before_commit', before_commit)
         complete = (direct_upload_service.complete_direct_session if mode == 'direct'
                     else multipart_upload_service.complete_session)
-        create = (materialization._v2_direct_item if mode == 'direct'
-                  else materialization._v2_multipart_item)
+        create = (materialization.materialize_direct_upload if mode == 'direct'
+                  else materialization.materialize_multipart_upload)
         try:
             with pytest.raises(RuntimeError, match=f'injected {failure}'):
                 complete(session, size, create)
@@ -118,8 +118,8 @@ def test_materialization_validation_error_keeps_existing_target_state_difference
         monkeypatch.setattr(materialization, 'upload_session_visibility', reject_visibility)
         complete = (direct_upload_service.complete_direct_session if mode == 'direct'
                     else multipart_upload_service.complete_session)
-        create = (materialization._v2_direct_item if mode == 'direct'
-                  else materialization._v2_multipart_item)
+        create = (materialization.materialize_direct_upload if mode == 'direct'
+                  else materialization.materialize_multipart_upload)
         with pytest.raises(ValidationError, match='invalid upload evidence'):
             complete(session, lambda _key: 10, create)
         db.session.remove()

@@ -15,7 +15,8 @@ from direct_upload_service import (complete_direct_session, create_direct_sessio
 from extensions import db
 from multipart_upload_service import recover_sessions
 import routes.uploads as upload_routes
-from routes.uploads import _v2_direct_item, recover_multipart_upload_sessions
+from routes.uploads import recover_multipart_upload_sessions
+from upload_materialization_service import materialize_direct_upload
 from errors import ValidationError
 from models import (AppUser, Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
                     MultipartUploadSession, PersonalLog, Song, TenantBackfillState)
@@ -348,7 +349,7 @@ def test_direct_complete_and_expiry_claims_allow_exactly_one_terminal_path(
         db.session.commit()
         # This models a complete request that read initiated before the expiry
         # worker claimed it: only its conditional initiated -> completing wins.
-        item, status = complete_direct_session(session, lambda key: 10, _v2_direct_item)
+        item, status = complete_direct_session(session, lambda key: 10, materialize_direct_upload)
         assert status == 201 and item.id
         assert expire_direct_session_if_needed(db.session.get(DirectUploadSession, session.id)) is False
         assert db.session.get(DirectUploadSession, session.id).status == 'completed'
@@ -361,7 +362,7 @@ def test_direct_complete_and_expiry_claims_allow_exactly_one_terminal_path(
         assert expire_direct_session_if_needed(session) is True
         assert db.session.get(DirectUploadSession, session.id).status == 'expired'
         with pytest.raises(ValidationError):
-            complete_direct_session(db.session.get(DirectUploadSession, session.id), lambda key: 10, _v2_direct_item)
+            complete_direct_session(db.session.get(DirectUploadSession, session.id), lambda key: 10, materialize_direct_upload)
     assert len(deleted) == 1
 
 

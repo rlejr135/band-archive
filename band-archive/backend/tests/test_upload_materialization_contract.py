@@ -11,7 +11,8 @@ import pytest
 
 from errors import ValidationError
 import media_processing
-import routes.uploads as materialization
+import multipart_upload_service
+import upload_materialization_service as materialization
 
 
 CASES = [('direct', 'media'), ('direct', 'personal_log'),
@@ -19,8 +20,8 @@ CASES = [('direct', 'media'), ('direct', 'personal_log'),
 
 
 def _callback(mode):
-    return (materialization._v2_direct_item if mode == 'direct'
-            else materialization._v2_multipart_item)
+    return (materialization.materialize_direct_upload if mode == 'direct'
+            else materialization.materialize_multipart_upload)
 
 
 class UploadSession:
@@ -64,7 +65,7 @@ def _install(monkeypatch, events, kind):
     def spec(session):
         events.append('spec')
         return (materialization.PERSONAL_LOG_TARGET if kind == 'personal_log'
-                else materialization.MEDIA_TARGET)
+                else multipart_upload_service.MEDIA_TARGET)
 
     captured = {}
 
@@ -145,7 +146,7 @@ def test_gallery_materialization_adds_and_flushes_without_commit(monkeypatch):
     materialization.db.session.flush = lambda: events.append('flush')
     materialization.db.session.commit = lambda: pytest.fail('gallery callback must not commit')
     with app.app_context():
-        result = materialization._v2_direct_gallery_item(UploadSession(events, 'gallery', 'pic.jpg'), 9)
+        result = materialization.materialize_direct_gallery_upload(UploadSession(events, 'gallery', 'pic.jpg'), 9)
     assert vars(result) == captured == dict(band_id=7, created_by_membership_id=13,
         visibility='PUBLIC', filename='pic.jpg', original_filename='Original take.mp4',
         object_key='bands/7/media/pic.jpg', file_size=9)
