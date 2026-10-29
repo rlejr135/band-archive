@@ -428,7 +428,7 @@ def v2_initiate_multipart_upload(band_id):
         return _v2_policy_session(create_session, membership, assertion, MEDIA_TARGET,
                                   song_id=song_id, rehearsal_id=rehearsal_id, **common)
 
-    session, capability_token = _v2_write(operation)
+    session, capability_token = _v2_direct_write(operation)
     return jsonify({
         'session_id': session.id, 'filename': secure_name, 'part_size': MULTIPART_PART_SIZE,
         'max_parts': MAX_MULTIPART_PARTS, 'expires_at': session.expires_at.isoformat(),

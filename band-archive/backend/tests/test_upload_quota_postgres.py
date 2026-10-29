@@ -16,7 +16,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import event, text
 
-from direct_upload_service import DirectUploadCleanupPending
 from errors import register_error_handlers
 from extensions import db
 from models import (AppUser, Band, BandMembership, DirectUploadSession, Media,
@@ -212,7 +211,7 @@ def test_quota_reservations_serialize_after_accounting(
 
 
 @pytest.mark.parametrize('kind', ['direct', 'multipart'])
-def test_cleanup_failure_retains_quota_and_current_initiation_error_contract(
+def test_cleanup_failure_retains_quota_and_retryable_initiation_error_contract(
         invite_pg, monkeypatch, kind):
     app, engine, band_id, song_id, expired_id, calls = _fixture(
         invite_pg, monkeypatch, expired=True, quota=25)
@@ -227,10 +226,7 @@ def test_cleanup_failure_retains_quota_and_current_initiation_error_contract(
     monkeypatch.setattr(storage, 'delete', delete)
 
     def initiate():
-        try:
-            return _post(app, band_id, song_id, kind)
-        except DirectUploadCleanupPending as error:
-            return 'cleanup_exception', error.session_id
+        return _post(app, band_id, song_id, kind)
 
     def observe_reservation():
         db.session.execute(text('SELECT id FROM band WHERE id=:id FOR UPDATE'), {'id': band_id})
@@ -242,17 +238,14 @@ def test_cleanup_failure_retains_quota_and_current_initiation_error_contract(
     # The second participant observes quota in an independent transaction;
     # it is deliberately not claimed to be a second failing HTTP initiate.
     first, observed = _contend(app, engine, initiate, observe_reservation, ready, release)
-    if kind == 'direct':
-        assert first == (503, {'error': 'An expired upload is still being cleaned up. Please retry shortly.'})
-    else:
-        assert first == ('cleanup_exception', expired_id)
+    assert first == (503, {'error': 'An expired upload is still being cleaned up. Please retry shortly.'})
     assert len(observed) == 1
     assert observed[0][0] == expired_id and observed[0][2] == 10
     assert observed[0][1] in ('initiated', 'expiring')
     with app.app_context():
         db.session.remove()
         reservation = db.session.get(DirectUploadSession, expired_id)
-        assert reservation.status == ('expiring' if kind == 'direct' else 'initiated')
+        assert reservation.status == 'expiring'
         rows = _reservations(band_id)
         assert len(rows) == 1 and rows[0].id == expired_id
         assert sum(row.declared_bytes for row in rows) == 10
