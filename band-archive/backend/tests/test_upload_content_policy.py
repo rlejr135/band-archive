@@ -207,7 +207,7 @@ def test_receipt_failure_rolls_back_new_direct_reservation(access_app, write_cli
     _accept(write_client, principals['member'])
     def fail_receipt(*args):
         raise RuntimeError('Simulated receipt persistence failure')
-    monkeypatch.setattr('routes.uploads.record_upload_assertion', fail_receipt)
+    monkeypatch.setattr('upload_initiation_service.record_upload_assertion', fail_receipt)
     with pytest.raises(RuntimeError, match='receipt persistence'):
         write_client.post(f'/api/v2/bands/{band_id}/uploads/direct/initiate',
                           headers=principals['member'], json={

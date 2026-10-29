@@ -15,7 +15,7 @@ from extensions import db
 from member_profile_service import ensure_member_profile
 from models import (Band, BandMembership, DirectUploadSession, GalleryImage, Media,
                     PersonalLog, PersonalLogMultipartUploadSession)
-import routes.uploads as uploads
+import upload_initiation_service as initiation_service
 from tests.test_upload_quota_postgres import (
     _contend, _fixture, _reservations, invite_pg, private_pg17,  # noqa: F401
 )
@@ -74,7 +74,7 @@ def test_gallery_and_personal_log_share_locked_reservation_capacity(
     member_id = _targets(app, band_id, used_kind)
     ready, release = threading.Event(), threading.Event()
     factory_name = 'create_direct_session' if first_kind == 'gallery' else 'create_session'
-    original_factory = getattr(uploads, factory_name)
+    original_factory = getattr(initiation_service, factory_name)
     gate_lock = threading.Lock()
     gated = False
 
@@ -90,7 +90,7 @@ def test_gallery_and_personal_log_share_locked_reservation_capacity(
             assert release.wait(30), 'coordinator did not release reservation creation'
         return original_factory(*args, **kwargs)
 
-    monkeypatch.setattr(uploads, factory_name, create)
+    monkeypatch.setattr(initiation_service, factory_name, create)
     first, second = _contend(
         app, engine,
         lambda: _post(app, band_id, member_id, first_kind),

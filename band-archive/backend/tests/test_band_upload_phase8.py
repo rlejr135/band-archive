@@ -14,7 +14,8 @@ from direct_upload_service import (complete_direct_session, create_direct_sessio
                                    expire_direct_session_if_needed)
 from extensions import db
 from multipart_upload_service import recover_sessions
-import routes.uploads as upload_routes
+import upload_initiation_service as initiation
+from upload_transaction import run_upload_write
 from routes.uploads import recover_multipart_upload_sessions
 from upload_materialization_service import materialize_direct_upload
 from errors import ValidationError
@@ -514,7 +515,7 @@ def test_file_sqlite_direct_initiates_keep_quota_lock_while_expiry_is_released(t
         first_reserved, release_first = Event(), Event()
         create_lock = Lock()
         create_count = 0
-        original_create = upload_routes.create_direct_session
+        original_create = initiation.create_direct_session
 
         def delayed_create(*args, **kwargs):
             nonlocal create_count
@@ -526,23 +527,23 @@ def test_file_sqlite_direct_initiates_keep_quota_lock_while_expiry_is_released(t
                 assert release_first.wait(5)
             return original_create(*args, **kwargs)
 
-        monkeypatch.setattr(upload_routes, 'create_direct_session', delayed_create)
+        monkeypatch.setattr(initiation, 'create_direct_session', delayed_create)
 
         def initiate():
             with app.app_context():
                 def operation():
                     band = db.session.get(Band, band_id)
-                    used, reserved = upload_routes._v2_used_and_reserved_bytes(band_id)
+                    used, reserved = initiation._used_and_reserved_bytes(band_id)
                     if used + reserved + 10 > band.storage_quota_bytes:
                         raise ValidationError('Band storage quota exceeded.', status_code=413)
-                    return upload_routes.create_direct_session(
+                    return initiation.create_direct_session(
                         band_id=band_id, created_by_membership_id=membership_id, kind='media',
                         object_key=f'bands/{band_id}/media/new-{threading.get_ident()}.mp4',
                         original_filename='new.mp4', content_type='video/mp4', declared_bytes=10,
                         song_id=song_id, status='initiated', commit=False,
                     )
                 try:
-                    upload_routes._v2_write(operation)
+                    run_upload_write(operation)
                     return 201
                 except ValidationError as exc:
                     return exc.status_code
@@ -603,17 +604,17 @@ def test_file_sqlite_transient_expiry_cleanup_aborts_each_initiate_without_overq
                 start.wait(timeout=5)
                 def operation():
                     band = db.session.get(Band, band_id)
-                    used, reserved = upload_routes._v2_used_and_reserved_bytes(band_id)
+                    used, reserved = initiation._used_and_reserved_bytes(band_id)
                     if used + reserved + 10 > band.storage_quota_bytes:
                         raise ValidationError('Band storage quota exceeded.', status_code=413)
-                    return upload_routes.create_direct_session(
+                    return initiation.create_direct_session(
                         band_id=band_id, created_by_membership_id=membership_id, kind='media',
                         object_key=f'bands/{band_id}/media/new-{threading.get_ident()}.mp4',
                         original_filename='new.mp4', content_type='video/mp4', declared_bytes=10,
                         song_id=song_id, status='initiated', commit=False,
                     )
                 try:
-                    upload_routes._v2_direct_write(operation)
+                    initiation._reservation_write(operation)
                     return 201
                 except ValidationError as exc:
                     return exc.status_code

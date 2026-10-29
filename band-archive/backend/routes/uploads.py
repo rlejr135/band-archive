@@ -1,17 +1,15 @@
 from functools import wraps
 
 from flask import Blueprint, after_this_request, jsonify, request, current_app
-from sqlalchemy import func, inspect, text
+from sqlalchemy import inspect
 
 from auth_service import current_app_user
 from extensions import db
-from models import (Band, Media, Song, Rehearsal, Member,
-                    PersonalLog, GalleryImage, MultipartUploadSession,
+from models import (Song, Rehearsal, Member, GalleryImage, MultipartUploadSession,
                     PersonalLogMultipartUploadSession, DirectUploadSession)
 from direct_upload_service import (
-    DirectUploadCleanupPending, complete_direct_session, create_direct_session, expire_direct_session_if_needed,
-    expire_direct_sessions_for_band, recover_direct_sessions, require_direct_capability,
-    persist_direct_cleanup_pending,
+    complete_direct_session, expire_direct_session_if_needed,
+    recover_direct_sessions, require_direct_capability,
 )
 from legacy_scope import legacy_band_id, legacy_get_or_404, validate_legacy_graph
 from errors import ValidationError, NotFoundError
@@ -19,17 +17,19 @@ from storage import storage
 from media_processing import (create_media, create_personal_log, save_media_and_start,
                               save_personal_log_and_start)
 from upload_record_service import create_uploaded_record
+from upload_initiation_service import (
+    reserve_direct_upload, reserve_gallery_upload, reserve_multipart_upload,
+)
+from upload_transaction import run_upload_write
 from upload_authorization_service import (
-    active_upload_membership, validate_media_upload_target,
-    validate_personal_log_upload_target, require_upload_session_owner,
+    active_upload_membership, require_upload_session_owner,
     reauthorize_upload_session_owner,
 )
 from upload_materialization_service import (
     MAX_VIDEO_BYTES, materialize_multipart_upload, materialize_direct_upload,
     materialize_direct_gallery_upload,
 )
-from policy_service import (validate_upload_assertion, record_upload_assertion,
-                            upload_policy_enabled)
+from policy_service import upload_policy_enabled
 from multipart_upload_service import (
     MAX_MULTIPART_PARTS, MULTIPART_PART_SIZE, MEDIA_TARGET, PERSONAL_LOG_TARGET,
     abort_session, acknowledge_part, complete_session, completion_payload, create_session,
@@ -57,12 +57,6 @@ def _legacy_upload_band_id():
     return legacy_band_id()
 
 
-def _v2_policy_session(factory, membership, assertion, *args, **kwargs):
-    session, capability = factory(*args, **kwargs)
-    record_upload_assertion(session, membership, assertion)
-    return session, capability
-
-
 def _v2_upload_write(view):
     """Authenticate a tenant upload write without changing v1 behavior."""
     @wraps(view)
@@ -79,34 +73,6 @@ def _v2_upload_write(view):
     return wrapped
 
 
-def _v2_begin_write():
-    if db.engine.dialect.name == 'sqlite':
-        db.session.execute(text('BEGIN IMMEDIATE'))
-
-
-def _v2_write(operation):
-    try:
-        _v2_begin_write()
-        result = operation()
-        db.session.commit()
-        return result
-    except Exception:
-        db.session.rollback()
-        raise
-
-
-def _v2_direct_write(operation):
-    """Abort an initiate if expiry cleanup cannot retain its quota lock."""
-    try:
-        return _v2_write(operation)
-    except DirectUploadCleanupPending as pending:
-        # _v2_write already rolled back the accounting transaction. Persist the
-        # retry marker only afterward, then fail closed instead of initiating a
-        # new reservation from a lock that was no longer held.
-        persist_direct_cleanup_pending(pending.session_id)
-        raise ValidationError('An expired upload is still being cleaned up. Please retry shortly.', status_code=503)
-
-
 def _v2_session_or_404(session_id, band_id, *, recover_aborting=True):
     session = get_session_or_404(
         session_id, band_id=band_id, recover_aborting=recover_aborting,
@@ -114,35 +80,6 @@ def _v2_session_or_404(session_id, band_id, *, recover_aborting=True):
     if session.is_legacy:
         raise NotFoundError('Upload session not found')
     return session
-
-
-def _v2_used_and_reserved_bytes(band_id):
-    """Logical object usage plus every still-live upload reservation."""
-    # This runs inside _v2_write after the SQLite immediate transaction (or
-    # PostgreSQL parent row locks) is acquired. Do not commit expiry cleanup
-    # here: releasing that transaction between quota accounting and session
-    # creation lets concurrent initiates oversubscribe the same band.
-    expire_direct_sessions_for_band(band_id, commit=False)
-    used = sum((
-        db.session.query(func.coalesce(func.sum(Media.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(PersonalLog.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(GalleryImage.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
-    ))
-    reserved = sum((
-        db.session.query(func.coalesce(func.sum(MultipartUploadSession.declared_bytes), 0)).filter(
-            MultipartUploadSession.band_id == band_id,
-            MultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
-        ).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(PersonalLogMultipartUploadSession.declared_bytes), 0)).filter(
-            PersonalLogMultipartUploadSession.band_id == band_id,
-            PersonalLogMultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
-        ).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(DirectUploadSession.declared_bytes), 0)).filter(
-            DirectUploadSession.band_id == band_id,
-            DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
-        ).scalar() or 0,
-    ))
-    return int(used), int(reserved)
 
 
 def _v2_direct_session_or_404(session_id, band_id):
@@ -279,35 +216,10 @@ def v2_initiate_direct_upload(band_id):
     content_type = data.get('content_type', '').strip() if isinstance(data.get('content_type'), str) else ''
     secure_name = generate_secure_filename(filename)
 
-    def operation():
-        band, membership = active_upload_membership(band_id, lock=True)
-        assertion = validate_upload_assertion(data, current_app_user(required=True))
-        used, reserved = _v2_used_and_reserved_bytes(band.id)
-        if used + reserved + declared_bytes > band.storage_quota_bytes:
-            raise ValidationError('Band storage quota exceeded.', status_code=409)
-        common = {
-            'band_id': band.id, 'created_by_membership_id': membership.id,
-            'original_filename': filename, 'content_type': content_type or guess_content_type(filename),
-            'declared_bytes': declared_bytes, 'status': 'initiated', 'commit': False,
-        }
-        if has_member:
-            if detect_file_type(filename) not in ('audio', 'video'):
-                raise ValidationError('Personal logs support audio and video files only.')
-            title = data.get('title', '').strip() if isinstance(data.get('title'), str) else ''
-            if len(title or filename) > 200:
-                raise ValidationError('title must be 200 characters or less')
-            return _v2_policy_session(create_direct_session, membership, assertion,
-                kind='personal_log', object_key=f'bands/{band.id}/personal_logs/{secure_name}',
-                member_id=validate_personal_log_upload_target(band.id, data.get('member_id')),
-                title=title or filename, **common,
-            )
-        song_id, rehearsal_id = validate_media_upload_target(band.id, data)
-        return _v2_policy_session(create_direct_session, membership, assertion,
-            kind='media', object_key=f'bands/{band.id}/media/{secure_name}',
-            song_id=song_id, rehearsal_id=rehearsal_id, **common,
-        )
-
-    session, capability_token = _v2_direct_write(operation)
+    session, capability_token = reserve_direct_upload(
+        band_id, data, filename=filename, secure_name=secure_name,
+        declared_bytes=declared_bytes, content_type=content_type, has_member=has_member,
+    )
     return jsonify({
         'session_id': session.id, 'filename': secure_name,
         'upload_url': storage.generate_upload_url(session.object_key, content_type=session.content_type),
@@ -327,7 +239,7 @@ def v2_complete_direct_upload(band_id, session_id):
             before_materialize=lambda completing: reauthorize_upload_session_owner(band_id, completing),
         )
 
-    item, status = _v2_write(operation)
+    item, status = run_upload_write(operation)
     session = db.session.get(DirectUploadSession, session_id)
     return jsonify(serialize_direct_upload_completion(session, item)), status
 
@@ -346,20 +258,10 @@ def v2_initiate_direct_gallery_upload(band_id):
     content_type = data.get('content_type', '').strip() if isinstance(data.get('content_type'), str) else ''
     secure_name = generate_secure_filename(filename)
 
-    def operation():
-        band, membership = active_upload_membership(band_id, lock=True)
-        assertion = validate_upload_assertion(data, current_app_user(required=True))
-        used, reserved = _v2_used_and_reserved_bytes(band.id)
-        if used + reserved + declared_bytes > band.storage_quota_bytes:
-            raise ValidationError('Band storage quota exceeded.', status_code=409)
-        return _v2_policy_session(create_direct_session, membership, assertion,
-            band_id=band.id, created_by_membership_id=membership.id, kind='gallery',
-            object_key=f'bands/{band.id}/gallery/{secure_name}', original_filename=filename,
-            content_type=content_type or guess_content_type(filename), declared_bytes=declared_bytes,
-            status='initiated', commit=False,
-        )
-
-    session, capability_token = _v2_direct_write(operation)
+    session, capability_token = reserve_gallery_upload(
+        band_id, data, filename=filename, secure_name=secure_name,
+        declared_bytes=declared_bytes, content_type=content_type,
+    )
     return jsonify({
         'session_id': session.id, 'filename': secure_name,
         'upload_url': storage.generate_upload_url(session.object_key, content_type=session.content_type),
@@ -381,7 +283,7 @@ def v2_complete_direct_gallery_upload(band_id, session_id):
             before_materialize=lambda completing: reauthorize_upload_session_owner(band_id, completing),
         )
 
-    item, status = _v2_write(operation)
+    item, status = run_upload_write(operation)
     session = db.session.get(DirectUploadSession, session_id)
     return jsonify(serialize_direct_gallery_completion(session, item)), status
 
@@ -403,32 +305,10 @@ def v2_initiate_multipart_upload(band_id):
     content_type = data.get('content_type', '').strip() if isinstance(data.get('content_type'), str) else ''
     secure_name = generate_secure_filename(filename)
 
-    def operation():
-        band, membership = active_upload_membership(band_id, lock=True)
-        assertion = validate_upload_assertion(data, current_app_user(required=True))
-        used, reserved = _v2_used_and_reserved_bytes(band.id)
-        if used + reserved + declared_bytes > band.storage_quota_bytes:
-            raise ValidationError('Band storage quota exceeded.', status_code=409)
-        common = {
-            'original_filename': filename, 'filename': secure_name,
-            'content_type': content_type or guess_content_type(filename), 'declared_bytes': declared_bytes,
-            'object_key': f'bands/{band.id}/{{prefix}}/{secure_name}', 'commit': False,
-            'band_id': band.id, 'created_by_membership_id': membership.id, 'is_legacy': False,
-        }
-        if has_member:
-            title = data.get('title', '').strip() if isinstance(data.get('title'), str) else ''
-            if len(title or filename) > 200:
-                raise ValidationError('title must be 200 characters or less')
-            member_id = validate_personal_log_upload_target(band.id, data.get('member_id'))
-            common['object_key'] = common['object_key'].format(prefix='personal_logs')
-            return _v2_policy_session(create_session, membership, assertion, PERSONAL_LOG_TARGET,
-                                      member_id=member_id, title=title or filename, **common)
-        song_id, rehearsal_id = validate_media_upload_target(band.id, data)
-        common['object_key'] = common['object_key'].format(prefix='media')
-        return _v2_policy_session(create_session, membership, assertion, MEDIA_TARGET,
-                                  song_id=song_id, rehearsal_id=rehearsal_id, **common)
-
-    session, capability_token = _v2_direct_write(operation)
+    session, capability_token = reserve_multipart_upload(
+        band_id, data, filename=filename, secure_name=secure_name,
+        declared_bytes=declared_bytes, content_type=content_type, has_member=has_member,
+    )
     return jsonify({
         'session_id': session.id, 'filename': secure_name, 'part_size': MULTIPART_PART_SIZE,
         'max_parts': MAX_MULTIPART_PARTS, 'expires_at': session.expires_at.isoformat(),
@@ -490,7 +370,7 @@ def v2_complete_multipart_upload(band_id, session_id):
             session, _object_size, materialize_multipart_upload,
             before_materialize=lambda completing: reauthorize_upload_session_owner(band_id, completing),
         )
-    item, status = _v2_write(operation)
+    item, status = run_upload_write(operation)
     session = _v2_session_or_404(session_id, band_id)
     return jsonify(serialize_multipart_upload_completion(session, item)), status
 

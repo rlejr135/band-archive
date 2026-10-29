@@ -10,6 +10,7 @@ import pytest
 from flask import Flask
 
 import multipart_upload_service
+import upload_transaction
 import routes.uploads as uploads
 
 
@@ -91,6 +92,7 @@ def _client(monkeypatch, events, mode, kind, result_key, item, status):
                               rollback=lambda: events.append('rollback'), get=get)
     monkeypatch.setattr(uploads, 'db', SimpleNamespace(
         session=session, engine=SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))))
+    monkeypatch.setattr(upload_transaction, 'db', uploads.db)
     monkeypatch.setattr(uploads, 'current_app_user', lambda **_kwargs: object())
     monkeypatch.setattr(uploads, '_v2_direct_completion_session', creator)
     monkeypatch.setattr(uploads, '_v2_multipart_completion_session', creator)

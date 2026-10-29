@@ -20,6 +20,7 @@ from models import (AppUser, AuditEvent, Band, BandMembership, DirectUploadSessi
                     MultipartUploadSession, PersonalLogMultipartUploadSession,
                     Song)
 import routes.uploads as uploads
+import upload_initiation_service as initiation_service
 from storage import storage
 import upload_authorization_service as authorization
 from tests.test_band_access_phase6 import access_app  # noqa: F401
@@ -60,7 +61,7 @@ def initiation(access_app, monkeypatch):
             raise ValidationError('Policy rejected.', 403, code='fixture_policy_rejected')
         return dict(ASSERTION)
 
-    cleanup = uploads.expire_direct_sessions_for_band
+    cleanup = initiation_service.expire_direct_sessions_for_band
 
     def expire(band_id, *, commit=True):
         events.append('cleanup')
@@ -77,7 +78,7 @@ def initiation(access_app, monkeypatch):
             return value
         return create
 
-    record = uploads.record_upload_assertion
+    record = initiation_service.record_upload_assertion
 
     def audit(session, membership, assertion):
         events.append('audit')
@@ -119,17 +120,18 @@ def initiation(access_app, monkeypatch):
             raise RuntimeError('Injected cleanup failure.')
 
     monkeypatch.setattr(uploads, 'current_app_user', actor)
+    monkeypatch.setattr(initiation_service, 'current_app_user', actor)
     monkeypatch.setattr(authorization, 'current_app_user', actor)
     monkeypatch.setattr(uploads, 'generate_secure_filename', lambda name: 'safe-' + name)
-    monkeypatch.setattr(uploads, 'validate_upload_assertion', policy)
-    monkeypatch.setattr(uploads, 'expire_direct_sessions_for_band', expire)
-    monkeypatch.setattr(uploads, 'create_direct_session', factory(uploads.create_direct_session))
-    monkeypatch.setattr(uploads, 'create_session', factory(uploads.create_session))
-    monkeypatch.setattr(uploads, 'record_upload_assertion', audit)
-    monkeypatch.setattr(uploads, 'validate_media_upload_target',
-                        target(uploads.validate_media_upload_target, 'media_target'))
-    monkeypatch.setattr(uploads, 'validate_personal_log_upload_target',
-                        target(uploads.validate_personal_log_upload_target, 'personal_target'))
+    monkeypatch.setattr(initiation_service, 'validate_upload_assertion', policy)
+    monkeypatch.setattr(initiation_service, 'expire_direct_sessions_for_band', expire)
+    monkeypatch.setattr(initiation_service, 'create_direct_session', factory(initiation_service.create_direct_session))
+    monkeypatch.setattr(initiation_service, 'create_session', factory(initiation_service.create_session))
+    monkeypatch.setattr(initiation_service, 'record_upload_assertion', audit)
+    monkeypatch.setattr(initiation_service, 'validate_media_upload_target',
+                        target(initiation_service.validate_media_upload_target, 'media_target'))
+    monkeypatch.setattr(initiation_service, 'validate_personal_log_upload_target',
+                        target(initiation_service.validate_personal_log_upload_target, 'personal_target'))
     monkeypatch.setattr(storage, 'generate_upload_url', presign)
     monkeypatch.setattr(storage, 'create_multipart_upload', multipart)
     monkeypatch.setattr(storage, 'delete', delete)

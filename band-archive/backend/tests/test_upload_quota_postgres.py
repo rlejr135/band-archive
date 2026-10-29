@@ -21,6 +21,7 @@ from extensions import db
 from models import (AppUser, Band, BandMembership, DirectUploadSession, Media,
                     MultipartUploadSession, PersonalLogMultipartUploadSession, Song)
 import routes.uploads as uploads
+import upload_initiation_service as initiation
 from storage import storage
 import upload_authorization_service as authorization
 from tests.test_invite_link_concurrency import invite_pg
@@ -44,6 +45,7 @@ def _fixture(invite_pg, monkeypatch, *, expired=False, quota=15):
         return db.session.get(AppUser, ids['owner'])
 
     monkeypatch.setattr(uploads, 'current_app_user', actor)
+    monkeypatch.setattr(initiation, 'current_app_user', actor)
     monkeypatch.setattr(authorization, 'current_app_user', actor)
 
     def presign(key, **kwargs):
@@ -173,7 +175,7 @@ def test_quota_reservations_serialize_after_accounting(
         invite_pg, monkeypatch, expired=expired)
     ready, release = threading.Event(), threading.Event()
     factory_name = 'create_direct_session' if first_kind == 'direct' else 'create_session'
-    original_factory = getattr(uploads, factory_name)
+    original_factory = getattr(initiation, factory_name)
     gate_lock = threading.Lock()
     gated = False
 
@@ -189,7 +191,7 @@ def test_quota_reservations_serialize_after_accounting(
             assert release.wait(30), 'coordinator did not release reservation creation'
         return original_factory(*args, **kwargs)
 
-    monkeypatch.setattr(uploads, factory_name, create)
+    monkeypatch.setattr(initiation, factory_name, create)
     first, second = _contend(
         app, engine,
         lambda: _post(app, band_id, song_id, first_kind),
