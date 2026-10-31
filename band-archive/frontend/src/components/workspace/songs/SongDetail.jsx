@@ -7,7 +7,12 @@ import { PAGE_SIZE, requestOptions } from '../workspaceReadSupport.js';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh } from '../workspaceRouteState.js';
 import { PlaybackMedia } from '../media/PlaybackMedia.jsx';
 
-export const SongDetail = ({
+export const SongDetail = (props) => {
+  const { band, workspaceKey } = useWorkspace();
+  return <SongDetailContent key={`song:${workspaceKey}:${band.id}:${props.item.id}`} {...props} />;
+};
+
+const SongDetailContent = ({
   item,
   onEdit,
   onDeleted

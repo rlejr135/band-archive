@@ -7,7 +7,12 @@ import { PAGE_SIZE, requestOptions } from '../workspaceReadSupport.js';
 import { createWorkspaceRequestGate, mergeMediaPage, takeOneStaleRefresh } from '../workspaceRouteState.js';
 import { PlaybackMedia } from '../media/PlaybackMedia.jsx';
 
-export const RehearsalDetail = ({ item, onEdit, onDeleted }) => {
+export const RehearsalDetail = (props) => {
+  const { band, workspaceKey } = useWorkspace();
+  return <RehearsalDetailContent key={`rehearsal:${workspaceKey}:${band.id}:${props.item.id}`} {...props} />;
+};
+
+const RehearsalDetailContent = ({ item, onEdit, onDeleted }) => {
   const { band, api, workspaceKey } = useWorkspace();
   const [mediaState, setMediaState] = useState({ loading: true, error: '', pages: [], pagination: null });
   const requestGate = useRef(createWorkspaceRequestGate());
