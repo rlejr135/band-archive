@@ -18,7 +18,7 @@ from band_service import (
 from errors import NotFoundError, ValidationError
 from extensions import db
 from models import Band, BandCreationRequest, BandInviteCode, BandLogo, BandMembership, GalleryImage, Song
-from routes.search import search_places_for_member
+from place_search_service import search_places_for_member
 from voc_validation import stored_member_position_values
 
 
@@ -551,7 +551,11 @@ def search_band_places(band_id):
         response.vary.add('Authorization')
         return response
 
-    return search_places_for_member(user.id)
+    user_id = user.id
+    guard = current_app.extensions['place_search_guard']
+    raw_query = request.args.get('query', '')
+    payload, status, headers = search_places_for_member(user_id, raw_query, guard=guard)
+    return jsonify(payload), status, headers
 
 
 @bands_bp.post('/bands/<int:band_id>/invite-codes')

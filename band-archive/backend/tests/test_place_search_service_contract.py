@@ -9,7 +9,7 @@ import requests
 from flask import Flask
 
 from place_search import PlaceSearchGuard
-from routes import search
+import place_search_service as search
 
 
 class RecordingGuard:
@@ -52,7 +52,10 @@ def coordinator(monkeypatch):
     def invoke(*, query=' Studio  Practice ', guard_options=None):
         app.extensions['place_search_guard'] = RecordingGuard(events, **(guard_options or {}))
         with app.test_request_context(query_string={'query': query}):
-            response = app.make_response(search.search_places_for_member(42))
+            payload, status, headers = search.search_places_for_member(
+                42, query, guard=app.extensions['place_search_guard'],
+            )
+            response = app.make_response((app.json.response(payload), status, headers))
         return response, events
 
     invoke.events = events

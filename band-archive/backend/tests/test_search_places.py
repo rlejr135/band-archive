@@ -108,7 +108,7 @@ def _configure_guard(app, **options):
 
 def test_empty_and_invalid_queries_do_not_call_provider(search_access, monkeypatch):
     calls = []
-    monkeypatch.setattr('routes.search.requests.get', lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr('place_search_service.requests.get', lambda *args, **kwargs: calls.append(args))
 
     get = search_access['get']
     assert get('member@example.com', query='%20%20').get_json() == []
@@ -126,7 +126,7 @@ def test_place_search_success_is_bounded_cached_and_preserves_list_contract(sear
         calls.append((url, kwargs))
         return response
 
-    monkeypatch.setattr('routes.search.requests.get', fake_get)
+    monkeypatch.setattr('place_search_service.requests.get', fake_get)
     first = search_access['get']('member@example.com', query='Studio%20%20Practice')
     second = search_access['get']('member@example.com', query='studio%20practice')
 
@@ -154,7 +154,7 @@ def test_place_search_success_is_bounded_cached_and_preserves_list_contract(sear
 def test_membership_precedes_validation_cache_and_provider(search_access, monkeypatch):
     calls = []
     _set_dummy_provider_credentials(monkeypatch)
-    monkeypatch.setattr('routes.search.requests.get', lambda *a, **kw: calls.append(a) or ProviderResponse(_payload()))
+    monkeypatch.setattr('place_search_service.requests.get', lambda *a, **kw: calls.append(a) or ProviderResponse(_payload()))
     get = search_access['get']
     assert get().status_code == 401
     assert get('user@example.com', band='band-b').status_code == 404
@@ -176,7 +176,7 @@ def test_membership_precedes_validation_cache_and_provider(search_access, monkey
 def test_cached_search_still_requires_current_active_membership(search_access, monkeypatch):
     _set_dummy_provider_credentials(monkeypatch)
     calls = []
-    monkeypatch.setattr('routes.search.requests.get', lambda *a, **kw: calls.append(a) or ProviderResponse(_payload()))
+    monkeypatch.setattr('place_search_service.requests.get', lambda *a, **kw: calls.append(a) or ProviderResponse(_payload()))
     get = search_access['get']
     assert get('member@example.com').status_code == 200
     with search_access['app'].app_context():
@@ -192,7 +192,7 @@ def test_cached_search_still_requires_current_active_membership(search_access, m
 
 def test_legacy_public_route_is_gone_even_with_valid_jwt_and_compat_flag(search_access, monkeypatch):
     calls = []
-    monkeypatch.setattr('routes.search.requests.get', lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr('place_search_service.requests.get', lambda *a, **kw: calls.append(a))
     search_access['app'].config['LEGACY_WRITES_ENABLED'] = True
     headers = {'Authorization': f"Bearer {search_access['token']('member@example.com')}"}
     response = search_access['client'].get('/api/search-places?query=studio', headers=headers)
@@ -205,7 +205,7 @@ def test_personal_request_limit_shared_across_bands_and_ignores_identity_headers
     _set_dummy_provider_credentials(monkeypatch)
     _configure_guard(search_access['app'], request_limit=1)
     monkeypatch.setattr(
-        'routes.search.requests.get', lambda *args, **kwargs: ProviderResponse(_payload()),
+        'place_search_service.requests.get', lambda *args, **kwargs: ProviderResponse(_payload()),
     )
 
     get = search_access['get']
@@ -230,7 +230,7 @@ def test_different_users_share_upstream_budget_but_have_personal_buckets(search_
         calls.append((args, kwargs))
         return ProviderResponse(_payload())
 
-    monkeypatch.setattr('routes.search.requests.get', fake_get)
+    monkeypatch.setattr('place_search_service.requests.get', fake_get)
 
     get = search_access['get']
     first = get('member@example.com', query='first', environ_overrides={'REMOTE_ADDR': '192.0.2.1'})
@@ -260,7 +260,7 @@ def test_provider_errors_return_generic_safe_response_and_release_slot(
     _set_dummy_provider_credentials(monkeypatch)
     guard = _configure_guard(search_access['app'], max_concurrent_upstream=1)
     monkeypatch.setattr(
-        'routes.search.requests.get', lambda *args, **kwargs: provider_response,
+        'place_search_service.requests.get', lambda *args, **kwargs: provider_response,
     )
 
     response = search_access['get']('member@example.com', query='bounded')
@@ -280,7 +280,7 @@ def test_network_failure_returns_generic_safe_response(search_access, monkeypatc
     def fail(*args, **kwargs):
         raise requests.Timeout('sensitive provider details')
 
-    monkeypatch.setattr('routes.search.requests.get', fail)
+    monkeypatch.setattr('place_search_service.requests.get', fail)
     response = search_access['get']('member@example.com', query='timeout')
 
     assert response.status_code == 502
@@ -292,7 +292,7 @@ def test_missing_provider_credentials_return_generic_unavailable(search_access, 
     monkeypatch.delenv('NAVER_SEARCH_CLIENT_ID', raising=False)
     monkeypatch.delenv('NAVER_SEARCH_CLIENT_SECRET', raising=False)
     calls = []
-    monkeypatch.setattr('routes.search.requests.get', lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr('place_search_service.requests.get', lambda *args, **kwargs: calls.append(args))
 
     response = search_access['get']('member@example.com', query='missing')
 
