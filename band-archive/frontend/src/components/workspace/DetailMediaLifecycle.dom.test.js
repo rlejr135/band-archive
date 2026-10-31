@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { createElement as h, StrictMode } from 'react';
 import { createServer } from 'vite';
 
@@ -48,16 +49,60 @@ const makeApi = (read, mutate = async () => ({})) => {
   } };
   return { api, calls };
 };
-const detail = (kind, api, id = 1, value = {}, strict = false) => {
+const detail = (kind, api, id = 1, value = {}, strict = false, metadata = {}) => {
   const child = h(auth.AuthContext.Provider, { value: account },
     h(context.WorkspaceContext.Provider, { value: { band, api, workspaceKey: 'alpha:account-a', ...value } },
-      h(kind === 'song' ? song : rehearsal, { item: item(id), onEdit: () => {}, onDeleted: () => {} })));
+      h(kind === 'song' ? song : rehearsal, { item: { ...item(id), ...metadata }, onEdit: () => {}, onDeleted: () => {} })));
   return strict ? h(StrictMode, null, child) : child;
 };
 const visible = (view, label) => view.queryByText(label, { exact: true }) !== null;
 const more = (view) => fireEvent.click(view.getByRole('button', { name: '미디어 더 불러오기', exact: true }));
 
 for (const kind of ['song', 'rehearsal']) {
+  test(`${kind} detail resets player and comment draft across resources even when media ids match`, async () => {
+    await load(); const user = userEvent.setup({ document: dom.window.document });
+    const { api, calls } = makeApi(({ resourceId }) => page([media(42, `Shared media in resource ${resourceId}`, {
+      playback: { video_url: 'https://media.invalid/shared.mp4', audio_url: 'https://media.invalid/shared.m4a' },
+    })]));
+    const view = render(detail(kind, api)); await view.findByText('Shared media in resource 1', { exact: true });
+    fireEvent.click(view.getByRole('button', { name: '음원만 듣기', exact: true }));
+    await user.type(view.getByRole('textbox', { name: '댓글 내용' }), 'Resource one private draft');
+    fireEvent.error(view.container.querySelector('audio'));
+    await waitFor(() => assert.equal(calls.length, 2));
+    assert.equal(view.queryByText(/재생 주소를 한 번 새로고침했습니다/) !== null, true);
+    assert.equal(view.getByRole('textbox', { name: '댓글 내용' }).value, 'Resource one private draft');
+    view.rerender(detail(kind, api, 2)); await view.findByText('Shared media in resource 2', { exact: true });
+    assert.equal(view.container.querySelector('video') !== null, true);
+    assert.equal(view.container.querySelector('audio') === null, true);
+    assert.equal(view.queryByText(/재생 주소를 한 번 새로고침했습니다/) === null, true);
+    assert.equal(view.getByRole('textbox', { name: '댓글 내용' }).value, '');
+  });
+
+  test(`${kind} detail retains pages and player draft state for same-id metadata edits without refetch or stale-budget reset`, async () => {
+    await load(); const user = userEvent.setup({ document: dom.window.document });
+    const { api, calls } = makeApi(({ offset }) => page([media(offset ? 12 : 11, offset ? 'Retained later page' : 'Retained first page', {
+      playback: { video_url: 'https://media.invalid/retained.mp4', audio_url: 'https://media.invalid/retained.m4a' },
+    })], !offset));
+    const view = render(detail(kind, api)); await view.findByText('Retained first page', { exact: true }); more(view);
+    await view.findByText('Retained later page', { exact: true });
+    const first = view.getByText('Retained first page', { exact: true }).closest('.workspace-media');
+    fireEvent.click(first.querySelectorAll('.media-modes button')[1]);
+    await user.type(first.querySelector('textarea'), 'Retained comment draft');
+    fireEvent.error(first.querySelector('audio'));
+    await waitFor(() => assert.equal(calls.length, 3));
+    await waitFor(() => assert.equal(view.getByRole('button', { name: '미디어 더 불러오기', exact: true }).disabled, false));
+    view.rerender(detail(kind, api, 1, {}, false, { title: 'Edited title', memo: 'Edited metadata only' }));
+    await view.findByRole('heading', { name: 'Edited title', exact: true });
+    const retained = view.getByText('Retained first page', { exact: true }).closest('.workspace-media');
+    assert.equal(visible(view, 'Retained later page'), true);
+    assert.equal(retained.querySelector('audio') !== null, true);
+    assert.equal(retained.querySelector('textarea').value, 'Retained comment draft');
+    assert.equal(view.queryByText(/재생 주소를 한 번 새로고침했습니다/) !== null, true);
+    assert.equal(calls.length, 3);
+    fireEvent.error(retained.querySelector('audio')); await act(async () => {});
+    assert.equal(calls.length, 3);
+  });
+
   for (const phase of ['while replacement is pending', 'after replacement resolves']) {
     test(`${kind} detail clears previous resource pages ${phase}`, async () => {
       await load(); const next = deferred();
