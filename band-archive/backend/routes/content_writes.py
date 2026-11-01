@@ -20,6 +20,12 @@ from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
 from content_write_scope import active_member_write_scope
+from content_write_values import (
+    VISIBILITIES as _VISIBILITIES,
+    external_link_value as _external_link,
+    text_value as _text,
+    visibility_value as _visibility,
+)
 from content_visibility import (
     media_visibility, personal_log_visibility, rehearsal_visibility,
     song_visibility,
@@ -31,10 +37,13 @@ from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comme
                     GalleryImage, Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
                     PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
                     SongSuggestion, SongSuggestionVote)
-from validators import validate_external_http_url
 from voc_validation import validate_rehearsal_type
 from policy_service import confirm_public_expansion, upload_policy_enabled
-from song_suggestion_service import proceed_song_suggestion
+from song_suggestion_service import (
+    SUGGESTION_FIELDS as _SUGGESTION_FIELDS,
+    create_song_suggestion, delete_song_suggestion, proceed_song_suggestion,
+    update_song_suggestion,
+)
 from v2_content_serializers import (
     serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
@@ -45,14 +54,12 @@ from v2_remaining_read_serializers import serialize_announcement, serialize_gall
 
 content_writes_bp = Blueprint('content_writes', __name__, url_prefix='/api/v2/bands/<int:band_id>')
 
-_VISIBILITIES = {'PUBLIC', 'MEMBERS'}
 _SONG_FIELDS = {'title', 'artist', 'status', 'chords', 'link', 'memo', 'genre', 'difficulty', 'visibility', 'visibility_confirm'}
 _REHEARSAL_FIELDS = {
     'title', 'date', 'start_date', 'end_date', 'time', 'location', 'latitude', 'longitude',
     'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm', 'rehearsal_type',
 }
 _IGNORED_OWNERSHIP_FIELDS = {'band_id', 'created_by_membership_id', 'created_by_user_id', 'is_legacy'}
-_SUGGESTION_FIELDS = {'title', 'artist', 'link', 'memo', 'visibility', 'visibility_confirm'}
 _ANNOUNCEMENT_FIELDS = {'content', 'visibility', 'visibility_confirm'}
 
 
@@ -190,37 +197,6 @@ def _run_write(callback):
         raise
 
 
-def _text(value, field, maximum, *, required=False, nullable=True):
-    if value is None:
-        if required:
-            raise ValidationError(f'{field} is required.')
-        return None if nullable else value
-    if not isinstance(value, str):
-        raise ValidationError(f'{field} must be text.')
-    value = value.strip()
-    if required and not value:
-        raise ValidationError(f'{field} is required.')
-    if len(value) > maximum:
-        raise ValidationError(f'{field} must be at most {maximum} characters.')
-    return value or None
-
-
-def _visibility(value, default):
-    if value is None:
-        return default
-    if value not in _VISIBILITIES:
-        raise ValidationError('visibility must be PUBLIC or MEMBERS.')
-    return value
-
-
-def _external_link(value, *, required=False):
-    if value is None:
-        if required:
-            raise ValidationError('link is required.')
-        return None
-    return validate_external_http_url(value, 'link', 500)
-
-
 def _date(value, field, *, required=False):
     if value is None:
         if required:
@@ -243,19 +219,6 @@ def _check_fields(data, allowed):
 def _can_change(item, membership):
     return membership.role in MANAGER_ROLES or (
         item.created_by_membership_id is not None and item.created_by_membership_id == membership.id
-    )
-
-
-def _can_change_suggestion(item, membership):
-    """Authors retain their own queue entry; managers only adopt legacy rows.
-
-    Unlike songs, a manager must not silently rewrite a current member's
-    recommendation.  A pre-v2 row has no author, so owner/admin stewardship
-    is the only safe way to keep that historical queue maintainable.
-    """
-    return (
-        item.created_by_membership_id == membership.id
-        or (item.created_by_membership_id is None and membership.role in MANAGER_ROLES)
     )
 
 
@@ -716,69 +679,34 @@ def _suggestion_or_404(suggestion_id, band_id, *, lock=False):
     return _owned_or_404(SongSuggestion, suggestion_id, band_id, 'Suggestion not found', lock=lock)
 
 
-def _apply_suggestion(suggestion, data):
-    if 'title' in data:
-        suggestion.title = _text(data['title'], 'title', 100, required=True)
-    if 'artist' in data:
-        suggestion.artist = _text(data['artist'], 'artist', 100, required=True)
-    if 'link' in data:
-        suggestion.link = _external_link(data['link'], required=True)
-    if 'memo' in data:
-        suggestion.memo = _text(data['memo'], 'memo', 10000)
-    if 'visibility' in data:
-        suggestion.visibility = _visibility(data['visibility'], suggestion.visibility)
-
-
 @content_writes_bp.post('/suggestions')
 @authenticated_write
 def create_suggestion_v2(band_id):
     data = _payload(); _check_fields(data, _SUGGESTION_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        suggestion = SongSuggestion(
-            band_id=band.id, created_by_membership_id=membership.id,
-            visibility=_visibility(data.get('visibility'), band.default_visibility),
-            title=_text(data.get('title'), 'title', 100, required=True),
-            artist=_text(data.get('artist'), 'artist', 100, required=True),
-            link=_external_link(data.get('link'), required=True),
-        )
-        _apply_suggestion(suggestion, data)
-        db.session.add(suggestion); db.session.flush()
-        audit('content.suggestion.created', user, band, suggestion, {'visibility': suggestion.visibility})
+    def prepare_response(scope, suggestion):
         return jsonify({'suggestion': _suggestion_response(scope, suggestion)}), 201
-    return _run_write(operation)
+    return create_song_suggestion(band_id=band_id, data=data, prepare_response=prepare_response)
 
 
 @content_writes_bp.patch('/suggestions/<int:suggestion_id>')
 @authenticated_write
 def update_suggestion_v2(band_id, suggestion_id):
     data = _payload(); _check_fields(data, _SUGGESTION_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
-        if not _can_change_suggestion(suggestion, membership):
-            raise ValidationError('You may only edit your own suggestion.', 403)
-        if band.default_visibility == 'PUBLIC' and suggestion.visibility == 'MEMBERS' and data.get('visibility') == 'PUBLIC':
-            confirm_public_expansion(data, user, band, suggestion)
-        _apply_suggestion(suggestion, data)
-        audit('content.suggestion.updated', user, band, suggestion,
-              {'fields': sorted(set(data) & _SUGGESTION_FIELDS)})
+    def prepare_response(scope, suggestion):
         return jsonify({'suggestion': _suggestion_response(scope, suggestion)})
-    return _run_write(operation)
+    return update_song_suggestion(
+        band_id=band_id, suggestion_id=suggestion_id, data=data, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.delete('/suggestions/<int:suggestion_id>')
 @authenticated_write
 def delete_suggestion_v2(band_id, suggestion_id):
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
-        if not _can_delete(scope, suggestion):
-            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
-        audit('content.suggestion.deleted', user, band, suggestion)
-        db.session.delete(suggestion)
+    def prepare_response(suggestion_id):
         return jsonify({'deleted': True, 'id': suggestion_id})
-    return _run_write(operation)
+    return delete_song_suggestion(
+        band_id=band_id, suggestion_id=suggestion_id, prepare_response=prepare_response,
+    )
 
 
 def _apply_suggestion_vote(band_id, suggestion_id):

@@ -10,6 +10,7 @@ from errors import ValidationError
 from extensions import db
 from models import AppUser, AuditEvent, Band, BandMembership, SongSuggestion, SongSuggestionVote
 import routes.content_writes as writes
+import song_suggestion_service as suggestions
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 from tests.test_v2_content_writes import _band_id, principals, write_client  # noqa: F401
 
@@ -193,7 +194,9 @@ def test_suggestion_payload_shape_precedes_lock_but_required_value_validation_fo
             phases.append('begin')
 
     monkeypatch.setattr(writes, 'current_app_user', user)
+    monkeypatch.setattr(suggestions, 'current_app_user', user)
     monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(suggestions, 'active_member_write_scope', scope)
     with access_app.app_context():
         engine = db.engine
     event.listen(engine, 'before_cursor_execute', before_execute)
@@ -250,6 +253,7 @@ def test_suggestion_delete_reloads_actor_before_capability_and_rolls_back_reject
         return original_scope(band_id, actor, **kwargs)
 
     monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(suggestions, 'active_member_write_scope', scope)
     response = write_client.delete(f'/api/v2/bands/{band_id}/suggestions/{suggestion_id}', headers=principals['owner'])
     assert observed == [{'lock': True, 'lock_actor': True}]
     assert response.status_code == 403

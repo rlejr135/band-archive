@@ -16,6 +16,7 @@ from errors import register_error_handlers
 from extensions import db
 from models import AppUser, AuditEvent, BandMembership, SongSuggestion, SongSuggestionVote
 import routes.content_writes as writes
+import song_suggestion_service as suggestions
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
 )
@@ -84,6 +85,7 @@ def _fixture(invite_pg, monkeypatch):
         assert SongSuggestionVote.query.filter_by(suggestion_id=suggestion.id).count() == 2
         db.session.remove()
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(suggestions, 'current_app_user', lambda required=True: principal)
     return app, engine, graph
 
 
