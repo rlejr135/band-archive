@@ -2,6 +2,10 @@ import { API_URL } from './apiConfig.js';
 import { createTransportCache, createWebUploadTransport, mapUploadState, resolveUploadTransport } from './uploadTransport.js';
 import { initiateMultipartSession } from './multipartSession.js';
 import { createBandGalleryUploadTransport } from './bandUploadTransport.js';
+import { normalizeMedia } from './uploadMediaResponse.js';
+
+// Compatibility for existing manager callers/tests; remove after they migrate to the adapter.
+export { normalizeMedia } from './uploadMediaResponse.js';
 
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
@@ -12,25 +16,6 @@ const runtimeTransport = createTransportCache(() => resolveUploadTransport({ api
 export const getUploadTransport = () => runtimeTransport.get();
 // Call after an explicit Capacitor host/plugin availability transition.
 export const invalidateUploadTransport = () => runtimeTransport.invalidate();
-
-// v2 processing reads wrap that compact payload as { processing: { status,
-// error, audio_url, ... } }, while v1 returns it directly and normal media
-// reads use { media } / { personal_log } plus transcoding_status.  Normalize
-// all of those boundary shapes into the fields used by the common poller.
-export const normalizeMedia = (response) => {
-  const media = response?.media || response?.personal_log || response?.processing || response;
-  if (!media || typeof media !== 'object') return media;
-  const status = media.status || media.transcoding_status;
-  if (!status) return media;
-  const processingError = media.processing_error || media.transcoding_error || media.error;
-  return {
-    ...media,
-    transcoding_status: status,
-    processing_error: processingError,
-    transcoding_error: media.transcoding_error || processingError,
-    error: media.error || processingError,
-  };
-};
 
 const requestJson = async (url, options = {}) => {
   const response = await fetch(url, {

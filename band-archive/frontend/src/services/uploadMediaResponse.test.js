@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeMedia } from './mediaUploadManager.js';
+import { normalizeMedia } from './uploadMediaResponse.js';
+import { normalizeMedia as compatibilityNormalizeMedia } from './mediaUploadManager.js';
 import { nativeUploadResult } from './nativeUploadQueue.js';
+
+test('upload manager compatibility export is the response adapter function', () => {
+  assert.equal(compatibilityNormalizeMedia, normalizeMedia);
+});
 
 for (const [label, input] of [
   ['undefined', undefined], ['null', null], ['false', false],
