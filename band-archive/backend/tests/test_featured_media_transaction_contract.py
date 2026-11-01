@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from extensions import db
 from models import AppUser, AuditEvent, Media
 import routes.content_writes as writes
+import featured_media_service as featured
 import deletion_service
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
@@ -229,6 +230,7 @@ def test_sqlite_writer_lock_precedes_inner_principal_and_mutable_authority_reads
             calls.append('begin_immediate')
 
     monkeypatch.setattr(writes, 'current_app_user', user)
+    monkeypatch.setattr(featured, 'current_app_user', user)
     monkeypatch.setattr(deletion_service, 'lock_band_and_membership', lock)
     monkeypatch.setattr(deletion_service, 'load_current_actor', actor)
     with access_app.app_context():

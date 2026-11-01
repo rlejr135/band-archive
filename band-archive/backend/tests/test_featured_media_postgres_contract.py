@@ -15,6 +15,7 @@ from errors import register_error_handlers
 from extensions import db
 from models import AuditEvent, BandMembership, Media, MediaVote, Song
 import routes.content_writes as writes
+import featured_media_service as featured
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
 )
@@ -32,6 +33,7 @@ def _fixture(invite_pg, monkeypatch):
     register_error_handlers(app)
     principal = SimpleNamespace(id=ids['owner'])
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(featured, 'current_app_user', lambda required=True: principal)
     with app.app_context():
         membership = BandMembership.query.filter_by(
             band_id=ids['band'], user_id=ids['owner'], status='active').one()
