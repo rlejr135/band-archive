@@ -10,7 +10,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 CONSUMERS = (
     'media_processing.py',
     'media_access_service.py',
-    'routes/content_writes.py',
+    'featured_media_service.py',
     'routes/songs.py',
     'routes/personal_logs.py',
 )
