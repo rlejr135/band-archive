@@ -20,6 +20,7 @@ import math
 import uuid
 from copy import deepcopy
 from collections import defaultdict
+from contextlib import closing
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from functools import lru_cache
@@ -382,7 +383,7 @@ def preflight_sqlite_snapshot(source: str) -> Path:
     before = (path.stat().st_size, path.stat().st_mtime_ns)
     uri = f"file:{path.as_posix()}?mode=ro"
     try:
-        with sqlite3.connect(uri, uri=True) as conn:
+        with closing(sqlite3.connect(uri, uri=True)) as conn, conn:
             conn.execute("PRAGMA query_only = ON")
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             if integrity != "ok":
@@ -761,7 +762,7 @@ def _assert_exact_sqlite_trigger_contract(path: Path, revision: str | None) -> N
     """Reject extra or altered trigger DDL before source migration can run."""
     expected = _AUDIT_TRIGGER_SQL if revision in _revisions_inheriting_audit_triggers() else {}
     uri = f"file:{path.as_posix()}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as conn:
+    with closing(sqlite3.connect(uri, uri=True)) as conn, conn:
         actual = {
             name: _canonical_sqlite_trigger_sql(sql)
             for name, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
@@ -777,7 +778,7 @@ def _assert_supported_source_schema(path: Path) -> tuple[str | None, str | None]
     tables = set(fingerprint["tables"])
     if "alembic_version" in tables:
         uri = f"file:{path.as_posix()}?mode=ro"
-        with sqlite3.connect(uri, uri=True) as conn:
+        with closing(sqlite3.connect(uri, uri=True)) as conn, conn:
             versions = sorted(row[0] for row in conn.execute("SELECT version_num FROM alembic_version"))
         if len(versions) != 1 or versions[0] not in _known_revisions():
             raise RehearsalError(
@@ -807,7 +808,7 @@ def _mapped_sqlite_digests(path: Path, contract: dict[str, Any]) -> dict[str, di
     """Digest each expected column and PK in deterministic FK-safe source order."""
     result: dict[str, dict[str, Any]] = {}
     uri = f"file:{path.as_posix()}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as conn:
+    with closing(sqlite3.connect(uri, uri=True)) as conn, conn:
         conn.row_factory = sqlite3.Row
         for table, definition in sorted(contract["tables"].items()):
             columns = [item["name"] for item in definition["columns"]]
@@ -929,8 +930,8 @@ def _normalize_production_legacy_copy(snapshot_path: Path, working_path: Path,
     excluded = _assert_normalizer_values(snapshot_path)
     source_digests = _mapped_sqlite_digests(snapshot_path, baseline)
     _create_baseline_sqlite(working_path)
-    with sqlite3.connect(working_path) as target, sqlite3.connect(
-            f"file:{snapshot_path.as_posix()}?mode=ro", uri=True) as source:
+    with closing(sqlite3.connect(working_path)) as target, target, closing(sqlite3.connect(
+            f"file:{snapshot_path.as_posix()}?mode=ro", uri=True)) as source, source:
         target.execute("DROP TABLE alembic_version")
         target.execute("PRAGMA foreign_keys = ON")
         target.execute("PRAGMA defer_foreign_keys = ON")
