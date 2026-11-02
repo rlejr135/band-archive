@@ -16,6 +16,7 @@ import pytest
 from errors import register_error_handlers
 from extensions import db
 from models import Announcement, AppUser, AuditEvent, BandMembership, R2DeletionTask
+import announcement_service as announcements
 import routes.content_writes as writes
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
@@ -66,6 +67,7 @@ def _fixture(invite_pg, monkeypatch, *, existing=False):
         db.session.commit()
         db.session.remove()
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(announcements, 'current_app_user', lambda required=True: principal)
     return app, engine, graph
 
 

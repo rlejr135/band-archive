@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from extensions import db
 from models import Announcement, AppUser, AuditEvent, Band, BandMembership, R2DeletionTask
+import announcement_service as announcements
 import routes.content_writes as writes
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
@@ -208,7 +209,7 @@ def test_announcement_payload_shape_precedes_lock_but_missing_content_follows_sc
     band_id = _band_id(access_app)
     phases = []
     original_user = writes.current_app_user
-    original_scope = writes.active_member_write_scope
+    original_scope = announcements.active_member_write_scope
 
     def user(*args, **kwargs):
         phases.append('principal')
@@ -224,7 +225,8 @@ def test_announcement_payload_shape_precedes_lock_but_missing_content_follows_sc
             phases.append('begin')
 
     monkeypatch.setattr(writes, 'current_app_user', user)
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(announcements, 'current_app_user', user)
+    monkeypatch.setattr(announcements, 'active_member_write_scope', scope)
     with access_app.app_context():
         engine = db.engine
     event.listen(engine, 'before_cursor_execute', before_execute)
@@ -271,14 +273,14 @@ def test_announcement_clear_reloads_actor_with_existing_lock_flag(
         access_app, write_client, principals, monkeypatch):
     band_id = _band_id(access_app)
     _seed(access_app, band_id)
-    original_scope = writes.active_member_write_scope
+    original_scope = announcements.active_member_write_scope
     observed = []
 
     def scope(*args, **kwargs):
         observed.append(kwargs)
         return original_scope(*args, **kwargs)
 
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(announcements, 'active_member_write_scope', scope)
     response = write_client.delete(f'/api/v2/bands/{band_id}/announcement', headers=principals['owner'])
     assert response.status_code == 200
     assert observed == [{'lock': True, 'lock_actor': True}]

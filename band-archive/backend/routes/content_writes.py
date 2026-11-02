@@ -15,6 +15,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from auth_service import current_app_user
+from announcement_service import (
+    ANNOUNCEMENT_FIELDS as _ANNOUNCEMENT_FIELDS,
+    clear_announcement, put_announcement,
+)
 from band_access import content_capabilities
 from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
 from band_service import ACTIVE, MANAGER_ROLES, audit
@@ -33,7 +37,7 @@ from content_visibility import (
 from errors import NotFoundError, ValidationError
 from extensions import db
 from featured_media_service import clear_song_featured_media, set_song_featured_media
-from models import (Announcement, AppUser, Band, BandLogo, BandMembership, Comment, DirectUploadSession,
+from models import (AppUser, Band, BandLogo, BandMembership, Comment, DirectUploadSession,
                     GalleryImage, Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
                     PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
                     SongSuggestion, SongSuggestionVote)
@@ -60,7 +64,6 @@ _REHEARSAL_FIELDS = {
     'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm', 'rehearsal_type',
 }
 _IGNORED_OWNERSHIP_FIELDS = {'band_id', 'created_by_membership_id', 'created_by_user_id', 'is_legacy'}
-_ANNOUNCEMENT_FIELDS = {'content', 'visibility', 'visibility_confirm'}
 
 
 def _no_store():
@@ -790,54 +793,18 @@ def proceed_suggestion_v2(band_id, suggestion_id):
 @authenticated_write
 def put_announcement_v2(band_id):
     data = _payload(); _check_fields(data, _ANNOUNCEMENT_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        if membership.role not in MANAGER_ROLES:
-            raise ValidationError('Insufficient band role.', 403)
-        query = Announcement.query.filter_by(band_id=band.id)
-        if db.engine.dialect.name != 'sqlite':
-            query = query.with_for_update()
-        rows = query.order_by(Announcement.id.asc()).limit(2).all()
-        if len(rows) > 1:
-            raise NotFoundError('Announcement not found')
-        announcement = rows[0] if rows else Announcement(
-            band_id=band.id, created_by_membership_id=membership.id,
-            visibility=_visibility(data.get('visibility'), band.default_visibility),
-        )
-        if 'content' not in data:
-            raise ValidationError('content is required.')
-        if rows and band.default_visibility == 'PUBLIC' and announcement.visibility == 'MEMBERS' and data.get('visibility') == 'PUBLIC':
-            confirm_public_expansion(data, user, band, announcement)
-        announcement.content = _text(data['content'], 'content', 10000, required=True)
-        if 'visibility' in data:
-            announcement.visibility = _visibility(data['visibility'], announcement.visibility)
-        if not rows:
-            db.session.add(announcement); db.session.flush()
-            audit('content.announcement.created', user, band, announcement,
-                  {'visibility': announcement.visibility})
-        else:
-            audit('content.announcement.updated', user, band, announcement,
-                  {'fields': sorted(set(data) & _ANNOUNCEMENT_FIELDS)})
+    def prepare_response(scope, announcement):
         return jsonify({'announcement': serialize_announcement(scope, announcement)})
-    return _run_write(operation)
+    return put_announcement(band_id=band_id, data=data, prepare_response=prepare_response)
 
 
 @content_writes_bp.delete('/announcement')
 @authenticated_write
 def clear_announcement_v2(band_id):
     """Clear the singleton announcement synchronously; never enqueue text."""
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        if membership.role != 'owner' and user.is_platform_admin is not True:
-            raise ValidationError('Only an active verified owner may clear the announcement.', 403)
-        rows = Announcement.query.filter_by(band_id=band.id).order_by(Announcement.id.asc()).limit(2).all()
-        if len(rows) != 1:
-            raise NotFoundError('Announcement not found')
-        announcement = rows[0]
-        announcement.content = ''
-        audit('content.announcement.cleared', user, band, announcement)
+    def prepare_response(scope, announcement):
         return jsonify({'announcement': serialize_announcement(scope, announcement), 'cleared': True})
-    return _run_write(operation)
+    return clear_announcement(band_id=band_id, prepare_response=prepare_response)
 
 
 @content_writes_bp.patch('/gallery/<int:image_id>/featured')
