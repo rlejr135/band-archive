@@ -14,6 +14,7 @@ import pytest
 from errors import register_error_handlers
 from extensions import db
 from models import AppUser, AuditEvent, BandLogo, BandMembership, GalleryImage, R2DeletionTask
+import gallery_featured_service as featured_photos
 import routes.content_writes as writes
 import routes.deletion_tasks as deletions
 from storage import storage
@@ -58,6 +59,7 @@ def _fixture(invite_pg, monkeypatch):
         graph = {'band': ids['band'], 'owner': ids['owner'], 'images': [row.id for row in images]}
         db.session.remove()
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(featured_photos, 'current_app_user', lambda required=True: principal)
     monkeypatch.setattr(deletions, 'current_app_user', lambda required=True: principal)
     monkeypatch.setattr(storage, 'generate_url', lambda key, expires_in=None: f'https://storage.test/{key}')
     assert app.extensions.get('r2_deletion_worker') is None

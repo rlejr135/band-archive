@@ -20,12 +20,11 @@ from announcement_service import (
     clear_announcement, put_announcement,
 )
 from band_access import content_capabilities
-from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
+from band_logo_service import set_band_logo as update_band_logo_selection
 from band_service import ACTIVE, MANAGER_ROLES, audit
 from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
 from content_write_scope import active_member_write_scope
 from content_write_values import (
-    VISIBILITIES as _VISIBILITIES,
     external_link_value as _external_link,
     text_value as _text,
     visibility_value as _visibility,
@@ -37,8 +36,9 @@ from content_visibility import (
 from errors import NotFoundError, ValidationError
 from extensions import db
 from featured_media_service import clear_song_featured_media, set_song_featured_media
-from models import (AppUser, Band, BandLogo, BandMembership, Comment, DirectUploadSession,
-                    GalleryImage, Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
+from gallery_featured_service import set_gallery_featured
+from models import (AppUser, Band, BandMembership, Comment, DirectUploadSession,
+                    Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
                     PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
                     SongSuggestion, SongSuggestionVote)
 from voc_validation import validate_rehearsal_type
@@ -87,9 +87,6 @@ def authenticated_write(view):
 @content_writes_bp.put('/logo')
 @authenticated_write
 def set_band_logo(band_id):
-    from deletion_service import actor_is_eligible, load_current_actor, lock_band_and_membership
-    from band_access import BandReadScope, MembershipAudience, RequestAudience
-
     data = _payload()
     if set(data) != {'gallery_image_id'}:
         raise ValidationError('Only gallery_image_id is accepted.')
@@ -98,66 +95,12 @@ def set_band_logo(band_id):
         raise ValidationError('gallery_image_id must be a positive integer or null.')
     user = current_app_user(required=True)
 
-    def write():
-        band, membership = lock_band_and_membership(band_id, user.id, require_member=False)
-        actor = load_current_actor(user.id, lock=True)
-        if band is None or actor is None or not actor_is_eligible(actor):
-            raise NotFoundError('Resource not found')
-        is_admin = actor.is_platform_admin is True
-        is_owner = membership is not None and membership.role == 'owner'
-        if not (is_owner or is_admin):
-            raise NotFoundError('Resource not found')
-        member_audience = MembershipAudience(
-            id=membership.id, band_id=membership.band_id, role=membership.role, status=membership.status,
-            user_subject=actor.supabase_user_id, user_display_name=actor.display_name, user_email=actor.email,
-        ) if membership else None
-        audience = RequestAudience(
-            user_id=actor.id, subject=actor.supabase_user_id, account_active=True,
-            email_verified=True, is_platform_admin=is_admin,
-        )
-        scope = BandReadScope(
-            band_id=band.id, band_slug=band.slug, audience=audience, membership=member_audience,
-            band_visibility=band.default_visibility,
-        )
-        image = None
-        if image_id is not None:
-            image_query = GalleryImage.query.filter(
-                GalleryImage.id == image_id, GalleryImage.band_id == band.id,
-                _not_pending_delete(GalleryImage, 'gallery'), _creator_is_scoped_sql(GalleryImage, scope),
-            )
-            if db.engine.dialect.name == 'postgresql':
-                image_query = image_query.with_for_update()
-            image = image_query.one_or_none()
-            if image is None:
-                raise NotFoundError('Resource not found')
+    def prepare_logo(scope, image):
+        return serialize_gallery_image(scope, image)
 
-        logo = BandLogo.query.filter_by(band_id=band.id)
-        if db.engine.dialect.name == 'postgresql':
-            logo = logo.with_for_update()
-        logo = logo.one_or_none()
-        previous_id = logo.gallery_image_id if logo else None
-        if image_id is None:
-            if logo is not None:
-                db.session.delete(logo)
-        elif logo is None:
-            db.session.add(BandLogo(band_id=band.id, gallery_image_id=image_id))
-        elif logo.gallery_image_id != image_id:
-            logo.gallery_image_id = image_id
-        db.session.flush()
-        if previous_id != image_id:
-            audit('band_logo_updated', actor, band=band, target=band,
-                  details={'gallery_image_id': image_id, 'previous_gallery_image_id': previous_id})
-        serialized = None
-        if image_id is not None:
-            try:
-                value = serialize_gallery_image(scope, image) if image is not None else None
-                serialized = {'gallery_image_id': image_id,
-                              'url': value.get('url') if value else None}
-            except Exception:
-                serialized = {'gallery_image_id': image_id, 'url': None}
-        return {'logo': serialized}
-
-    return jsonify(_run_write(write))
+    return jsonify(update_band_logo_selection(
+        band_id=band_id, actor=user, image_id=image_id, prepare_logo=prepare_logo,
+    ))
 
 
 @content_writes_bp.before_request
@@ -816,56 +759,11 @@ def set_gallery_featured_v2(band_id, image_id):
         raise ValidationError('is_featured must be a boolean.')
     desired = data['is_featured']
 
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        if membership.role not in MANAGER_ROLES:
-            raise ValidationError('Insufficient band role.', 403)
-
-        image = _owned_or_404(
-            GalleryImage, image_id, band.id, 'Gallery image not found', lock=True,
-        )
-        # A NULL creator is a valid legacy row. Any non-NULL creator pointer
-        # must remain in this tenant before the image can be changed or signed.
-        if image.created_by_membership_id is not None:
-            creator = BandMembership.query.filter_by(
-                id=image.created_by_membership_id, band_id=band.id,
-            ).one_or_none()
-            if creator is None:
-                raise NotFoundError('Gallery image not found')
-        if image.visibility not in _VISIBILITIES:
-            raise NotFoundError('Gallery image not found')
-
-        featured_query = GalleryImage.query.filter(
-            GalleryImage.band_id == band.id,
-            GalleryImage.is_featured.is_(True),
-        )
-        if db.engine.dialect.name != 'sqlite':
-            featured_query = featured_query.with_for_update()
-        featured_rows = featured_query.all()
-        before = bool(image.is_featured)
-        changed = False
-        cleared = 0
-        if desired:
-            other_featured = featured_query.filter(GalleryImage.id != image.id)
-            cleared = sum(existing.id != image.id for existing in featured_rows)
-            if cleared:
-                # Apply the clears before setting the selected row so the
-                # partial unique index remains satisfied in either ID order.
-                other_featured.update({GalleryImage.is_featured: False}, synchronize_session='fetch')
-                changed = True
-            if not before:
-                image.is_featured = True
-                changed = True
-        elif before:
-            image.is_featured = False
-            changed = True
-
-        if changed:
-            audit('content.gallery.featured.changed', user, band, image,
-                  {'is_featured': desired, 'cleared_count': cleared})
+    def prepare_response(scope, image):
         return jsonify({'gallery': serialize_gallery_image(scope, image)})
-
-    return _run_write(operation)
+    return set_gallery_featured(
+        band_id=band_id, image_id=image_id, desired=desired, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.put('/songs/<int:song_id>/featured-media')

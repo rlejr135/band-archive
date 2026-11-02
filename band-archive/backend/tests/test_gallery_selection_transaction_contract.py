@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from extensions import db
 from models import AuditEvent, BandLogo, GalleryImage, R2DeletionTask
+import gallery_featured_service as featured_photos
 import routes.content_writes as writes
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
@@ -199,7 +200,7 @@ def test_actor_resolution_keeps_its_existing_position_relative_to_sqlite_begin(
         access_app, gallery_graph, principals, monkeypatch, kind):
     phases = []
     original_user = writes.current_app_user
-    original_scope = writes.active_member_write_scope
+    original_scope = featured_photos.active_member_write_scope
 
     def user(*args, **kwargs):
         phases.append('actor')
@@ -215,7 +216,8 @@ def test_actor_resolution_keeps_its_existing_position_relative_to_sqlite_begin(
             phases.append('begin')
 
     monkeypatch.setattr(writes, 'current_app_user', user)
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(featured_photos, 'current_app_user', user)
+    monkeypatch.setattr(featured_photos, 'active_member_write_scope', scope)
     with access_app.app_context():
         engine = db.engine
     event.listen(engine, 'before_cursor_execute', before_execute)
