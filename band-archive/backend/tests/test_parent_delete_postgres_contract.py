@@ -19,6 +19,8 @@ from models import (AppUser, AuditEvent, Band, BandMembership, DirectUploadSessi
                     Media, MultipartUploadSession, PersonalLogMultipartUploadSession,
                     Rehearsal, R2DeletionTask, Song)
 import routes.content_writes as writes
+import song_service as songs
+import rehearsal_service as rehearsals
 import routes.uploads as uploads
 from storage import storage
 import upload_authorization_service as authorization
@@ -73,7 +75,7 @@ def _fixture(invite_pg, monkeypatch, parent):
         db.session.remove()
 
     # Actual JWT behavior is covered separately by the HTTP/JWT contracts.
-    for module in (writes, uploads, authorization, initiation):
+    for module in (writes, songs, rehearsals, uploads, authorization, initiation):
         monkeypatch.setattr(module, 'current_app_user', lambda required=True: principal)
     calls = {'presign': [], 'multipart': []}
 

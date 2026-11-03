@@ -1,17 +1,18 @@
-"""Atomic creation and editing of a band's Song repertoire entries."""
+"""Atomic creation, editing and deletion of a band's Song repertoire entries."""
 
 from sqlalchemy import text
 
 from auth_service import current_app_user
+from band_access import content_capabilities
 from band_service import audit
 from comment_rules import _owned_or_404
 from content_write_rules import can_change_authored_content as _can_change
 from content_write_scope import active_member_write_scope
 from content_write_values import text_value as _text, visibility_value as _visibility
 from content_visibility import song_visibility
-from errors import ValidationError
+from errors import NotFoundError, ValidationError
 from extensions import db
-from models import Song
+from models import DirectUploadSession, Media, MultipartUploadSession, Song
 from policy_service import confirm_public_expansion
 
 
@@ -86,4 +87,45 @@ def update_song(*, band_id, song_id, data, prepare_response):
             confirm_public_expansion(data, user, band, song)
         audit('content.song.updated', user, band, song, {'fields': sorted(set(data) & SONG_FIELDS)})
         return prepare_response(scope, song)
+    return _run_song_write(operation)
+
+
+def _assert_song_delete_safe(song):
+    # ORM deletion cascades media and its comments/votes.  Refuse an entire
+    # delete rather than allowing a damaged foreign tenant edge to cascade.
+    if Media.query.filter(Media.song_id == song.id, Media.band_id != song.band_id).first() is not None:
+        raise NotFoundError('Song not found')
+    if Media.query.filter_by(song_id=song.id, band_id=song.band_id).first() is not None:
+        raise ValidationError('Delete the song media individually before deleting this song.', 409)
+    if song.sheet_music_object_key or song.sheet_music:
+        raise ValidationError('Delete the song sheet music before deleting this song.', 409)
+    live_multipart = MultipartUploadSession.query.filter(
+        MultipartUploadSession.song_id == song.id,
+        MultipartUploadSession.status.in_(('initiated', 'completing', 'expiring', 'aborting')),
+    ).first()
+    live_direct = DirectUploadSession.query.filter(
+        DirectUploadSession.song_id == song.id,
+        DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
+    ).first()
+    if live_multipart or live_direct:
+        raise ValidationError('Wait for attached uploads to finish cleanup before deleting this song.', 409)
+    if any(rehearsal.band_id != song.band_id for rehearsal in song.rehearsals):
+        raise NotFoundError('Song not found')
+
+
+def delete_song(*, band_id, song_id, prepare_response):
+    """Delete the parent and terminal upload history in one transaction."""
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
+        song = _owned_or_404(Song, song_id, band.id, 'Song not found', lock=True)
+        if not content_capabilities(scope, song)['can_delete']:
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
+        _assert_song_delete_safe(song)
+        from deletion_service import cleanup_terminal_parent_upload_sessions
+        if not cleanup_terminal_parent_upload_sessions('song', song):
+            raise ValidationError('Upload history is not in a safe terminal state.', 409)
+        audit('content.song.deleted', user, band, song)
+        db.session.delete(song)
+        return prepare_response(song_id)
+
     return _run_song_write(operation)

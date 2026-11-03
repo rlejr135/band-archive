@@ -172,6 +172,7 @@ def test_platform_admin_must_be_in_band_and_current_db_grant_is_rechecked(
         db.session.commit()
     stale_actor = {'id': None}
     import routes.content_writes as writes
+    import song_service as songs
     original_current_app_user = writes.current_app_user
 
     def current_user_with_revocation(*, required=False):
@@ -187,6 +188,7 @@ def test_platform_admin_must_be_in_band_and_current_db_grant_is_rechecked(
         )
 
     monkeypatch.setattr(writes, 'current_app_user', current_user_with_revocation)
+    monkeypatch.setattr(songs, 'current_app_user', current_user_with_revocation)
     denied = delete_client.delete(f'{base}/songs/{song_id}', headers=principals['member'])
     assert denied.status_code == 403
     assert stale_actor['id'] is not None

@@ -6,6 +6,7 @@ import math
 from sqlalchemy import text
 
 from auth_service import current_app_user
+from band_access import content_capabilities
 from band_service import audit
 from comment_rules import _owned_or_404
 from content_write_rules import can_change_authored_content as _can_change
@@ -14,7 +15,7 @@ from content_write_values import text_value as _text, visibility_value as _visib
 from content_visibility import media_visibility, rehearsal_visibility
 from errors import NotFoundError, ValidationError
 from extensions import db
-from models import Media, Rehearsal, Song
+from models import DirectUploadSession, Media, MultipartUploadSession, Rehearsal, Song
 from policy_service import confirm_public_expansion, upload_policy_enabled
 from voc_validation import validate_rehearsal_type
 
@@ -139,4 +140,41 @@ def update_rehearsal(*, band_id, rehearsal_id, data, prepare_response):
             confirm_public_expansion(data, user, band, rehearsal)
         audit('content.rehearsal.updated', user, band, rehearsal, {'fields': sorted(set(data) & REHEARSAL_FIELDS)})
         return prepare_response(scope, rehearsal)
+    return _run_rehearsal_write(operation)
+
+
+def _assert_rehearsal_delete_safe(rehearsal):
+    if Media.query.filter(Media.rehearsal_id == rehearsal.id, Media.band_id != rehearsal.band_id).first() is not None:
+        raise NotFoundError('Rehearsal not found')
+    if Media.query.filter_by(rehearsal_id=rehearsal.id, band_id=rehearsal.band_id).first() is not None:
+        raise ValidationError('Delete the rehearsal media individually before deleting this rehearsal.', 409)
+    live_multipart = MultipartUploadSession.query.filter(
+        MultipartUploadSession.rehearsal_id == rehearsal.id,
+        MultipartUploadSession.status.in_(('initiated', 'completing', 'expiring', 'aborting')),
+    ).first()
+    live_direct = DirectUploadSession.query.filter(
+        DirectUploadSession.rehearsal_id == rehearsal.id,
+        DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
+    ).first()
+    if live_multipart or live_direct:
+        raise ValidationError('Wait for attached uploads to finish cleanup before deleting this rehearsal.', 409)
+    if any(song.band_id != rehearsal.band_id for song in rehearsal.songs):
+        raise NotFoundError('Rehearsal not found')
+
+
+def delete_rehearsal(*, band_id, rehearsal_id, prepare_response):
+    """Delete the parent and terminal upload history in one transaction."""
+    def operation():
+        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
+        rehearsal = _owned_or_404(Rehearsal, rehearsal_id, band.id, 'Rehearsal not found', lock=True)
+        if not content_capabilities(scope, rehearsal)['can_delete']:
+            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
+        _assert_rehearsal_delete_safe(rehearsal)
+        from deletion_service import cleanup_terminal_parent_upload_sessions
+        if not cleanup_terminal_parent_upload_sessions('rehearsal', rehearsal):
+            raise ValidationError('Upload history is not in a safe terminal state.', 409)
+        audit('content.rehearsal.deleted', user, band, rehearsal)
+        db.session.delete(rehearsal)
+        return prepare_response(rehearsal_id)
+
     return _run_rehearsal_write(operation)

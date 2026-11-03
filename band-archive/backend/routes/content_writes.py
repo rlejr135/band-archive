@@ -36,13 +36,14 @@ from errors import NotFoundError, ValidationError
 from extensions import db
 from featured_media_service import clear_song_featured_media, set_song_featured_media
 from gallery_featured_service import set_gallery_featured
-from models import (AppUser, Band, BandMembership, Comment, DirectUploadSession,
-                    Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
-                    PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
+from models import (AppUser, Band, BandMembership, Comment,
+                    Media, MediaVote, Member, PersonalLog,
+                    PersonalLogMultipartUploadSession, R2DeletionTask,
                     SongSuggestion, SongSuggestionVote)
 from rehearsal_service import (
     REHEARSAL_FIELDS as _REHEARSAL_FIELDS,
-    create_rehearsal as create_band_rehearsal, update_rehearsal as update_band_rehearsal,
+    create_rehearsal as create_band_rehearsal, delete_rehearsal as delete_band_rehearsal,
+    update_rehearsal as update_band_rehearsal,
 )
 from song_suggestion_service import (
     SUGGESTION_FIELDS as _SUGGESTION_FIELDS,
@@ -51,7 +52,8 @@ from song_suggestion_service import (
 )
 from song_service import (
     SONG_FIELDS as _SONG_FIELDS,
-    create_song as create_band_song, update_song as update_band_song,
+    create_song as create_band_song, delete_song as delete_band_song,
+    update_song as update_band_song,
 )
 from v2_content_serializers import (
     serialize_comment, serialize_media,
@@ -154,48 +156,6 @@ def _can_delete(scope, item):
     return content_capabilities(scope, item)['can_delete']
 
 
-def _assert_song_delete_safe(song):
-    # ORM deletion cascades media and its comments/votes.  Refuse an entire
-    # delete rather than allowing a damaged foreign tenant edge to cascade.
-    if Media.query.filter(Media.song_id == song.id, Media.band_id != song.band_id).first() is not None:
-        raise NotFoundError('Song not found')
-    if Media.query.filter_by(song_id=song.id, band_id=song.band_id).first() is not None:
-        raise ValidationError('Delete the song media individually before deleting this song.', 409)
-    if song.sheet_music_object_key or song.sheet_music:
-        raise ValidationError('Delete the song sheet music before deleting this song.', 409)
-    live_multipart = MultipartUploadSession.query.filter(
-        MultipartUploadSession.song_id == song.id,
-        MultipartUploadSession.status.in_(('initiated', 'completing', 'expiring', 'aborting')),
-    ).first()
-    live_direct = DirectUploadSession.query.filter(
-        DirectUploadSession.song_id == song.id,
-        DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
-    ).first()
-    if live_multipart or live_direct:
-        raise ValidationError('Wait for attached uploads to finish cleanup before deleting this song.', 409)
-    if any(rehearsal.band_id != song.band_id for rehearsal in song.rehearsals):
-        raise NotFoundError('Song not found')
-
-
-def _assert_rehearsal_delete_safe(rehearsal):
-    if Media.query.filter(Media.rehearsal_id == rehearsal.id, Media.band_id != rehearsal.band_id).first() is not None:
-        raise NotFoundError('Rehearsal not found')
-    if Media.query.filter_by(rehearsal_id=rehearsal.id, band_id=rehearsal.band_id).first() is not None:
-        raise ValidationError('Delete the rehearsal media individually before deleting this rehearsal.', 409)
-    live_multipart = MultipartUploadSession.query.filter(
-        MultipartUploadSession.rehearsal_id == rehearsal.id,
-        MultipartUploadSession.status.in_(('initiated', 'completing', 'expiring', 'aborting')),
-    ).first()
-    live_direct = DirectUploadSession.query.filter(
-        DirectUploadSession.rehearsal_id == rehearsal.id,
-        DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
-    ).first()
-    if live_multipart or live_direct:
-        raise ValidationError('Wait for attached uploads to finish cleanup before deleting this rehearsal.', 409)
-    if any(song.band_id != rehearsal.band_id for song in rehearsal.songs):
-        raise NotFoundError('Rehearsal not found')
-
-
 def _target_for_comment(kind, target_id, band_id, *, lock=False):
     if kind == 'media':
         target = _owned_or_404(Media, target_id, band_id, 'Resource not found', lock=lock)
@@ -276,19 +236,11 @@ def update_song(band_id, song_id):
 @content_writes_bp.delete('/songs/<int:song_id>')
 @authenticated_write
 def delete_song(band_id, song_id):
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        song = _owned_or_404(Song, song_id, band.id, 'Song not found', lock=True)
-        if not _can_delete(scope, song):
-            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
-        _assert_song_delete_safe(song)
-        from deletion_service import cleanup_terminal_parent_upload_sessions
-        if not cleanup_terminal_parent_upload_sessions('song', song):
-            raise ValidationError('Upload history is not in a safe terminal state.', 409)
-        audit('content.song.deleted', user, band, song)
-        db.session.delete(song)
-        return jsonify({'deleted': True, 'id': song_id})
-    return _run_write(operation)
+    def prepare_response(deleted_id):
+        return jsonify({'deleted': True, 'id': deleted_id})
+    return delete_band_song(
+        band_id=band_id, song_id=song_id, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.post('/rehearsals')
@@ -314,19 +266,11 @@ def update_rehearsal(band_id, rehearsal_id):
 @content_writes_bp.delete('/rehearsals/<int:rehearsal_id>')
 @authenticated_write
 def delete_rehearsal(band_id, rehearsal_id):
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        rehearsal = _owned_or_404(Rehearsal, rehearsal_id, band.id, 'Rehearsal not found', lock=True)
-        if not _can_delete(scope, rehearsal):
-            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
-        _assert_rehearsal_delete_safe(rehearsal)
-        from deletion_service import cleanup_terminal_parent_upload_sessions
-        if not cleanup_terminal_parent_upload_sessions('rehearsal', rehearsal):
-            raise ValidationError('Upload history is not in a safe terminal state.', 409)
-        audit('content.rehearsal.deleted', user, band, rehearsal)
-        db.session.delete(rehearsal)
-        return jsonify({'deleted': True, 'id': rehearsal_id})
-    return _run_write(operation)
+    def prepare_response(deleted_id):
+        return jsonify({'deleted': True, 'id': deleted_id})
+    return delete_band_rehearsal(
+        band_id=band_id, rehearsal_id=rehearsal_id, prepare_response=prepare_response,
+    )
 
 
 def _create_comment(band_id, kind, target_id):

@@ -17,6 +17,7 @@ from extensions import db
 from models import AppUser, AuditEvent, BandMembership, Rehearsal, R2DeletionTask, Song
 import routes.content_writes as writes
 import rehearsal_service as rehearsals
+import song_service as song_writes
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
 )
@@ -60,6 +61,7 @@ def _fixture(invite_pg, monkeypatch):
         db.session.remove()
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
     monkeypatch.setattr(rehearsals, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(song_writes, 'current_app_user', lambda required=True: principal)
     return app, engine, graph
 
 

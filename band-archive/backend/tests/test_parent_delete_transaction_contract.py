@@ -15,6 +15,8 @@ from models import (AuditEvent, BandMembership, DirectUploadSession,
                     MultipartUploadPart, MultipartUploadSession, Rehearsal,
                     R2DeletionTask, Song)
 import routes.content_writes as writes
+import song_service as songs
+import rehearsal_service as rehearsals
 from storage import storage
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 from tests.test_v2_content_writes import _band_id, principals, write_client  # noqa: F401
@@ -165,12 +167,13 @@ def test_parent_delete_prepares_private_response_before_commit_and_preserves_the
 def test_parent_delete_rechecks_current_actor_under_existing_lock_flag(
         access_app, write_client, principals, monkeypatch, kind):
     graph = _seed(access_app, _band_id(access_app))
-    original_scope, observed = writes.active_member_write_scope, []
+    service = songs if kind == 'song' else rehearsals
+    original_scope, observed = service.active_member_write_scope, []
 
     def scope(*args, **kwargs):
         observed.append(kwargs)
         return original_scope(*args, **kwargs)
 
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(service, 'active_member_write_scope', scope)
     assert _request(write_client, principals['owner'], graph, kind).status_code == 200
     assert observed == [{'lock': True, 'lock_actor': True}]
