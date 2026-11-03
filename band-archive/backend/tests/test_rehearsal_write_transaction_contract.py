@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from extensions import db
 from models import AuditEvent, Band, BandMembership, Media, Rehearsal, R2DeletionTask, Song
 import routes.content_writes as writes
+import rehearsal_service as rehearsals
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 from tests.test_v2_content_writes import _band_id, principals, write_client  # noqa: F401
 
@@ -153,7 +154,7 @@ def test_rehearsal_request_shape_precedes_begin_but_values_follow_locked_scope(
         access_app, write_client, principals, monkeypatch, body, enters_transaction):
     band_id = _band_id(access_app)
     phases = []
-    original_user, original_scope = writes.current_app_user, writes.active_member_write_scope
+    original_user, original_scope = writes.current_app_user, rehearsals.active_member_write_scope
 
     def user(*args, **kwargs):
         phases.append('principal')
@@ -169,7 +170,8 @@ def test_rehearsal_request_shape_precedes_begin_but_values_follow_locked_scope(
             phases.append('begin')
 
     monkeypatch.setattr(writes, 'current_app_user', user)
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(rehearsals, 'current_app_user', user)
+    monkeypatch.setattr(rehearsals, 'active_member_write_scope', scope)
     with access_app.app_context():
         engine = db.engine
     event.listen(engine, 'before_cursor_execute', before_execute)
@@ -241,7 +243,7 @@ def test_detaching_private_rehearsal_flushes_expires_rechecks_then_confirms_and_
     assert _accept(write_client, principals['member']).status_code == 201
     before, phases = _snapshot(access_app), []
     original_visibility, original_expire, original_confirm = (
-        writes.media_visibility, db.session.expire, writes.confirm_public_expansion)
+        rehearsals.media_visibility, db.session.expire, rehearsals.confirm_public_expansion)
 
     def visibility(scope, item):
         result = original_visibility(scope, item)
@@ -260,9 +262,9 @@ def test_detaching_private_rehearsal_flushes_expires_rechecks_then_confirms_and_
         phases.append('confirm')
         return original_confirm(*args, **kwargs)
 
-    monkeypatch.setattr(writes, 'media_visibility', visibility)
+    monkeypatch.setattr(rehearsals, 'media_visibility', visibility)
     monkeypatch.setattr(db.session, 'expire', expire)
-    monkeypatch.setattr(writes, 'confirm_public_expansion', confirm)
+    monkeypatch.setattr(rehearsals, 'confirm_public_expansion', confirm)
     denied = _request(write_client, principals['member'], band_id, graph, 'update', data={'song_ids': []})
     assert denied.status_code == 409 and denied.get_json()['code'] == 'public_visibility_confirmation_required'
     assert phases == ['media:MEMBERS', 'expire', 'media:PUBLIC', 'confirm']

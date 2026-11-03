@@ -5,7 +5,6 @@ This module never delegates to them: an authenticated membership is the only
 authority for these writes and all object lookups retain the URL band id.
 """
 
-from datetime import date
 from functools import wraps
 import hashlib
 import math
@@ -31,7 +30,7 @@ from content_write_values import (
     visibility_value as _visibility,
 )
 from content_visibility import (
-    media_visibility, personal_log_visibility, rehearsal_visibility,
+    media_visibility, personal_log_visibility,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -41,8 +40,10 @@ from models import (AppUser, Band, BandMembership, Comment, DirectUploadSession,
                     Media, MediaVote, Member, MultipartUploadSession, PersonalLog,
                     PersonalLogMultipartUploadSession, R2DeletionTask, Rehearsal, Song,
                     SongSuggestion, SongSuggestionVote)
-from voc_validation import validate_rehearsal_type
-from policy_service import confirm_public_expansion, upload_policy_enabled
+from rehearsal_service import (
+    REHEARSAL_FIELDS as _REHEARSAL_FIELDS,
+    create_rehearsal as create_band_rehearsal, update_rehearsal as update_band_rehearsal,
+)
 from song_suggestion_service import (
     SUGGESTION_FIELDS as _SUGGESTION_FIELDS,
     create_song_suggestion, delete_song_suggestion, proceed_song_suggestion,
@@ -62,10 +63,6 @@ from v2_remaining_read_serializers import serialize_announcement, serialize_gall
 
 content_writes_bp = Blueprint('content_writes', __name__, url_prefix='/api/v2/bands/<int:band_id>')
 
-_REHEARSAL_FIELDS = {
-    'title', 'date', 'start_date', 'end_date', 'time', 'location', 'latitude', 'longitude',
-    'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm', 'rehearsal_type',
-}
 _IGNORED_OWNERSHIP_FIELDS = {'band_id', 'created_by_membership_id', 'created_by_user_id', 'is_legacy'}
 
 
@@ -146,19 +143,6 @@ def _run_write(callback):
         raise
 
 
-def _date(value, field, *, required=False):
-    if value is None:
-        if required:
-            raise ValidationError(f'{field} is required.')
-        return None
-    if not isinstance(value, str):
-        raise ValidationError(f'{field} must be a valid date (YYYY-MM-DD).')
-    try:
-        return date.fromisoformat(value)
-    except ValueError as error:
-        raise ValidationError(f'{field} must be a valid date (YYYY-MM-DD).') from error
-
-
 def _check_fields(data, allowed):
     unknown = set(data) - allowed - _IGNORED_OWNERSHIP_FIELDS
     if unknown:
@@ -168,16 +152,6 @@ def _check_fields(data, allowed):
 def _can_delete(scope, item):
     """Use the same server-derived capability as read DTOs."""
     return content_capabilities(scope, item)['can_delete']
-
-
-def _songs_or_404(band_id, song_ids):
-    if not isinstance(song_ids, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in song_ids):
-        raise ValidationError('song_ids must be an array of integer IDs.')
-    wanted = set(song_ids)
-    songs = Song.query.filter(Song.band_id == band_id, Song.id.in_(wanted)).all() if wanted else []
-    if len(songs) != len(wanted):
-        raise NotFoundError('One or more songs are unavailable for this rehearsal.')
-    return sorted(songs, key=lambda item: item.id)
 
 
 def _assert_song_delete_safe(song):
@@ -317,85 +291,24 @@ def delete_song(band_id, song_id):
     return _run_write(operation)
 
 
-def _apply_rehearsal(rehearsal, data, band_id):
-    if 'title' in data:
-        rehearsal.title = _text(data['title'], 'title', 200, required=True)
-    if 'date' in data:
-        rehearsal.date = _date(data['date'], 'date', required=True)
-    if 'start_date' in data:
-        rehearsal.start_date = _date(data['start_date'], 'start_date')
-    if 'end_date' in data:
-        rehearsal.end_date = _date(data['end_date'], 'end_date')
-    if rehearsal.start_date and rehearsal.end_date and rehearsal.start_date > rehearsal.end_date:
-        raise ValidationError('start_date must be before or equal to end_date.')
-    for field, maximum in (('time', 20), ('location', 200), ('memo', 10000), ('color', 7)):
-        if field in data:
-            setattr(rehearsal, field, _text(data[field], field, maximum))
-    for field in ('latitude', 'longitude'):
-        if field in data:
-            value = data[field]
-            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value))):
-                raise ValidationError(f'{field} must be a finite number.')
-            setattr(rehearsal, field, float(value) if value is not None else None)
-    if 'visibility' in data:
-        rehearsal.visibility = _visibility(data['visibility'], rehearsal.visibility)
-    if 'rehearsal_type' in data:
-        rehearsal.rehearsal_type = validate_rehearsal_type(data['rehearsal_type'])
-    if 'song_ids' in data:
-        # All IDs are resolved before replacing the relation: no partial link.
-        rehearsal.songs = _songs_or_404(band_id, data['song_ids'])
-
-
 @content_writes_bp.post('/rehearsals')
 @authenticated_write
 def create_rehearsal(band_id):
     data = _payload(); _check_fields(data, _REHEARSAL_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        rehearsal = Rehearsal(
-            band_id=band.id, created_by_membership_id=membership.id,
-            visibility=_visibility(data.get('visibility'), band.default_visibility),
-            title=_text(data.get('title'), 'title', 200, required=True),
-            date=_date(data.get('date'), 'date', required=True),
-        )
-        _apply_rehearsal(rehearsal, data, band.id)
-        db.session.add(rehearsal); db.session.flush()
-        audit('content.rehearsal.created', user, band, rehearsal, {'visibility': rehearsal.visibility})
+    def prepare_response(scope, rehearsal):
         return jsonify({'rehearsal': serialize_rehearsal(scope, rehearsal)}), 201
-    return _run_write(operation)
+    return create_band_rehearsal(band_id=band_id, data=data, prepare_response=prepare_response)
 
 
 @content_writes_bp.patch('/rehearsals/<int:rehearsal_id>')
 @authenticated_write
 def update_rehearsal(band_id, rehearsal_id):
     data = _payload(); _check_fields(data, _REHEARSAL_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        rehearsal = _owned_or_404(Rehearsal, rehearsal_id, band.id, 'Rehearsal not found', lock=True)
-        if not _can_change(rehearsal, membership):
-            raise ValidationError('You may only edit your own content.', 403)
-        old_visibility = rehearsal_visibility(scope, rehearsal)
-        affected = []
-        before = {}
-        if upload_policy_enabled() and 'song_ids' in data:
-            song_ids = {song.id for song in rehearsal.songs}
-            song_ids.update(song.id for song in _songs_or_404(band.id, data['song_ids']))
-            affected = Media.query.filter(Media.band_id == band.id, Media.song_id.in_(song_ids)).all()
-            before = {item.id: media_visibility(scope, item) for item in affected}
-        _apply_rehearsal(rehearsal, data, band.id)
-        db.session.flush()
-        expands = old_visibility == 'MEMBERS' and rehearsal_visibility(scope, rehearsal) == 'PUBLIC'
-        if affected:
-            for song_id in {item.song_id for item in affected}:
-                song = db.session.get(Song, song_id)
-                db.session.expire(song, ['rehearsals'])
-            expands = expands or any(before[item.id] == 'MEMBERS' and media_visibility(scope, item) == 'PUBLIC'
-                                     for item in affected)
-        if expands:
-            confirm_public_expansion(data, user, band, rehearsal)
-        audit('content.rehearsal.updated', user, band, rehearsal, {'fields': sorted(set(data) & _REHEARSAL_FIELDS)})
+    def prepare_response(scope, rehearsal):
         return jsonify({'rehearsal': serialize_rehearsal(scope, rehearsal)})
-    return _run_write(operation)
+    return update_band_rehearsal(
+        band_id=band_id, rehearsal_id=rehearsal_id, data=data, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.delete('/rehearsals/<int:rehearsal_id>')
