@@ -21,9 +21,10 @@ from announcement_service import (
 )
 from band_access import content_capabilities
 from band_logo_service import set_band_logo as update_band_logo_selection
-from band_service import ACTIVE, MANAGER_ROLES, audit
+from band_service import ACTIVE, audit
 from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
 from content_write_scope import active_member_write_scope
+from content_write_rules import can_change_authored_content as _can_change
 from content_write_values import (
     external_link_value as _external_link,
     text_value as _text,
@@ -31,7 +32,6 @@ from content_write_values import (
 )
 from content_visibility import (
     media_visibility, personal_log_visibility, rehearsal_visibility,
-    song_visibility,
 )
 from errors import NotFoundError, ValidationError
 from extensions import db
@@ -48,6 +48,10 @@ from song_suggestion_service import (
     create_song_suggestion, delete_song_suggestion, proceed_song_suggestion,
     update_song_suggestion,
 )
+from song_service import (
+    SONG_FIELDS as _SONG_FIELDS,
+    create_song as create_band_song, update_song as update_band_song,
+)
 from v2_content_serializers import (
     serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
@@ -58,7 +62,6 @@ from v2_remaining_read_serializers import serialize_announcement, serialize_gall
 
 content_writes_bp = Blueprint('content_writes', __name__, url_prefix='/api/v2/bands/<int:band_id>')
 
-_SONG_FIELDS = {'title', 'artist', 'status', 'chords', 'link', 'memo', 'genre', 'difficulty', 'visibility', 'visibility_confirm'}
 _REHEARSAL_FIELDS = {
     'title', 'date', 'start_date', 'end_date', 'time', 'location', 'latitude', 'longitude',
     'memo', 'color', 'visibility', 'song_ids', 'visibility_confirm', 'rehearsal_type',
@@ -160,12 +163,6 @@ def _check_fields(data, allowed):
     unknown = set(data) - allowed - _IGNORED_OWNERSHIP_FIELDS
     if unknown:
         raise ValidationError('Unsupported field: ' + sorted(unknown)[0] + '.')
-
-
-def _can_change(item, membership):
-    return membership.role in MANAGER_ROLES or (
-        item.created_by_membership_id is not None and item.created_by_membership_id == membership.id
-    )
 
 
 def _can_delete(scope, item):
@@ -286,58 +283,20 @@ def _comment_response(scope, comment, target):
 def create_song(band_id):
     data = _payload()
     _check_fields(data, _SONG_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        song = Song(
-            band_id=band.id, created_by_membership_id=membership.id,
-            visibility=_visibility(data.get('visibility'), band.default_visibility),
-            title=_text(data.get('title'), 'title', 100, required=True),
-            artist=_text(data.get('artist'), 'artist', 100, required=True),
-        )
-        _apply_song(song, data)
-        db.session.add(song)
-        db.session.flush()
-        audit('content.song.created', user, band, song, {'visibility': song.visibility})
+    def prepare_response(scope, song):
         return jsonify({'song': serialize_song(scope, song)}), 201
-    return _run_write(operation)
-
-
-def _apply_song(song, data):
-    if 'title' in data:
-        song.title = _text(data['title'], 'title', 100, required=True)
-    if 'artist' in data:
-        song.artist = _text(data['artist'], 'artist', 100, required=True)
-    if 'status' in data:
-        if data['status'] not in {'Practice', 'Completed', 'OnHold'}:
-            raise ValidationError('Invalid status.')
-        song.status = data['status']
-    for field, maximum in (('chords', 10000), ('link', 200), ('memo', 10000), ('genre', 50)):
-        if field in data:
-            setattr(song, field, _text(data[field], field, maximum))
-    if 'difficulty' in data:
-        if isinstance(data['difficulty'], bool) or not isinstance(data['difficulty'], int) or not 1 <= data['difficulty'] <= 5:
-            raise ValidationError('difficulty must be an integer between 1 and 5.')
-        song.difficulty = data['difficulty']
-    if 'visibility' in data:
-        song.visibility = _visibility(data['visibility'], song.visibility)
+    return create_band_song(band_id=band_id, data=data, prepare_response=prepare_response)
 
 
 @content_writes_bp.patch('/songs/<int:song_id>')
 @authenticated_write
 def update_song(band_id, song_id):
     data = _payload(); _check_fields(data, _SONG_FIELDS)
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        song = _owned_or_404(Song, song_id, band.id, 'Song not found', lock=True)
-        if not _can_change(song, membership):
-            raise ValidationError('You may only edit your own content.', 403)
-        before_visibility = song_visibility(scope, song)
-        _apply_song(song, data)
-        if before_visibility == 'MEMBERS' and song_visibility(scope, song) == 'PUBLIC':
-            confirm_public_expansion(data, user, band, song)
-        audit('content.song.updated', user, band, song, {'fields': sorted(set(data) & _SONG_FIELDS)})
+    def prepare_response(scope, song):
         return jsonify({'song': serialize_song(scope, song)})
-    return _run_write(operation)
+    return update_band_song(
+        band_id=band_id, song_id=song_id, data=data, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.delete('/songs/<int:song_id>')

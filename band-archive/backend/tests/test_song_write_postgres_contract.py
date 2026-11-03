@@ -15,6 +15,7 @@ from errors import register_error_handlers
 from extensions import db
 from models import AppUser, AuditEvent, BandMembership, R2DeletionTask, Song
 import routes.content_writes as writes
+import song_service as songs
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
 )
@@ -54,6 +55,7 @@ def _fixture(invite_pg, monkeypatch):
         graph = {'band': ids['band'], 'song': song.id, 'owner': ids['owner'], 'author': membership.id}
         db.session.remove()
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(songs, 'current_app_user', lambda required=True: principal)
     return app, engine, graph
 
 

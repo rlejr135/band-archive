@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from extensions import db
 from models import AuditEvent, Band, BandMembership, R2DeletionTask, Song
 import routes.content_writes as writes
+import song_service as songs
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 from tests.test_v2_content_writes import _band_id, principals, write_client  # noqa: F401
 
@@ -143,7 +144,7 @@ def test_song_response_and_audit_are_prepared_before_commit_with_current_dto(
 def test_song_request_shape_precedes_begin_but_value_validation_follows_locked_scope(
         access_app, write_client, principals, monkeypatch, body, enters_transaction):
     phases = []
-    original_user, original_scope = writes.current_app_user, writes.active_member_write_scope
+    original_user, original_scope = writes.current_app_user, songs.active_member_write_scope
 
     def user(*args, **kwargs):
         phases.append('principal')
@@ -159,7 +160,8 @@ def test_song_request_shape_precedes_begin_but_value_validation_follows_locked_s
             phases.append('begin')
 
     monkeypatch.setattr(writes, 'current_app_user', user)
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(songs, 'current_app_user', user)
+    monkeypatch.setattr(songs, 'active_member_write_scope', scope)
     band_id = _band_id(access_app)
     before = _snapshot(access_app)
     with access_app.app_context():
