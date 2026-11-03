@@ -1,8 +1,9 @@
-"""Comment-tree safety shared by band and platform deletion paths.
+"""Scoped interaction targets and comment-tree safety shared by write paths.
 
 The generic band-owned lookup lives here because the tree guard uses it to
 resolve comments without importing route code; content writes also reuses that
-lookup for other owned resources.
+lookup for other owned resources. Comment mutations and media votes share the
+same target lookup without depending on either domain's transaction service.
 """
 
 from errors import NotFoundError
@@ -33,6 +34,20 @@ def _owned_or_404(model, record_id, band_id, message='Resource not found', *, lo
     if item is None:
         raise NotFoundError(message)
     return item
+
+
+def _target_for_comment(kind, target_id, band_id, *, lock=False):
+    if kind == 'media':
+        target = _owned_or_404(Media, target_id, band_id, 'Resource not found', lock=lock)
+        if target.song is None or target.song.band_id != band_id:
+            raise NotFoundError('Resource not found')
+        if target.rehearsal is not None and target.rehearsal.band_id != band_id:
+            raise NotFoundError('Resource not found')
+        return target
+    target = _owned_or_404(PersonalLog, target_id, band_id, 'Resource not found', lock=lock)
+    if target.member is None or target.member.band_id != band_id:
+        raise NotFoundError('Resource not found')
+    return target
 
 
 def _comment_target_kind(comment):

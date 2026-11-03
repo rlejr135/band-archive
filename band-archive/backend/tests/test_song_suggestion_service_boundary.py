@@ -43,9 +43,14 @@ def test_crud_routes_delegate_without_own_transaction_wrapper():
         assert '_run_write' not in called_names
 
 
-def test_content_writes_and_suggestion_service_share_value_validation():
-    expected = {'text_value', 'visibility_value', 'external_link_value'}
-    for module in ('routes/content_writes.py', 'song_suggestion_service.py'):
+def test_content_write_services_share_value_validation():
+    consumers = {
+        'song_suggestion_service.py': {'text_value', 'visibility_value', 'external_link_value'},
+        'song_service.py': {'text_value', 'visibility_value'},
+        'rehearsal_service.py': {'text_value', 'visibility_value'},
+        'comment_service.py': {'text_value'},
+    }
+    for module, expected in consumers.items():
         tree = _tree(module)
         imports = {alias.name for node in tree.body
                    if isinstance(node, ast.ImportFrom) and node.module == 'content_write_values'

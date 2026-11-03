@@ -16,6 +16,7 @@ from extensions import db
 from member_profile_service import ensure_member_profile
 from models import AppUser, AuditEvent, Band, BandMembership, Comment, Media, PersonalLog, R2DeletionTask, Song
 import routes.content_writes as writes
+import comment_service as comments
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
 )
@@ -72,6 +73,7 @@ def _fixture(invite_pg, monkeypatch, kind):
                  'parent': parent.id, 'child': child.id}
         db.session.remove()
     monkeypatch.setattr(writes, 'current_app_user', lambda required=True: principal)
+    monkeypatch.setattr(comments, 'current_app_user', lambda required=True: principal)
     return app, engine, graph
 
 

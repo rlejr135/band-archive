@@ -39,7 +39,7 @@ def test_song_routes_delegate_transaction_ownership_to_service():
 
 
 def test_song_and_other_content_writes_share_one_editing_rule():
-    for module in ('song_service.py', 'routes/content_writes.py'):
+    for module in ('song_service.py', 'rehearsal_service.py', 'comment_service.py'):
         tree = _tree(module)
         names = {alias.name for node in tree.body
                  if isinstance(node, ast.ImportFrom) and node.module == 'content_write_rules'

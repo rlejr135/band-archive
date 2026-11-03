@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from extensions import db
 from models import AuditEvent, BandMembership, Comment, Media, Member, PersonalLog, R2DeletionTask, Song
 import routes.content_writes as writes
+import comment_service as comments
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 from tests.test_v2_content_writes import _band_id, principals, write_client  # noqa: F401
 
@@ -174,13 +175,13 @@ def test_comment_response_precedes_commit_and_preserves_tree_and_account_contrac
 def test_comment_scope_keeps_existing_actor_lock_flags(
         access_app, write_client, principals, monkeypatch, operation):
     graph = _seed(access_app, _band_id(access_app), 'media')
-    original_scope, flags = writes.active_member_write_scope, []
+    original_scope, flags = comments.active_member_write_scope, []
 
     def scope(*args, **kwargs):
         flags.append(kwargs)
         return original_scope(*args, **kwargs)
 
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
+    monkeypatch.setattr(comments, 'active_member_write_scope', scope)
     response = _request(write_client, principals['owner' if operation == 'delete' else 'member'],
                         graph, 'media', operation)
     assert response.status_code == (201 if operation == 'create' else 200)

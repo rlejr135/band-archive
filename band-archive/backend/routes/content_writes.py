@@ -7,7 +7,6 @@ authority for these writes and all object lookups retain the URL band id.
 
 from functools import wraps
 import hashlib
-import math
 
 from flask import Blueprint, after_this_request, current_app, jsonify, request
 from sqlalchemy import text
@@ -18,25 +17,19 @@ from announcement_service import (
     ANNOUNCEMENT_FIELDS as _ANNOUNCEMENT_FIELDS,
     clear_announcement, put_announcement,
 )
-from band_access import content_capabilities
 from band_logo_service import set_band_logo as update_band_logo_selection
 from band_service import ACTIVE, audit
-from comment_rules import _assert_comment_tree_safe, _comment_target_kind, _owned_or_404
+from comment_rules import _owned_or_404, _target_for_comment
+from comment_service import create_comment, delete_comment, update_comment
 from content_write_scope import active_member_write_scope
-from content_write_rules import can_change_authored_content as _can_change
-from content_write_values import (
-    external_link_value as _external_link,
-    text_value as _text,
-    visibility_value as _visibility,
-)
 from content_visibility import (
     media_visibility, personal_log_visibility,
 )
-from errors import NotFoundError, ValidationError
+from errors import ValidationError
 from extensions import db
 from featured_media_service import clear_song_featured_media, set_song_featured_media
 from gallery_featured_service import set_gallery_featured
-from models import (AppUser, Band, BandMembership, Comment,
+from models import (AppUser, Band, BandMembership,
                     Media, MediaVote, Member, PersonalLog,
                     PersonalLogMultipartUploadSession, R2DeletionTask,
                     SongSuggestion, SongSuggestionVote)
@@ -151,61 +144,6 @@ def _check_fields(data, allowed):
         raise ValidationError('Unsupported field: ' + sorted(unknown)[0] + '.')
 
 
-def _can_delete(scope, item):
-    """Use the same server-derived capability as read DTOs."""
-    return content_capabilities(scope, item)['can_delete']
-
-
-def _target_for_comment(kind, target_id, band_id, *, lock=False):
-    if kind == 'media':
-        target = _owned_or_404(Media, target_id, band_id, 'Resource not found', lock=lock)
-        if target.song is None or target.song.band_id != band_id:
-            raise NotFoundError('Resource not found')
-        if target.rehearsal is not None and target.rehearsal.band_id != band_id:
-            raise NotFoundError('Resource not found')
-        return target
-    target = _owned_or_404(PersonalLog, target_id, band_id, 'Resource not found', lock=lock)
-    if target.member is None or target.member.band_id != band_id:
-        raise NotFoundError('Resource not found')
-    return target
-
-
-def _comment_parent_or_404(parent_id, kind, target_id, band_id):
-    if parent_id is None:
-        return None
-    if isinstance(parent_id, bool) or not isinstance(parent_id, int):
-        raise ValidationError('parent_id must be an integer.')
-    parent = _owned_or_404(Comment, parent_id, band_id, 'Resource not found')
-    if _comment_target_kind(parent) != (kind, target_id):
-        raise NotFoundError('Resource not found')
-    # Existing malformed loops must never become a v2 thread parent.
-    seen, cursor = set(), parent
-    while cursor is not None:
-        if cursor.id in seen:
-            raise NotFoundError('Resource not found')
-        seen.add(cursor.id)
-        cursor = _owned_or_404(Comment, cursor.parent_id, band_id, 'Resource not found') if cursor.parent_id else None
-    return parent
-
-
-def _timestamp(data, *, parent, target):
-    if 'timestamp_seconds' not in data:
-        return None, False
-    value = data['timestamp_seconds']
-    if value is None:
-        return None, True
-    if parent is not None or getattr(target, 'file_type', None) not in {'audio', 'video'}:
-        raise ValidationError('Timestamps are only available for top-level audio or video comments.')
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value < 0:
-        raise ValidationError('timestamp_seconds must be a non-negative finite number.')
-    return float(value), True
-
-
-def _author(user):
-    # Display name is account metadata, not request-supplied impersonation.
-    return (user.display_name or user.email).strip()[:50] or 'Member'
-
-
 def _comment_response(scope, comment, target):
     if isinstance(target, Media):
         return serialize_comment(scope, comment, media_visibility(scope, target), include_replies=False)
@@ -281,22 +219,11 @@ def _create_comment(band_id, kind, target_id):
     unknown = set(data) - allowed
     if unknown:
         raise ValidationError('Unsupported field: ' + sorted(unknown)[0] + '.')
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        target = _target_for_comment(kind, target_id, band.id, lock=True)
-        parent_id = data.get('parent_id')
-        parent = _comment_parent_or_404(parent_id, kind, target.id, band.id)
-        timestamp_seconds, _ = _timestamp(data, parent=parent, target=target)
-        content = _text(data.get('content'), 'content', 10000, required=True)
-        values = {'band_id': band.id, 'created_by_membership_id': membership.id, 'is_legacy': False,
-                  'parent_id': parent.id if parent else None, 'author': _author(user), 'content': content,
-                  'timestamp_seconds': timestamp_seconds}
-        values['media_id' if kind == 'media' else 'personal_log_id'] = target.id
-        comment = Comment(**values)
-        db.session.add(comment); db.session.flush()
-        audit('content.comment.created', user, band, comment, {'target': kind, 'target_id': target.id})
+    def prepare_response(scope, comment, target):
         return jsonify({'comment': _comment_response(scope, comment, target)}), 201
-    return _run_write(operation)
+    return create_comment(
+        band_id=band_id, kind=kind, target_id=target_id, data=data, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.post('/media/<int:media_id>/comments')
@@ -311,13 +238,6 @@ def create_personal_log_comment_v2(band_id, log_id):
     return _create_comment(band_id, 'personal_log', log_id)
 
 
-def _load_comment_and_target(comment_id, band_id, *, lock=False):
-    comment = _owned_or_404(Comment, comment_id, band_id, 'Comment not found', lock=lock)
-    kind, target_id = _comment_target_kind(comment)
-    target = _target_for_comment(kind, target_id, band_id, lock=lock)
-    return comment, kind, target
-
-
 @content_writes_bp.patch('/comments/<int:comment_id>')
 @authenticated_write
 def update_comment_v2(band_id, comment_id):
@@ -326,33 +246,19 @@ def update_comment_v2(band_id, comment_id):
     unknown = set(data) - allowed
     if unknown:
         raise ValidationError('Unsupported field: ' + sorted(unknown)[0] + '.')
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        comment, kind, target = _load_comment_and_target(comment_id, band.id, lock=True)
-        if not _can_change(comment, membership):
-            raise ValidationError('You may only edit your own content.', 403)
-        if 'content' in data:
-            comment.content = _text(data['content'], 'content', 10000, required=True)
-        if 'timestamp_seconds' in data:
-            comment.timestamp_seconds, _ = _timestamp(data, parent=comment.parent, target=target)
-        audit('content.comment.updated', user, band, comment, {'target': kind})
+    def prepare_response(scope, comment, target):
         return jsonify({'comment': _comment_response(scope, comment, target)})
-    return _run_write(operation)
+    return update_comment(
+        band_id=band_id, comment_id=comment_id, data=data, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.delete('/comments/<int:comment_id>')
 @authenticated_write
 def delete_comment_v2(band_id, comment_id):
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True, lock_actor=True)
-        comment, kind, target = _load_comment_and_target(comment_id, band.id, lock=True)
-        if not _can_delete(scope, comment):
-            raise ValidationError('Only an active verified band owner or platform administrator may delete content.', 403)
-        _assert_comment_tree_safe(comment)
-        audit('content.comment.deleted', user, band, comment, {'target': kind, 'target_id': target.id})
-        db.session.delete(comment)
-        return jsonify({'deleted': True, 'id': comment_id})
-    return _run_write(operation)
+    def prepare_response(deleted_id):
+        return jsonify({'deleted': True, 'id': deleted_id})
+    return delete_comment(band_id=band_id, comment_id=comment_id, prepare_response=prepare_response)
 
 
 def _v2_voter_hash(membership_id):
