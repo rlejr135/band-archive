@@ -1,7 +1,6 @@
 from functools import wraps
 
 from flask import Blueprint, after_this_request, jsonify, request, current_app
-from sqlalchemy import inspect
 
 from auth_service import current_app_user
 from extensions import db
@@ -9,7 +8,7 @@ from models import (Song, Rehearsal, Member, GalleryImage, MultipartUploadSessio
                     PersonalLogMultipartUploadSession, DirectUploadSession)
 from direct_upload_service import (
     complete_direct_session, expire_direct_session_if_needed,
-    recover_direct_sessions, require_direct_capability,
+    require_direct_capability,
 )
 from legacy_scope import legacy_band_id, legacy_get_or_404, validate_legacy_graph
 from errors import ValidationError, NotFoundError
@@ -34,7 +33,7 @@ from multipart_upload_service import (
     MAX_MULTIPART_PARTS, MULTIPART_PART_SIZE, MEDIA_TARGET, PERSONAL_LOG_TARGET,
     abort_session, acknowledge_part, complete_session, completion_payload, create_session,
     expire_session_if_needed,
-    get_session_or_404, issue_part, part_payload, recover_sessions, require_capability,
+    get_session_or_404, issue_part, part_payload, require_capability,
     session_payload, spec_for_session,
 )
 from validators import (allowed_file, allowed_image_file, generate_secure_filename,
@@ -178,23 +177,6 @@ def _verified_direct_upload_size(data, key_prefix, filename):
         raise ValidationError('Uploaded object size does not match file_size.')
     return actual_size
 
-
-def recover_multipart_upload_sessions(app):
-    """Recover interrupted completion attempts and expire old R2 upload IDs.
-
-    This runs on process startup.  It does not expose or regenerate legacy
-    capabilities, so an old session without a capability remains inaccessible.
-    """
-    with app.app_context():
-        # The Phase 4 model is additive, but a process may intentionally boot
-        # against a recorded older schema while the isolated runner is pending.
-        # Avoid selecting future ORM columns in that compatibility interval.
-        columns = {column['name'] for column in inspect(db.engine).get_columns('multipart_upload_session')}
-        if 'band_id' not in columns:
-            return
-        recover_sessions()
-        if inspect(db.engine).has_table('direct_upload_session'):
-            recover_direct_sessions()
 
 
 @uploads_bp.route('/api/v2/bands/<int:band_id>/uploads/direct/initiate', methods=['POST'])

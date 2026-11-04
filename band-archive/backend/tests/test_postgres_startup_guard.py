@@ -23,9 +23,9 @@ def test_pg_factory_is_validated_before_storage_or_independent_automation(
     monkeypatch.setattr(factory_module, 'baseline_metadata', lambda: pytest.fail('PG must never call create_all'))
     monkeypatch.setattr(factory_module, '_run_migrations', lambda app: pytest.fail('PG must never run migrations'))
     import media_processing
-    import routes.uploads
+    import upload_recovery_service
     monkeypatch.setattr(media_processing, 'start_worker', lambda app: calls.append('audio'))
-    monkeypatch.setattr(routes.uploads, 'recover_multipart_upload_sessions', lambda app: calls.append('multipart'))
+    monkeypatch.setattr(upload_recovery_service, 'recover_multipart_upload_sessions', lambda app: calls.append('multipart'))
     class LocalConfig(TestingConfig):
         TESTING = False
         PG_AUDIO_WORKER_ENABLED = audio

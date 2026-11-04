@@ -6,11 +6,8 @@ authority for these writes and all object lookups retain the URL band id.
 """
 
 from functools import wraps
-import hashlib
 
 from flask import Blueprint, after_this_request, current_app, jsonify, request
-from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
 
 from auth_service import current_app_user
 from announcement_service import (
@@ -18,21 +15,14 @@ from announcement_service import (
     clear_announcement, put_announcement,
 )
 from band_logo_service import set_band_logo as update_band_logo_selection
-from band_service import ACTIVE, audit
-from comment_rules import _owned_or_404, _target_for_comment
 from comment_service import create_comment, delete_comment, update_comment
-from content_write_scope import active_member_write_scope
 from content_visibility import (
     media_visibility, personal_log_visibility,
 )
 from errors import ValidationError
-from extensions import db
 from featured_media_service import clear_song_featured_media, set_song_featured_media
 from gallery_featured_service import set_gallery_featured
-from models import (AppUser, Band, BandMembership,
-                    Media, MediaVote, Member, PersonalLog,
-                    PersonalLogMultipartUploadSession, R2DeletionTask,
-                    SongSuggestion, SongSuggestionVote)
+from models import Media
 from rehearsal_service import (
     REHEARSAL_FIELDS as _REHEARSAL_FIELDS,
     create_rehearsal as create_band_rehearsal, delete_rehearsal as delete_band_rehearsal,
@@ -48,6 +38,7 @@ from song_service import (
     create_song as create_band_song, delete_song as delete_band_song,
     update_song as update_band_song,
 )
+from v2_vote_service import set_media_vote, set_song_suggestion_vote
 from v2_content_serializers import (
     serialize_comment, serialize_media,
     serialize_rehearsal, serialize_song,
@@ -114,28 +105,7 @@ def _payload():
     return value
 
 
-def _scope_for_write(band_id, *, lock=False, lock_actor=False):
-    """Return an active-member scope; writes use 403 for a known nonmember."""
-    user = current_app_user(required=True)
-    return active_member_write_scope(band_id, user, lock=lock, lock_actor=lock_actor)
 
-
-def _begin_write():
-    # SQLite needs an explicit writer lock before checking mutable authority;
-    # PostgreSQL locks are obtained by _scope_for_write / target lookups.
-    if db.engine.dialect.name == 'sqlite':
-        db.session.execute(text('BEGIN IMMEDIATE'))
-
-
-def _run_write(callback):
-    try:
-        _begin_write()
-        result = callback()
-        db.session.commit()
-        return result
-    except Exception:
-        db.session.rollback()
-        raise
 
 
 def _check_fields(data, allowed):
@@ -261,11 +231,6 @@ def delete_comment_v2(band_id, comment_id):
     return delete_comment(band_id=band_id, comment_id=comment_id, prepare_response=prepare_response)
 
 
-def _v2_voter_hash(membership_id):
-    # Namespacing prevents account votes from ever becoming a legacy device
-    # identity, while the digest preserves the existing fixed-width schema.
-    return hashlib.sha256(f'v2-membership:{membership_id}'.encode('utf-8')).hexdigest()
-
 
 def _vote_value(data):
     value = data.get('value')
@@ -278,49 +243,9 @@ def _apply_media_vote(band_id, media_id):
     data = _payload(); value = _vote_value(data)
     if set(data) - {'value'}:
         raise ValidationError('Unsupported vote fields.')
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        media = _target_for_comment('media', media_id, band.id, lock=True)
-        # Locking the parent media serializes inserts as well as updates on
-        # PostgreSQL; BEGIN IMMEDIATE does the same on SQLite.
-        row = MediaVote.query.filter_by(media_id=media.id, created_by_membership_id=membership.id).one_or_none()
-        previous = row.value if row else 0
-        if previous != value:
-            if row is not None and value == 0:
-                db.session.delete(row)
-            elif row is not None:
-                row.value = value
-            elif value:
-                # The parent media lock serializes normal v2 callers.  The
-                # savepoint is a second line of defence for a direct writer or
-                # a transaction that began before it acquired that lock: after
-                # a uniqueness race, reread the authoritative account vote
-                # and apply the requested state exactly once.
-                try:
-                    with db.session.begin_nested():
-                        row = MediaVote(
-                            media_id=media.id, band_id=band.id, created_by_membership_id=membership.id,
-                            is_legacy=False, voter_hash=_v2_voter_hash(membership.id), value=value,
-                        )
-                        db.session.add(row)
-                        db.session.flush()
-                except IntegrityError:
-                    row = MediaVote.query.filter_by(
-                        media_id=media.id, created_by_membership_id=membership.id,
-                    ).one_or_none()
-                    if row is None:
-                        raise
-                    previous = row.value
-                    row.created_by_membership_id = membership.id
-                    if previous != value:
-                        row.value = value
-            media.upvote_count = max(0, (media.upvote_count or 0) + int(value == 1) - int(previous == 1))
-            media.downvote_count = max(0, (media.downvote_count or 0) + int(value == -1) - int(previous == -1))
-            media.vote_score = media.upvote_count - media.downvote_count
-        db.session.flush()
-        audit('content.media_vote.changed', user, band, media, {'value': value, 'changed': previous != value})
-        return jsonify({'media': serialize_media(scope, media, value), 'viewer_vote': value})
-    return _run_write(operation)
+    def prepare_response(scope, media, viewer_vote):
+        return jsonify({'media': serialize_media(scope, media, viewer_vote), 'viewer_vote': viewer_vote})
+    return set_media_vote(band_id=band_id, media_id=media_id, value=value, prepare_response=prepare_response)
 
 
 @content_writes_bp.put('/media/<int:media_id>/vote')
@@ -342,9 +267,6 @@ def patch_media_vote_v2(band_id, media_id):
 def _suggestion_response(scope, suggestion, viewer_vote=0):
     return serialize_suggestion(scope, suggestion, viewer_vote)
 
-
-def _suggestion_or_404(suggestion_id, band_id, *, lock=False):
-    return _owned_or_404(SongSuggestion, suggestion_id, band_id, 'Suggestion not found', lock=lock)
 
 
 @content_writes_bp.post('/suggestions')
@@ -381,50 +303,11 @@ def _apply_suggestion_vote(band_id, suggestion_id):
     data = _payload(); value = _vote_value(data)
     if set(data) != {'value'}:
         raise ValidationError('Unsupported vote fields.')
-    def operation():
-        scope, band, membership, user = _scope_for_write(band_id, lock=True)
-        suggestion = _suggestion_or_404(suggestion_id, band.id, lock=True)
-        row = SongSuggestionVote.query.filter_by(
-            suggestion_id=suggestion.id, voter_user_id=user.id,
-        ).one_or_none()
-        previous = row.value if row else 0
-        # The account is the vote identity; retain the newest active
-        # membership only as mutable audit context after a leave/rejoin.
-        if row is not None:
-            row.created_by_membership_id = membership.id
-        if previous != value:
-            if row is not None and value == 0:
-                db.session.delete(row)
-            elif row is not None:
-                row.value = value
-            elif value:
-                # The locked suggestion serializes ordinary PG callers.  The
-                # savepoint makes direct or stale concurrent inserts converge
-                # on one membership row without double-counting the totals.
-                try:
-                    with db.session.begin_nested():
-                        row = SongSuggestionVote(
-                            band_id=band.id, suggestion_id=suggestion.id,
-                            voter_user_id=user.id, created_by_membership_id=membership.id,
-                            is_legacy=False, value=value,
-                        )
-                        db.session.add(row); db.session.flush()
-                except IntegrityError:
-                    row = SongSuggestionVote.query.filter_by(
-                        suggestion_id=suggestion.id, voter_user_id=user.id,
-                    ).one_or_none()
-                    if row is None:
-                        raise
-                    previous = row.value
-                    if previous != value:
-                        row.value = value
-            suggestion.thumbs_up = max(0, (suggestion.thumbs_up or 0) + int(value == 1) - int(previous == 1))
-            suggestion.thumbs_down = max(0, (suggestion.thumbs_down or 0) + int(value == -1) - int(previous == -1))
-        db.session.flush()
-        audit('content.suggestion_vote.changed', user, band, suggestion,
-              {'value': value, 'changed': previous != value})
-        return jsonify({'suggestion': _suggestion_response(scope, suggestion, value), 'viewer_vote': value})
-    return _run_write(operation)
+    def prepare_response(scope, suggestion, viewer_vote):
+        return jsonify({'suggestion': _suggestion_response(scope, suggestion, viewer_vote), 'viewer_vote': viewer_vote})
+    return set_song_suggestion_vote(
+        band_id=band_id, suggestion_id=suggestion_id, value=value, prepare_response=prepare_response,
+    )
 
 
 @content_writes_bp.put('/suggestions/<int:suggestion_id>/vote')

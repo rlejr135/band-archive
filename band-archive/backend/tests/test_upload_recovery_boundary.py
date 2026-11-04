@@ -9,7 +9,7 @@ import pytest
 from flask import Flask, current_app
 
 from extensions import db
-import routes.uploads as recovery
+import upload_recovery_service as recovery
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ from extensions import db
 from models import AppUser, AuditEvent, Band, BandMembership, SongSuggestion, SongSuggestionVote
 import routes.content_writes as writes
 import song_suggestion_service as suggestions
+import content_write_values as write_values
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 from tests.test_v2_content_writes import _band_id, principals, write_client  # noqa: F401
 
@@ -178,7 +179,7 @@ def test_suggestion_payload_shape_precedes_lock_but_required_value_validation_fo
     band_id = _band_id(access_app)
     phases = []
     original_user = writes.current_app_user
-    original_scope = writes.active_member_write_scope
+    original_scope = suggestions.active_member_write_scope
 
     def user(*args, **kwargs):
         phases.append('principal')
@@ -195,7 +196,6 @@ def test_suggestion_payload_shape_precedes_lock_but_required_value_validation_fo
 
     monkeypatch.setattr(writes, 'current_app_user', user)
     monkeypatch.setattr(suggestions, 'current_app_user', user)
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
     monkeypatch.setattr(suggestions, 'active_member_write_scope', scope)
     with access_app.app_context():
         engine = db.engine
@@ -243,7 +243,7 @@ def test_suggestion_delete_reloads_actor_before_capability_and_rolls_back_reject
     band_id = _band_id(access_app)
     suggestion_id = _seed(access_app, band_id)
     before = _snapshot(access_app)
-    original_scope = writes.active_member_write_scope
+    original_scope = suggestions.active_member_write_scope
     observed = []
 
     def scope(band_id, actor, **kwargs):
@@ -252,7 +252,6 @@ def test_suggestion_delete_reloads_actor_before_capability_and_rolls_back_reject
                            execution_options={'synchronize_session': False})
         return original_scope(band_id, actor, **kwargs)
 
-    monkeypatch.setattr(writes, 'active_member_write_scope', scope)
     monkeypatch.setattr(suggestions, 'active_member_write_scope', scope)
     response = write_client.delete(f'/api/v2/bands/{band_id}/suggestions/{suggestion_id}', headers=principals['owner'])
     assert observed == [{'lock': True, 'lock_actor': True}]
@@ -285,7 +284,7 @@ def test_platform_admin_without_active_band_membership_cannot_bypass_suggestion_
     ('', {'nullable': False}, None),
 ])
 def test_shared_text_value_contract_preserves_whitespace_and_null_semantics(value, options, expected):
-    assert writes._text(value, 'title', 10, **options) == expected
+    assert write_values.text_value(value, 'title', 10, **options) == expected
 
 
 @pytest.mark.parametrize(('value', 'options', 'message'), [
@@ -294,20 +293,20 @@ def test_shared_text_value_contract_preserves_whitespace_and_null_semantics(valu
 ])
 def test_shared_text_validation_contract(value, options, message):
     with pytest.raises(ValidationError) as error:
-        writes._text(value, 'title', 3, **options)
+        write_values.text_value(value, 'title', 3, **options)
     assert str(error.value) == message
 
 
 def test_shared_visibility_and_external_link_value_contracts():
-    assert writes._visibility(None, 'MEMBERS') == 'MEMBERS'
-    assert writes._visibility('PUBLIC', 'MEMBERS') == 'PUBLIC'
+    assert write_values.visibility_value(None, 'MEMBERS') == 'MEMBERS'
+    assert write_values.visibility_value('PUBLIC', 'MEMBERS') == 'PUBLIC'
     with pytest.raises(ValidationError, match='visibility must be PUBLIC or MEMBERS'):
-        writes._visibility('', 'PUBLIC')
-    assert writes._external_link(None) is None
+        write_values.visibility_value('', 'PUBLIC')
+    assert write_values.external_link_value(None) is None
     with pytest.raises(ValidationError, match='link is required'):
-        writes._external_link(None, required=True)
-    assert writes._external_link('https://example.test/reviewed') == 'https://example.test/reviewed'
+        write_values.external_link_value(None, required=True)
+    assert write_values.external_link_value('https://example.test/reviewed') == 'https://example.test/reviewed'
     with pytest.raises(ValidationError):
-        writes._external_link(' https://example.test/reviewed ')
+        write_values.external_link_value(' https://example.test/reviewed ')
     with pytest.raises(ValidationError):
-        writes._external_link('https://example.test/' + 'x' * 500)
+        write_values.external_link_value('https://example.test/' + 'x' * 500)

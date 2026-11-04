@@ -568,7 +568,7 @@ def create_app(config_class=None, start_worker=None):
             app.config['BAND_API_SCHEMA_READY'] = _band_schema_ready()
             app.config['PHASE4_ORM_SCHEMA_READY'] = _phase4_orm_schema_ready(app)
         if postgres_automation_allowed(app, db.engine, 'PG_MULTIPART_RECOVERY_ENABLED'):
-            from routes.uploads import recover_multipart_upload_sessions
+            from upload_recovery_service import recover_multipart_upload_sessions
             recover_multipart_upload_sessions(app)
         if app.config.get('SUPABASE_AUTH_ENABLED'):
             from auth_service import assert_auth_schema_ready

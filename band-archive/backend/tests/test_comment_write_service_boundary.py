@@ -46,7 +46,7 @@ def test_comment_routes_delegate_transaction_ownership_to_service():
 
 
 def test_comment_and_vote_targets_share_one_scoped_lookup():
-    for module in ('comment_service.py', 'routes/content_writes.py'):
+    for module in ('comment_service.py', 'v2_vote_service.py'):
         imports = {alias.name for node in _tree(module).body
                    if isinstance(node, ast.ImportFrom) and node.module == 'comment_rules'
                    for alias in node.names}

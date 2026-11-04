@@ -16,7 +16,7 @@ from extensions import db
 from multipart_upload_service import recover_sessions
 import upload_initiation_service as initiation
 from upload_transaction import run_upload_write
-from routes.uploads import recover_multipart_upload_sessions
+from upload_recovery_service import recover_multipart_upload_sessions
 from upload_materialization_service import materialize_direct_upload
 from errors import ValidationError
 from models import (AppUser, Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,

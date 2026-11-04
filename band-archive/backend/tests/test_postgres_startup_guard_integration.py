@@ -32,9 +32,9 @@ def test_private_pg_startup_has_no_ddl_or_automatic_jobs_and_rejects_drift(priva
     finally:
         engine.dispose()
     _upgrade_postgres(private_pg17)
-    import routes.uploads
+    import upload_recovery_service
     import media_processing
-    monkeypatch.setattr(routes.uploads, 'recover_multipart_upload_sessions', lambda app: pytest.fail('automatic multipart recovery'))
+    monkeypatch.setattr(upload_recovery_service, 'recover_multipart_upload_sessions', lambda app: pytest.fail('automatic multipart recovery'))
     monkeypatch.setattr(media_processing, 'start_worker', lambda app: pytest.fail('automatic audio worker'))
     monkeypatch.setattr(factory_module.storage, 'init_app', lambda app: None)
     class LocalConfig(TestingConfig):

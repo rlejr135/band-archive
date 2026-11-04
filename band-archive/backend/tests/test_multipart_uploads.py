@@ -7,7 +7,8 @@ from app import create_app
 from config import TestingConfig
 from extensions import db
 from models import Band, Media, MultipartUploadSession, Song, TenantBackfillState
-from routes.uploads import MAX_VIDEO_BYTES, MULTIPART_PART_SIZE, recover_multipart_upload_sessions
+from routes.uploads import MAX_VIDEO_BYTES, MULTIPART_PART_SIZE
+from upload_recovery_service import recover_multipart_upload_sessions
 from storage import storage
 
 

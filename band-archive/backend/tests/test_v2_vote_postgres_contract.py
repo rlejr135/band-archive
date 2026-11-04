@@ -16,6 +16,7 @@ from errors import register_error_handlers
 from extensions import db
 from models import AppUser, AuditEvent, BandMembership, Media, MediaVote, Song, SongSuggestion, SongSuggestionVote
 import routes.content_writes as writes
+import v2_vote_service as votes
 from storage import storage
 from tests.test_invite_link_concurrency import (  # noqa: F401
     _ordered_contention, invite_pg, private_pg17,
@@ -70,6 +71,7 @@ def _fixture(invite_pg, monkeypatch, kind):
         return principals[request.headers.get('X-Owned-Test-Actor', 'owner')]
 
     monkeypatch.setattr(writes, 'current_app_user', principal)
+    monkeypatch.setattr(votes, 'current_app_user', principal)
     monkeypatch.setattr(storage, 'generate_url', lambda *args, **kwargs: 'https://storage.invalid/owned')
     return app, engine, graph
 
