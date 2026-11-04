@@ -9,6 +9,8 @@
 
 ## 1. 최종 판정과 범위
 
+> 2026-11-05 후속 주석: 아래 완료 주장은 2026-11-04 작성 당시의 역사적 판정이다. [검증 보완](2026-11-05-architecture-refactoring-verification-addendum.md)에서 A runtime은 환경 대기, B FE 실행은 통과했으나 PG·시각은 미확인이며 C에도 미확인 계약이 남아 있어, 현재 무조건적인 전체 완료 결론은 유지하지 않는다. 과거 검증 수치·날짜·배포 내역은 그대로 보존한다.
+
 **이번 계획에서 정한 필수 추출·계약 검증·문서 갱신 범위를 완료했고 제품 배포를 확인했다.** 남겨둔 선택 작업은 아래 8절의 명시적 보류 판단이며, 구현 누락을 다음 요청까지 숨겨 둔 상태가 아니다. 실제 구조는 [Architecture Context](../../ARCHITECTURE_CONTEXT.md), 도메인·호환 명칭은 [Domain Glossary](../../DOMAIN_GLOSSARY.md), 계획 계약과 판단은 [원계획](../plans/2026-10-25-architecture-refactoring-plan.md)·[보완서](../plans/2026-10-25-architecture-refactoring-plan-addendum.md)에 있다.
 
 유지한 기술은 React/Vite SPA, Flask, SQLAlchemy, Supabase Auth/PostgreSQL, Cloudflare R2와 기존 프로세스 내 worker다. 새 기능·스택 전환·전면 Repository 계층·브로커·TypeScript 전환·설치형 앱 출시를 추가하지 않았다. DB/API 이름·역할별 허용 범위·signed URL TTL과 파일 처리 상태기계는 기존 계약을 보존했다.
@@ -141,6 +143,8 @@
 - native 코드가 저장소에 남아 있어도 TestFlight/Play Store 배포나 웹의 OS 백그라운드 업로드 보장을 이번 계획에서 추가하지 않았다.
 
 ## 8. 조건부 보류와 현재 남은 구조
+
+> 2026-11-05 후속 주석: 아래 선택 보류 목록과 ‘미이행 필수 단계는 없다’는 문장은 작성 당시 판정이다. [검증 보완 C절](2026-11-05-architecture-refactoring-verification-addendum.md)의 미확인 사항은 이 선택 목록으로 옮겨 완료 처리하지 않는다. A runtime 환경 대기·B FE 통과/PG·시각 미확인·C 부분 해소 상태에서 최종 필수 충족 결론은 보류한다.
 
 다음은 이번 필수 구현의 미완료 목록이 아니라 원계획의 조건부 선택·호환성 판단이다. 별도 필요와 승인이 생기기 전 자동 개발을 시작하지 않는다.
 
