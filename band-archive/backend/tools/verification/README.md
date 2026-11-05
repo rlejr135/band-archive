@@ -11,7 +11,8 @@
 
 - `prepare_snapshot.py`: Git의 고정 커밋에서 추적 backend만 **새 경로**에 추출한다.
   환경/로컬 상태/DB/개인 키 파일을 제외한다. 기존 작업 트리와 파일을 덮어쓰지 않는다.
-  `tests/test_data_api_security_migration.py`의 PG binary 경로 및 `.exe` 선택만 바꾸고
+  `tests/test_data_api_security_migration.py`와 `tests/test_preserve_identity_refresh_postgres.py`의
+  PG binary 경로 및 `.exe` 선택만 바꾸고
   정확한 diff·파일별 SHA256을 남긴다. assertion, timeout, loopback 제한, migration,
   실제 잠금 coordinator, 테스트별 cluster 수명은 변경하지 않는다.
 - `bootstrap/sitecustomize.py`: python-dotenv의 파일 검색/읽기를 차단한다.
