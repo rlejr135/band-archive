@@ -59,16 +59,47 @@ test('active member roster marks self, edits optional profile and refreshes card
   try {
     const member = { user: { id: 'self' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
     const view = render(createElement(ReadOnlyApp, { entry: '/bands/profile-band/members', authValue: member }));
-    await view.findByText('내 이름'); assert.equal(view.getAllByText('나').length, 1); assert.equal(view.getAllByRole('button', { name: '내 프로필 수정' }).length, 2);
+    await view.findByText('내 이름'); assert.equal(view.getAllByText('나').length, 1); assert.equal(view.getAllByRole('button', { name: '내 프로필 수정' }).length, 1);
+    assert.equal(view.getByRole('button', { name: '내 프로필 수정' }).closest('.workspace-page-heading') !== null, true);
+    assert.equal(view.getByText('내 이름').closest('article').querySelector('button'), null);
+    assert.equal(view.getByText('내 이름').closest('a').getAttribute('href'), '/bands/profile-band/members/41');
     assert.match(view.getByText('다른 멤버').closest('article').textContent, /드럼/);
     assert.equal(view.getByText('다른 멤버').closest('article').querySelector('button'), null);
-    await userEvent.click(view.getAllByRole('button', { name: '내 프로필 수정' })[0]);
+    await userEvent.click(view.getByRole('button', { name: '내 프로필 수정' }));
+    await view.findByLabelText('간단한 소개');
+    assert.equal(view.queryByRole('button', { name: '내 프로필 수정' }), null);
+    await userEvent.type(view.getByLabelText('간단한 소개'), '저장하지 않을 소개');
+    await userEvent.click(view.getByRole('button', { name: '취소', exact: true }));
+    assert.equal(writes.length, 0); assert.equal(listReads, 1);
+    assert.equal(view.queryByLabelText('간단한 소개'), null);
+    await userEvent.click(view.getByRole('button', { name: '내 프로필 수정' }));
     await view.findByLabelText('밴드에서 사용할 이름'); await userEvent.setup({ document: dom.window.document }).clear(view.getByLabelText('밴드에서 사용할 이름')); await userEvent.type(view.getByLabelText('밴드에서 사용할 이름'), '새 밴드 이름');
     await view.findByLabelText('간단한 소개'); await userEvent.type(view.getByLabelText('간단한 소개'), '함께 연주해요');
     await userEvent.click(view.getByRole('checkbox', { name: '베이스', exact: true }));
     await userEvent.click(view.getByRole('button', { name: '저장', exact: true }));
     await view.findByText('내 프로필을 저장했습니다.'); await view.findByText('함께 연주해요'); await view.findByText('새 밴드 이름');
     assert.equal(listReads, 2); assert.equal(writes.length, 1); assert.deepEqual(writes[0], { name: '새 밴드 이름', biography: '함께 연주해요', positions: ['BASS'], profile_revision: 0 });
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('roster profile action is absent without an active membership even if a card has stale edit flags', async () => {
+  await load(); const previousFetch = globalThis.fetch; let ownProfileReads = 0;
+  try {
+    for (const membership of [null, { id: 1, status: 'left', role: 'member' }]) {
+      globalThis.fetch = async (url) => {
+        if (url.includes('/by-slug/profile-band')) return response({ band: { id: 340, slug: 'profile-band', name: '프로필 밴드', permissions: { can_view_roster: true }, membership } });
+        if (url.includes('/members?')) return response({ members: [{ id: 41, name: '기존 내 프로필', is_self: true, can_edit_profile: true }], pagination: { has_more: false } });
+        if (url.endsWith('/members/me')) ownProfileReads += 1;
+        return response({});
+      };
+      const account = { user: { id: 'self' }, getAccessToken: async () => 'token', refreshSession: async () => 'token', signOut: async () => {} };
+      const view = render(createElement(ReadOnlyApp, { entry: '/bands/profile-band/members', authValue: account }));
+      await view.findByText('기존 내 프로필');
+      assert.equal(view.queryByRole('button', { name: '내 프로필 수정' }), null);
+      assert.equal(view.queryByLabelText('간단한 소개'), null);
+      view.unmount();
+    }
+    assert.equal(ownProfileReads, 0);
   } finally { globalThis.fetch = previousFetch; }
 });
 
