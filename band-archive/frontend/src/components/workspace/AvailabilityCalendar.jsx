@@ -81,13 +81,13 @@ function AvailabilityEditor({ band, api }) {
   return <section className="workspace-page availability-page" aria-labelledby="availability-title">
     <RehearsalTabs band={band} availability />
     <div className="workspace-page-heading"><div><p className="availability-eyebrow">FIND OUR NEXT SESSION</p><h1 id="availability-title">함께 가능한 날</h1><p>오전 · 오후 · 저녁, 가능한 시간만 가볍게 알려 주세요.</p></div><span className="availability-private">밴드 멤버 전용 · 한국 시간</span></div>
-    <div className="availability-modes" role="group" aria-label="달력 모드"><button type="button" className="secondary-btn" aria-pressed={mode === 'view'} disabled={busy} onClick={() => changeMode('view')}>멤버 선택 여부 보기</button><button type="button" className="secondary-btn" aria-pressed={mode === 'mine'} disabled={busy} onClick={() => changeMode('mine')}>내 일정 선택하기</button></div>
     <div className="availability-month"><button className="secondary-btn" aria-label="이전 달" disabled={busy} onClick={() => changeMonth(-1)}>←</button><h2>{month.replace('-', '년 ')}월</h2><button className="secondary-btn" aria-label="다음 달" disabled={busy} onClick={() => changeMonth(1)}>→</button><button className="secondary-btn" disabled={busy || loading} onClick={() => reload()}>새로고침</button></div>
     {notice && <p className="availability-notice" role="status">{notice}</p>}{error && <div role="alert" className="workspace-error"><p>{error}</p>{!data && <button className="secondary-btn" disabled={busy || loading} onClick={() => reload()}>다시 시도</button>}</div>}
     {loading && <p aria-live="polite">가능 일정을 불러오는 중입니다…</p>}
     {data && <>
       {data.last_reset_at && <p className="availability-notice">owner가 {resetTime(data.last_reset_at)}에 일정을 초기화했습니다. 가능한 일정을 다시 등록해 주세요.</p>}
       <div className="availability-layout"><section className="availability-panel" aria-labelledby="calendar-availability-title">
+        <div className="availability-modes" role="group" aria-label="달력 모드"><button type="button" className="secondary-btn" aria-pressed={mode === 'view'} disabled={busy} onClick={() => changeMode('view')}>멤버 선택 여부 보기</button><button type="button" className="secondary-btn" aria-pressed={mode === 'mine'} disabled={busy} onClick={() => changeMode('mine')}>내 일정 선택하기</button></div>
         <h2 id="calendar-availability-title">{mode === 'view' ? '멤버 가능 시간' : '내 가능 시간'}</h2>
         <p className="workspace-muted">{mode === 'view' ? '전체 활성 멤버 기준: O 전원 가능 · X 전원 불가능 · △ 일부 가능. 시간대에 마우스를 올리거나 선택하면 멤버별 선택을 볼 수 있습니다.' : '시간대를 누르면 X 불가능 ↔ O 가능으로 바로 저장합니다. 등록하지 않은 시간은 X 불가능입니다.'}</p>
         <table className="availability-month-grid">

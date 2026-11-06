@@ -25,6 +25,11 @@ afterEach(() => cleanup()); after(async () => { await vite?.close(); dom.window.
 
 test('Sunday-first view aggregates all active members and popovers use band names without writes or reads', async () => {
   await load(); const calls = []; const view = render(app({ requestJson: async (_url, options = {}) => { calls.push(options); return snapshot(); } })); await ready(view);
+  const modes = view.getByRole('group', { name: '달력 모드' });
+  const calendarCard = view.container.querySelector('.availability-panel[aria-labelledby="calendar-availability-title"]');
+  assert.equal(calendarCard.firstElementChild === modes, true);
+  assert.equal(modes.nextElementSibling === view.getByRole('heading', { name: '멤버 가능 시간' }), true);
+  assert.equal(view.getAllByRole('group', { name: '달력 모드' }).length, 1);
   assert.deepEqual([...view.container.querySelectorAll('thead th')].map((th) => th.textContent), ['일', '월', '화', '수', '목', '금', '토']);
   assert.equal(view.container.querySelectorAll('[data-availability-slot]').length, dates.length * 3);
   assert.equal(view.container.querySelectorAll('.availability-empty-day button').length, 0);

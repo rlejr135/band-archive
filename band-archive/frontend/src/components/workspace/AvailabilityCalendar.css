@@ -44,7 +44,7 @@
 .availability-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media(max-width:850px){.availability-page .workspace-page-heading{flex-wrap:wrap}.availability-panel{padding:16px}.availability-private{font-size:.7rem}.availability-member-list{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}}
 .availability-layout { display:grid;gap:18px;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); }
-.availability-modes{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.availability-modes{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:8px;margin:0 0 16px}
 .availability-modes button{min-height:42px}
 .availability-modes button[aria-pressed=true]{background:var(--color-accent);color:var(--color-on-accent);border-color:var(--color-accent)}
 .availability-month-grid{table-layout:fixed;width:100%;border-collapse:separate;border-spacing:4px;margin-top:18px}
