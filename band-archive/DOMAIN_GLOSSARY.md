@@ -133,6 +133,9 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 - 현재 `rehearsal_songs`에는 곡 순서 필드가 없다. 이를 순서 보장되는 “셋리스트” 기능이라고 약속하지 않는다.
 - 가능 일정은 **날짜 × 밴드 가입 관계 × 오전/오후/저녁** 상태다. `member_id` 프로필 대신 `membership_id`를 사용하는 점이 중요하다. 후보 집계는 예약·출석을 보장하지 않는다.
 - 가능 일정 API의 `members[].membership_id`는 `BandMembership` ID이며 `display_name`은 동일 밴드에 연결된 `MemberProfile.name`을 우선하고 없으면 메일형을 제외한 계정 표시명 → `멤버 #id` 순으로 대체하며, 프로필 ID로 일정을 연결하지 않는다.
+- 가능 일정의 새 화면은 **가능 / 불가능** 두 상태로 표현한다. 미등록 시간대와 호환용 `UNKNOWN`은 불가능으로 표시하고 후보 집계의 불가능 인원에 포함한다. DB의 기존 `UNKNOWN`과 입력 별칭 호환은 유지하되 조회 응답은 `UNAVAILABLE`로 정규화하며 새 웹 쓰기는 `AVAILABLE`·`UNAVAILABLE` 두 값만 사용한다. 기존 데이터를 일괄 변경한다는 뜻은 아니다. 행 자체가 없는 경우와 기존 행의 잘못되거나 누락된 필드는 구분하며, 다른 시간대의 저장값·revision을 임의로 덮어쓰지 않는다.
+- **전체 보기**는 활성 밴드 멤버의 일정 조회이고, **내 일정 등록**은 본인의 날짜·시간대를 선택해 즉시 저장하는 모드다. 전체 보기에서 달력 셀을 조작해도 상태 쓰기 요청을 보내지 않는다. 별도 개인 메모·초기화 버튼의 기존 권한과 명시적 실행 절차는 유지한다.
+- 전체 보기의 멤버 표시와 **함께 가능한 후보**의 멤버 선택 필터는 별개다. 후보 필터는 후보 집계에만 적용하며 전체 일정 표시나 본인의 저장 대상을 바꾸지 않는다. 후보는 활성 밴드 가입 관계를 기준으로 계산한다.
 - 개인 일정 메모는 개인 연습 기록 `PersonalLog`와 무관하다. “개인 기록”이라고만 지시하지 말고 어느 것인지 적는다.
 - 로고는 같은 밴드 갤러리 사진을 가리키는 관계다. 대표 사진과 같을 수도, 다를 수도 있으며 선택할 때 파일을 복제하는 개념이 아니다.
 
@@ -201,7 +204,7 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 | 생성 요청 메일의 결정 | `approved`, `rejected`. 위 요청 status와 다른 필드 |
 | 곡 진행 | `Practice`, `Completed`, `OnHold` |
 | 일정 유형 | `REGULAR` 정기합주, `EXTRA` 추가합주, `LIVE` 라이브공연, `OTHER` 기타, `UNCLASSIFIED` 미분류 |
-| 가능 여부 / 시간대 | `AVAILABLE`, `UNAVAILABLE`, `UNKNOWN` / `morning`, `afternoon`, `evening` |
+| 가능 여부 / 시간대 | DB의 기존 `UNKNOWN`·입력 별칭 호환 유지, 조회 응답은 `UNAVAILABLE`로 정규화, 새 웹 쓰기는 `AVAILABLE`·`UNAVAILABLE` / `morning`, `afternoon`, `evening`. 새 화면은 가능·불가능만 표현하며 미등록·`UNKNOWN`은 불가능으로 표시하고 불가능 인원에 포함 |
 | 콘텐츠 공개 범위 | `PUBLIC`, `MEMBERS`; `effective_visibility`는 부모·밴드 범위까지 반영 |
 | 개인 일정 메모 공개 범위 | `PRIVATE`, `BAND`. 위 enum과 억지 통합 금지 |
 | 음원 추출 | `not_required`, `queued`, `processing`, `completed`, `failed` |

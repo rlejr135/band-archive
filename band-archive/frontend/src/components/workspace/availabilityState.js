@@ -1,7 +1,8 @@
 export const PERIODS = ['morning', 'afternoon', 'evening'];
 export const availabilityPath = (bandId, from, to) => `/api/v2/bands/${Number(bandId)}/availability?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
 export const PERIOD_LABELS = { morning: '오전', afternoon: '오후', evening: '저녁' };
-export const STATUS_LABELS = { AVAILABLE: '가능', UNAVAILABLE: '불가', UNKNOWN: '미정' };
+export const STATUS_LABELS = { AVAILABLE: '가능', UNAVAILABLE: '불가능' };
+export const binaryStatus = (value) => value === 'AVAILABLE' ? 'AVAILABLE' : 'UNAVAILABLE';
 export const activeAvailabilityMember = (band) => Boolean(band.membership && String(band.membership.status || 'active').toLowerCase() === 'active');
 export const seoulToday = () => {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -26,21 +27,21 @@ export const calendarWeeks = (month) => {
   while (cells.length % 7) cells.push(null);
   return Array.from({ length: cells.length / 7 }, (_, i) => cells.slice(i * 7, i * 7 + 7));
 };
-export const inclusiveDates = (dates, anchor, target) => {
-  const a = dates.indexOf(anchor); const b = dates.indexOf(target);
-  return a < 0 || b < 0 ? [] : dates.slice(Math.min(a, b), Math.max(a, b) + 1);
-};
 export const adjacentMonth = (month, offset) => {
   const day = new Date(`${month}-01T00:00:00Z`); day.setUTCMonth(day.getUTCMonth() + offset); return day.toISOString().slice(0, 7);
 };
 export const cellKey = (date, period) => `${date}:${period}`;
-export const ownDay = (data, date) => data.days.find((day) => day.membership_id === data.my_membership_id && day.date === date) || { date, morning: 'UNKNOWN', afternoon: 'UNKNOWN', evening: 'UNKNOWN', revision: 0 };
+export const ownDay = (data, date) => data.days.find((day) => day.membership_id === data.my_membership_id && day.date === date) || { date, morning: 'UNAVAILABLE', afternoon: 'UNAVAILABLE', evening: 'UNAVAILABLE', revision: 0 };
 export const batchDays = (data, cells, status) => {
   if (!Object.hasOwn(STATUS_LABELS, status)) throw new Error('Invalid status');
   const rows = new Map();
   for (const key of cells) {
     const [date, period] = key.split(':'); if (!validDay(date) || !PERIODS.includes(period)) throw new Error('Invalid cell');
-    if (!rows.has(date)) { const source = ownDay(data, date); rows.set(date, { date, revision: source.revision, ...Object.fromEntries(PERIODS.map((name) => [name, source[name]])) }); }
+    if (!rows.has(date)) {
+      const source = ownDay(data, date);
+      if (!Number.isInteger(source.revision) || source.revision < 0 || PERIODS.some((name) => !['AVAILABLE', 'UNAVAILABLE', 'UNKNOWN'].includes(source[name]))) throw new Error('Invalid day');
+      rows.set(date, { date, revision: source.revision, ...Object.fromEntries(PERIODS.map((name) => [name, binaryStatus(source[name])])) });
+    }
     rows.get(date)[period] = status;
   }
   if (!rows.size || rows.size > 42) throw new Error('Invalid range');
@@ -52,9 +53,19 @@ export const candidates = (data, dates, selected, today = null) => {
   const index = new Map(data.days.map((day) => [`${day.membership_id}:${day.date}`, day]));
   return dates.filter((date) => !today || date >= today).flatMap((date) => PERIODS.map((period, order) => {
     const statuses = ids.map((id) => index.get(`${id}:${date}`)?.[period] || 'UNKNOWN');
-    const available = statuses.filter((value) => value === 'AVAILABLE').length; const unavailable = statuses.filter((value) => value === 'UNAVAILABLE').length;
-    return { date, period, order, available, unavailable, unknown: ids.length - available - unavailable, all: available === ids.length, total: ids.length };
+    const available = statuses.filter((value) => value === 'AVAILABLE').length; const unavailable = ids.length - available;
+    return { date, period, order, available, unavailable, all: available === ids.length, total: ids.length };
   })).sort((a, b) => Number(b.all) - Number(a.all) || b.available - a.available || a.date.localeCompare(b.date) || a.order - b.order);
 };
 // A compact, deterministic change token, not a permission token or personal-data cache.
 export const availabilityFingerprint = (data, date) => JSON.stringify([data.generation, data.members.map((member) => member.membership_id).sort((a, b) => a - b), data.days.filter((day) => day.date === date).map((day) => [day.membership_id, day.revision]).sort((a, b) => a[0] - b[0])]);
+
+export const slotChoices = (data, date, period, index = new Map(data.days.map((day) => [`${day.membership_id}:${day.date}`, day]))) => {
+  return data.members.map((member) => ({ ...member, status: binaryStatus(index.get(`${member.membership_id}:${date}`)?.[period]) }));
+};
+export const aggregateSlot = (choices) => {
+  if (!choices.length) return '—';
+  const available = choices.filter((entry) => entry.status === 'AVAILABLE').length;
+  return available === 0 ? 'X' : available === choices.length ? 'O' : '△';
+};
+export const toggleDay = (data, date, period) => batchDays(data, [cellKey(date, period)], binaryStatus(ownDay(data, date)[period]) === 'AVAILABLE' ? 'UNAVAILABLE' : 'AVAILABLE');

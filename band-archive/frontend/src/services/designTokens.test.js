@@ -88,8 +88,10 @@ test('shared button foundation uses theme tokens while component controls keep s
   assert.match(appCss, /\.secondary-btn:hover:not\(:disabled\)/);
   assert.match(appCss, /\.secondary-btn\s*\{[^}]*min-height:\s*40px;[^}]*text-decoration:\s*none/s);
   assert.doesNotMatch(headerCss, /\.primary-btn\s*\{/);
-  assert.match(availabilityCss, /\.availability-option-tabs button\s*\{/);
-  assert.match(availabilityCss, /\.availability-day\s*\{[^}]*min-height:/s);
+  assert.match(availabilityCss, /\.availability-modes button\s*\{[^}]*min-height:\s*42px/s);
+  assert.match(availabilityCss, /\.availability-modes button\[aria-pressed=true\]\s*\{[^}]*background:\s*var\(--color-accent\);[^}]*color:\s*var\(--color-on-accent\)/s);
+  assert.match(availabilityCss, /\.availability-slot-button\s*\{[^}]*width:\s*100%;[^}]*min-height:\s*42px/s);
+  assert.match(availabilityCss, /\.availability-slot-button\s*\{[^}]*border:\s*1px solid var\(--color-border\);[^}]*background:\s*var\(--color-surface\)/s);
   assert.match(dashboardCss, /\.activity-calendar-layout \.react-calendar__navigation button/);
 });
 
