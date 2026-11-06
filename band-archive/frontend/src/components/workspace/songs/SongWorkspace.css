@@ -1,0 +1,11 @@
+.workspace-row.song-list-row { min-height: 44px; }
+.song-list-row strong { font-size: 1.0625rem; line-height: 1.4; overflow-wrap: anywhere; }
+.song-list-row span { font-size: .9375rem; line-height: 1.45; }
+.song-list-row small { font-size: .75rem; line-height: 1.4; }
+
+@media (max-width: 700px) {
+  .workspace-row.song-list-row { padding: 16px 14px; }
+  .song-list-row strong { font-size: 1.25rem; }
+  .song-list-row span { font-size: 1rem; margin-top: 5px; }
+  .song-list-row small { font-size: .75rem; margin-top: 7px; }
+}
