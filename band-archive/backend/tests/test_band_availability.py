@@ -134,9 +134,63 @@ def test_batch_atomic_revision_idempotency_and_own_reset_tombstone(calendar):
     cleared = client.delete(BASE + '/me/2026-10-17', headers=headers(), json={'generation': 0, 'revision': 1})
     assert cleared.status_code == 200
     item = client.get(BASE + QUERY, headers=headers()).get_json()['days'][0]
-    assert item['revision'] == 2 and item['evening'] == 'UNKNOWN'
+    assert item['revision'] == 2
+    assert all(item[p] == 'UNAVAILABLE' for p in ('morning', 'afternoon', 'evening'))
     assert batch(client).status_code == 409
     assert batch(client, [row(revision=2)]).status_code == 200
+    missing_path = BASE + '/me/2026-10-19'
+    reset = {'generation': 0, 'revision': 0}
+    assert client.delete(missing_path, headers=headers(), json=reset).get_json()['changed'] is True
+    assert client.delete(missing_path, headers=headers(), json=reset).get_json()['changed'] is False
+    with calendar.app_context():
+        stored = Day.query.filter_by(date=date(2026, 10, 19)).one()
+        assert stored.revision == 1
+        assert (stored.morning, stored.afternoon, stored.evening) == ('UNAVAILABLE',) * 3
+
+
+def test_snapshot_normalizes_legacy_unknown_without_rewriting_history(calendar):
+    with calendar.app_context():
+        db.session.add(Day(band_id=1, membership_id=3, date=date(2026, 10, 17),
+                           morning='UNKNOWN', afternoon='AVAILABLE', evening='UNAVAILABLE', revision=7))
+        db.session.commit()
+    result = calendar.test_client().get(BASE + QUERY, headers=headers()).get_json()
+    assert result['days'] == [{'membership_id': 3, 'date': '2026-10-17',
+                               'morning': 'UNAVAILABLE', 'afternoon': 'AVAILABLE',
+                               'evening': 'UNAVAILABLE', 'revision': 7}]
+    # Missing days remain absent; the client interprets missing periods as X.
+    assert len(result['days']) == 1
+    with calendar.app_context():
+        stored = Day.query.one()
+        assert stored.morning == 'UNKNOWN' and stored.revision == 7
+        assert State.query.count() == 0
+
+
+def test_legacy_unknown_alias_effective_noop_retry_and_canonical_changes(calendar):
+    client = calendar.test_client()
+    with calendar.app_context():
+        db.session.add(Day(band_id=1, membership_id=3, date=date(2026, 10, 17),
+                           morning='UNKNOWN', afternoon='AVAILABLE', evening='UNKNOWN', revision=3))
+        db.session.commit()
+    values = row(revision=3, morning='UNAVAILABLE', afternoon='AVAILABLE', evening='UNAVAILABLE')
+    assert batch(client, [values]).get_json()['changed'] is False
+    assert batch(client, [{**values, 'revision': 2}]).get_json()['changed'] is False
+    assert batch(client, [{**values, 'revision': 1}]).status_code == 409
+    with calendar.app_context():
+        stored = Day.query.one()
+        assert (stored.morning, stored.evening, stored.revision) == ('UNKNOWN', 'UNKNOWN', 3)
+    # An actual edit preserves the other available period and canonicalizes
+    # every supplied period, including legacy UNKNOWN input.
+    changed = {**values, 'morning': 'AVAILABLE', 'evening': 'UNKNOWN'}
+    assert batch(client, [changed]).get_json()['changed'] is True
+    assert batch(client, [changed]).get_json()['changed'] is False
+    with calendar.app_context():
+        stored = Day.query.one()
+        assert (stored.morning, stored.afternoon, stored.evening, stored.revision) == (
+            'AVAILABLE', 'AVAILABLE', 'UNAVAILABLE', 4)
+    assert batch(client, [row('2026-10-18', evening='UNKNOWN')]).status_code == 200
+    with calendar.app_context():
+        stored = Day.query.filter_by(date=date(2026, 10, 18)).one()
+        assert (stored.morning, stored.afternoon, stored.evening) == ('UNAVAILABLE',) * 3
 
 
 def test_notes_private_to_author_shared_opt_in_and_delete_revision(calendar):

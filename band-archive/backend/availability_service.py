@@ -99,6 +99,11 @@ def _iso(value):
     return value.isoformat()
 
 
+def _binary_status(value):
+    # UNKNOWN remains valid legacy storage/input, but means unavailable now.
+    return 'UNAVAILABLE' if value == 'UNKNOWN' else value
+
+
 def snapshot(user, band_id, start, end):
     start, end = range_dates(start, end)
     band, membership = _authorize(user, band_id)
@@ -126,7 +131,7 @@ def snapshot(user, band_id, start, end):
         'can_reset': membership.role == 'owner', 'my_membership_id': membership.id,
         'members': [{'membership_id': item.id, 'display_name': _member_name(item)} for item in members],
         'days': [{'membership_id': item.membership_id, 'date': item.date.isoformat(),
-                  **{p: getattr(item, p) for p in PERIODS}, 'revision': item.revision} for item in days],
+                  **{p: _binary_status(getattr(item, p)) for p in PERIODS}, 'revision': item.revision} for item in days],
         'notes': [{'id': item.id, 'membership_id': item.membership_id, 'date': item.date.isoformat(),
                    'period': item.period, 'body': item.body, 'visibility': item.visibility,
                    'revision': item.revision} for item in notes],
@@ -162,7 +167,7 @@ def update_days(user, band_id, payload):
         revision = integer(item['revision'], 'revision')
         if any(not isinstance(item[p], str) or item[p] not in STATUSES for p in PERIODS):
             raise ValidationError('Invalid availability status.')
-        parsed.append((target_date, revision, {p: item[p] for p in PERIODS}))
+        parsed.append((target_date, revision, {p: _binary_status(item[p]) for p in PERIODS}))
     dates = [row[0] for row in parsed]
     if len(set(dates)) != len(dates) or (max(dates) - min(dates)).days >= MAX_DAYS:
         raise ValidationError('Days must be unique and fit a 42-day range.')
@@ -175,7 +180,7 @@ def update_days(user, band_id, payload):
     for target_date, expected, values in sorted(parsed):
         item = current.get(target_date)
         revision = item.revision if item else 0
-        same = item is not None and all(getattr(item, p) == values[p] for p in PERIODS)
+        same = item is not None and all(_binary_status(getattr(item, p)) == values[p] for p in PERIODS)
         if expected != revision:
             if expected == revision - 1 and same:
                 continue  # A lost-response retry, never an older overwrite.
@@ -197,7 +202,7 @@ def reset_day(user, band_id, target_date, payload):
     strict_keys(payload, {'generation', 'revision'})
     local_date(target_date)
     return update_days(user, band_id, {'generation': payload['generation'], 'days': [{
-        'date': target_date, 'revision': payload['revision'], **{p: 'UNKNOWN' for p in PERIODS},
+        'date': target_date, 'revision': payload['revision'], **{p: 'UNAVAILABLE' for p in PERIODS},
     }]})
 
 
