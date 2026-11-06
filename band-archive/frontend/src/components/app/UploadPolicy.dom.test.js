@@ -74,7 +74,7 @@ test('removing a linked song from a private rehearsal requires public-expansion 
   try {
     const view = render(workspaceApp({ kind: 'rehearsals' }));
     await view.findByText('비공개 합주'); await user.click(view.getByText('비공개 합주')); await user.click(view.getByRole('button', { name: '수정' }));
-    await view.findByLabelText(/연결된 곡 —/); await user.click(view.getByLabelText(/연결된 곡 —/));
+    await user.click(await view.findByRole('checkbox', { name: /연결된 곡.*밴드/ }));
     window.confirm = (message) => { prompts.push(message); return false; };
     await user.click(view.getByRole('button', { name: '저장', exact: true })); assert.equal(writes.length, 0); assert.match(prompts[0], /연결된 곡/);
     window.confirm = () => true;
