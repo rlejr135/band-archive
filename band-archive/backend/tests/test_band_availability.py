@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 from flask import g, request
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 import auth_service
 from app import create_app
 from config import TestingConfig
 from extensions import db
 from migration_bootstrap import phase16_metadata, phase17_metadata, schema_contract_differences
-from models import AppUser, AuditEvent, Band, BandMembership, BandAvailabilityDay as Day, BandAvailabilityState as State, BandPersonalScheduleNote as Note
+from models import AppUser, AuditEvent, Band, BandMembership, BandAvailabilityDay as Day, BandAvailabilityState as State, BandPersonalScheduleNote as Note, Member
 
 
 @pytest.fixture
@@ -82,6 +82,45 @@ def test_snapshot_is_private_active_verified_only_and_does_not_create_state(cale
     assert 'email' not in result.get_data(as_text=True)
     with calendar.app_context():
         assert State.query.count() == 0
+
+
+def test_snapshot_uses_only_same_band_linked_profile_names_without_extra_queries(calendar):
+    from member_profile_service import ensure_member_profile
+    with calendar.app_context():
+        # Allocate an unrelated historical profile first so profile IDs differ
+        # from membership IDs; matching names must not link historical people.
+        db.session.add(Member(band_id=1, name='Historical person', instrument=''))
+        db.session.flush()
+        for membership_id in (1, 2):
+            profile = ensure_member_profile(db.session.get(BandMembership, membership_id))
+            profile.name = f'Band person {membership_id}'
+            assert profile.id != membership_id
+        db.session.add(Member(band_id=2, linked_user_id=3, name='Other band secret', instrument=''))
+        db.session.get(AppUser, 3).display_name = '  Account fallback  '
+        db.session.get(AppUser, 4).display_name = 'private@example.com'
+        db.session.add(Member(band_id=1, name='private@example.com', instrument=''))
+        db.session.get(AppUser, 7).status = 'suspended'
+        db.session.add(BandMembership(band_id=1, user_id=7, status='active', role='member'))
+        db.session.commit()
+        statements = []
+        def capture(_connection, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement.lower())
+        engine = db.engine
+        event.listen(engine, 'before_cursor_execute', capture)
+        try:
+            result = calendar.test_client().get(BASE + QUERY, headers=headers())
+        finally:
+            event.remove(engine, 'before_cursor_execute', capture)
+    assert result.status_code == 200
+    assert result.get_json()['members'] == [
+        {'membership_id': 1, 'display_name': 'Band person 1'},
+        {'membership_id': 2, 'display_name': 'Band person 2'},
+        {'membership_id': 3, 'display_name': 'Account fallback'},
+        {'membership_id': 4, 'display_name': '멤버 #4'},
+    ]
+    assert 'private@example.com' not in result.get_data(as_text=True)
+    assert 'Other band secret' not in result.get_data(as_text=True)
+    assert len([sql for sql in statements if ' join member ' in sql]) == 1
 
 
 def test_batch_atomic_revision_idempotency_and_own_reset_tombstone(calendar):

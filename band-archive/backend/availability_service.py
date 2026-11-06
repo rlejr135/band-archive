@@ -3,12 +3,12 @@ import re
 import unicodedata
 from datetime import date, datetime, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from band_service import _begin_privileged_mutation, audit, require_band_role
 from errors import ValidationError
 from extensions import db
-from models import AppUser, BandAvailabilityDay as Day, BandAvailabilityState as State, BandMembership, BandPersonalScheduleNote as Note
+from models import AppUser, BandAvailabilityDay as Day, BandAvailabilityState as State, BandMembership, BandPersonalScheduleNote as Note, Member
 
 PERIODS = ('morning', 'afternoon', 'evening')
 STATUSES = {'AVAILABLE', 'UNAVAILABLE', 'UNKNOWN'}
@@ -103,8 +103,12 @@ def snapshot(user, band_id, start, end):
     start, end = range_dates(start, end)
     band, membership = _authorize(user, band_id)
     state = db.session.get(State, band.id)
-    members = db.session.query(BandMembership.id, AppUser.display_name).join(
-        AppUser, AppUser.id == BandMembership.user_id).filter(
+    members = db.session.query(BandMembership.id, AppUser.display_name,
+                               Member.name.label('profile_name')).join(
+        AppUser, AppUser.id == BandMembership.user_id).outerjoin(Member, and_(
+            Member.band_id == BandMembership.band_id,
+            Member.linked_user_id == BandMembership.user_id,
+        )).filter(
         BandMembership.band_id == band.id, BandMembership.status == 'active',
         AppUser.status == 'active', AppUser.email_verified.is_(True),
     ).order_by(BandMembership.id).all()
@@ -120,7 +124,7 @@ def snapshot(user, band_id, start, end):
         'band_id': band.id, 'generation': state.generation if state else 0,
         'last_reset_at': _iso(state.last_reset_at) if state else None,
         'can_reset': membership.role == 'owner', 'my_membership_id': membership.id,
-        'members': [{'membership_id': item.id, 'display_name': item.display_name or f'멤버 #{item.id}'} for item in members],
+        'members': [{'membership_id': item.id, 'display_name': _member_name(item)} for item in members],
         'days': [{'membership_id': item.membership_id, 'date': item.date.isoformat(),
                   **{p: getattr(item, p) for p in PERIODS}, 'revision': item.revision} for item in days],
         'notes': [{'id': item.id, 'membership_id': item.membership_id, 'date': item.date.isoformat(),
@@ -135,6 +139,14 @@ def snapshot(user, band_id, start, end):
     # Release snapshot lock after all values have been serialized.
     db.session.rollback()
     return result
+
+
+def _member_name(item):
+    # Use the explicitly linked band profile, never a name/email match.
+    for value in (item.profile_name, item.display_name):
+        if value and value.strip() and '@' not in value:
+            return value.strip()
+    return f'멤버 #{item.id}'
 
 
 def update_days(user, band_id, payload):
