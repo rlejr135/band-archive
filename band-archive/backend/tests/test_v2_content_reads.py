@@ -318,6 +318,30 @@ def test_collections_have_bounded_deterministic_pages_and_reject_bad_paging(acce
         assert client.get(f'{base}/songs?{query}').status_code == 400
 
 
+def test_rehearsal_pages_are_newest_first_with_stable_ties_and_band_scope(access_app, content_graph):
+    with access_app.app_context():
+        band_id = content_graph['public_band']
+        older = Rehearsal(band_id=band_id, visibility='PUBLIC', title='Older', date=date(2027, 1, 1))
+        tied_first = Rehearsal(band_id=band_id, visibility='PUBLIC', title='Tie first', date=date(2027, 2, 1))
+        tied_second = Rehearsal(band_id=band_id, visibility='PUBLIC', title='Tie second', date=date(2027, 2, 1))
+        foreign = Rehearsal(band_id=content_graph['private_band'], visibility='PUBLIC',
+                            title='Foreign newer', date=date(2028, 1, 1))
+        hidden = Rehearsal(band_id=band_id, visibility='MEMBERS', title='Hidden newer', date=date(2028, 2, 1))
+        db.session.add_all((older, tied_first, tied_second, foreign, hidden))
+        db.session.commit()
+        expected = [tied_second.id, tied_first.id, older.id, content_graph['public_rehearsal']]
+    client = access_app.test_client()
+    base = f'/api/v2/bands/{band_id}/rehearsals'
+    first = client.get(base + '?limit=2&offset=0')
+    second = client.get(base + '?limit=2&offset=2')
+    assert first.status_code == second.status_code == 200
+    first, second = first.get_json(), second.get_json()
+    assert [item['id'] for item in first['rehearsals'] + second['rehearsals']] == expected
+    assert first['pagination']['total'] == second['pagination']['total'] == 4
+    assert first['pagination']['next_offset'] == 2
+    assert second['pagination']['has_more'] is False
+
+
 def test_comments_are_a_flat_bounded_deterministic_page(access_app, content_graph):
     with access_app.app_context():
         for index in range(5):

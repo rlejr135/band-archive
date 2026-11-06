@@ -561,7 +561,7 @@ def list_rehearsals(band_id):
         Rehearsal.query.options(selectinload(Rehearsal.songs)), Rehearsal, scope,
         parent_visibility=scope.band_visibility,
     ).filter(*_rehearsal_graph_sql(scope))
-    page, pagination = _page_query(query, (Rehearsal.date.asc(), Rehearsal.id.asc()), limit, offset)
+    page, pagination = _page_query(query, (Rehearsal.date.desc(), Rehearsal.id.desc()), limit, offset)
     return jsonify({'rehearsals': [serialize_rehearsal(scope, item) for item in page], 'pagination': pagination})
 
 
