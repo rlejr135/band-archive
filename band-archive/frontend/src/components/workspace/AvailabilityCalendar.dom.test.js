@@ -26,6 +26,33 @@ const openApply = (view) => { const button = view.getByRole('button', { name: '�
 const choosePeriods = (dialog, periods) => { const group = within(dialog).getByRole('group', { name: '설정할 시간대' }); periods.forEach((p) => fireEvent.click(within(group).getByRole('button', { name: new RegExp(`^${p}`) }))); };
 afterEach(() => cleanup()); after(async () => { await vite?.close(); dom.window.close(); });
 
+test('band profile labels remain attached to membership identity in schedules, picks and shared notes', async () => {
+  await load();
+  const api = { requestJson: async () => snapshot({
+    members: [
+      { membership_id: 12, member_id: 777, display_name: '밴드 베이스' },
+      { membership_id: 13, member_id: 12, display_name: '밴드 보컬' },
+    ],
+    notes: [{ membership_id: 13, date, period: 'evening', body: '저녁에 가능해요', visibility: 'BAND' }],
+  }) };
+  const view = render(app(api));
+  await view.findByRole('button', { name: `${date} 일정 선택` });
+  chooseRange(view, date, date);
+  assert.equal(view.getByRole('heading', { name: `${date} 멤버 일정` }) !== null, true);
+  const roster = view.container.querySelector('.availability-member-list');
+  assert.equal(within(roster).getByText('밴드 베이스 (나)') !== null, true);
+  assert.equal(within(roster).getByText('밴드 보컬') !== null, true);
+  assert.equal(view.getByRole('checkbox', { name: '밴드 베이스' }).checked, true);
+  assert.equal(view.getByRole('checkbox', { name: '밴드 보컬' }).checked, true);
+  fireEvent.click(view.getByText('선택 개인 일정 메모'));
+  const sharedRows = view.container.querySelectorAll('.availability-shared-notes article');
+  assert.equal(sharedRows.length, 1);
+  const sharedRow = sharedRows[0];
+  assert.equal(sharedRow.querySelector('strong')?.textContent.replace(/\s+/g, ' ').trim(), '밴드 보컬 · 저녁');
+  assert.equal(within(sharedRow).getByText('저녁에 가능해요') !== null, true);
+  assert.equal(view.queryByText('밴드 보컬 (나)'), null);
+});
+
 test('inactive membership makes no calendar request', async () => {
   await load(); let calls = 0; const view = render(app({ requestJson: async () => { calls += 1; } }, { band: { ...band, membership: null } }));
   assert.ok(view.getByText('활성 밴드 멤버만 일정을 조회하고 등록할 수 있습니다.')); assert.equal(calls, 0);
