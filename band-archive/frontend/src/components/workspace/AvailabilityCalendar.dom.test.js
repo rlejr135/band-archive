@@ -40,6 +40,7 @@ test('Sunday-first view aggregates all active members and popovers use band name
   assert.ok(within(tip).getByText('O 가능')); assert.ok(within(tip).getByText('X 불가능'));
   fireEvent.pointerLeave(slot(view, date, 'evening').parentElement, { pointerType: 'mouse' }); assert.equal(view.queryByRole('tooltip') === null, true);
   fireEvent.focus(slot(view)); assert.ok(view.getByRole('tooltip')); fireEvent.keyDown(document, { key: 'Escape' }); assert.equal(view.queryByRole('tooltip') === null, true);
+  fireEvent.click(view.getByText('후보 계산 대상', { selector: 'summary' }));
   const picks = view.getByRole('group', { name: '후보 계산 대상' }); fireEvent.click(within(picks).getByRole('checkbox', { name: '밴드 보컬' }));
   assert.equal(slot(view, date, 'evening').textContent, '저녁△'); assert.equal(calls.length, 1); assert.equal(calls.filter((options) => options.method).length, 0);
 });
@@ -144,7 +145,7 @@ test('account change aborts a pending toggle and ignores its late completion', a
 test('old band GET cannot replace the next band, and inactive membership never requests data', async () => {
   await load(); const old = deferred(); let oldSignal;
   const api = { requestJson: async (url, options = {}) => { if (url.includes('/8/')) { oldSignal = options.signal; return old.promise; } return snapshot({ band_id: 9, members: [{ membership_id: 14, display_name: '새 밴드 멤버' }], my_membership_id: 14, days: [] }); } };
-  const view = render(app(api)); await waitFor(() => assert.ok(oldSignal)); view.rerender(app(api, { band: { ...band, id: 9, slug: 'next' }, workspaceKey: '9:user' })); await view.findByRole('checkbox', { name: '새 밴드 멤버' }); assert.equal(oldSignal.aborted, true);
+  const view = render(app(api)); await waitFor(() => assert.ok(oldSignal)); view.rerender(app(api, { band: { ...band, id: 9, slug: 'next' }, workspaceKey: '9:user' })); fireEvent.click(await view.findByText('후보 계산 대상', { selector: 'summary' })); await view.findByRole('checkbox', { name: '새 밴드 멤버' }); assert.equal(oldSignal.aborted, true);
   await act(async () => old.resolve(snapshot())); assert.equal(view.queryByText('밴드 보컬') === null, true);
   let calls = 0; view.rerender(app({ requestJson: async () => { calls += 1; } }, { band: { ...band, membership: null }, workspaceKey: 'none' })); assert.equal(calls, 0);
 });

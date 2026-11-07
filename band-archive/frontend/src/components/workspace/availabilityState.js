@@ -57,6 +57,14 @@ export const candidates = (data, dates, selected, today = null) => {
     return { date, period, order, available, unavailable, all: available === ids.length, total: ids.length };
   })).sort((a, b) => Number(b.all) - Number(a.all) || b.available - a.available || a.date.localeCompare(b.date) || a.order - b.order);
 };
+export const candidateDates = (ranked, limit = 6) => {
+  const groups = new Map();
+  for (const candidate of ranked) {
+    if (!groups.has(candidate.date)) groups.set(candidate.date, { date: candidate.date, best: candidate, periods: [] });
+    groups.get(candidate.date).periods.push(candidate);
+  }
+  return [...groups.values()].slice(0, limit);
+};
 // A compact, deterministic change token, not a permission token or personal-data cache.
 export const availabilityFingerprint = (data, date) => JSON.stringify([data.generation, data.members.map((member) => member.membership_id).sort((a, b) => a - b), data.days.filter((day) => day.date === date).map((day) => [day.membership_id, day.revision]).sort((a, b) => a[0] - b[0])]);
 

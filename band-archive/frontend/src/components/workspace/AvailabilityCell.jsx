@@ -7,7 +7,7 @@ export default function AvailabilityCell({ data, dayIndex, date, period, mode, d
   const choices = slotChoices(data, date, period, dayIndex);
   const own = choices.find((entry) => entry.membership_id === data.my_membership_id);
   const symbol = mode === 'mine' ? binaryStatus(own?.status) === 'AVAILABLE' ? 'O' : 'X' : aggregateSlot(choices);
-  const active = mode === 'view' && popover?.date === date && popover.period === period;
+  const active = mode === 'view' && popover?.kind !== 'candidate' && popover?.date === date && popover.period === period;
   const pinned = active && popover.pinned;
   const description = mode === 'mine' ? STATUS_LABELS[symbol === 'O' ? 'AVAILABLE' : 'UNAVAILABLE'] : { O: '전원 가능', X: '전원 불가능', '△': '일부 가능·일부 불가능', '—': '집계할 활성 멤버 없음' }[symbol];
   const closeAndRestoreFocus = useCallback(() => {

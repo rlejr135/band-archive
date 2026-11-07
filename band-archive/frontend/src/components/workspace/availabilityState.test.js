@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { adjacentMonth, availabilityFingerprint, batchDays, calendarWeeks, candidates, dateRange, aggregateSlot, slotChoices, toggleDay, monthDays, validDay } from './availabilityState.js';
+import { adjacentMonth, availabilityFingerprint, batchDays, calendarWeeks, candidates, candidateDates, dateRange, aggregateSlot, slotChoices, toggleDay, monthDays, validDay } from './availabilityState.js';
 
 const data = { generation: 2, my_membership_id: 1, members: [{ membership_id: 1 }, { membership_id: 2 }], days: [{ membership_id: 1, date: '2026-10-17', revision: 3, morning: 'UNAVAILABLE', afternoon: 'UNKNOWN', evening: 'AVAILABLE' }] };
 test('availability date handling is timezone-independent, leap-safe and bounds 42 days', () => {
@@ -50,4 +50,11 @@ test('candidate change token contains no schedule states or notes and changes af
   assert.notEqual(token, availabilityFingerprint({ ...data, generation: 3 }, '2026-10-17'));
   assert.notEqual(token, availabilityFingerprint({ ...data, days: [{ ...data.days[0], revision: 4 }] }, '2026-10-17'));
   assert.notEqual(token, availabilityFingerprint({ ...data, members: data.members.slice(0, 1) }, '2026-10-17'));
+});
+
+test('candidate dates deduplicate the complete ranking before taking six dates and retain every period', () => {
+  const ranked = [{ date: '2026-11-08', period: 'evening' }, { date: '2026-11-08', period: 'morning' }, { date: '2026-11-08', period: 'afternoon' }, ...Array.from({ length: 6 }, (_, index) => ({ date: `2026-11-${String(index + 9).padStart(2, '0')}`, period: 'morning' }))];
+  const grouped = candidateDates(ranked);
+  assert.equal(grouped.length, 6); assert.equal(grouped[0].best.period, 'evening'); assert.equal(grouped[0].periods.length, 3);
+  assert.deepEqual(grouped.map((entry) => entry.date), ['2026-11-08', '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13']);
 });

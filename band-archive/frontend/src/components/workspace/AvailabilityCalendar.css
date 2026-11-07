@@ -25,10 +25,6 @@
 .availability-member-list span{font-size:.76rem;background:var(--color-background);border-radius:5px;padding:5px 7px}
 .availability-member-picks{border:0;padding:0;display:flex;flex-wrap:wrap;gap:12px}
 .availability-member-picks legend{font-size:.85rem;font-weight:700;margin-bottom:10px}
-.availability-candidates{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:12px}
-.availability-candidates li{display:flex;align-items:start;flex-direction:column;gap:7px;border-top:1px solid var(--color-border);padding-top:12px}
-.availability-candidates li>span{font-size:.8rem;color:var(--color-text-muted)}
-.availability-candidates .availability-all{color:var(--color-accent);font-weight:700}
 .availability-notes>label{margin:14px 0}
 .availability-notes textarea{min-height:88px;resize:vertical}
 .availability-notes>small{color:var(--color-text-muted);font-size:.75rem}
@@ -75,3 +71,24 @@
 @media(max-width:850px){.availability-layout{grid-template-columns:minmax(0,1fr)}}
 
 @media(max-width:600px){.availability-slot-popover{width:min(200px,calc(100vw - 64px))}}
+.availability-candidate-filter{margin:0 0 14px}
+.availability-candidate-filter summary{cursor:pointer;font-size:.82rem;color:var(--color-text-muted);font-weight:600}
+.availability-candidate-filter fieldset{margin-top:12px}
+.availability-candidate-dates{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px}
+.availability-candidate-date{position:relative;min-width:0}
+.availability-candidate-date-button{min-height:42px;font-variant-numeric:tabular-nums}
+.availability-candidate-date-button[aria-expanded=true]{border-color:var(--color-accent);color:var(--color-accent)}
+.availability-candidate-detail{position:absolute;z-index:70;overflow-y:auto;overscroll-behavior:contain;max-width:calc(100vw - 32px);box-sizing:border-box;padding:14px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);color:var(--color-text);box-shadow:var(--shadow-lg)}
+.availability-candidate-detail-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.availability-candidate-detail-heading>strong{font-size:1rem}
+.availability-candidate-detail-heading>button{padding:6px 10px;min-height:36px}
+.availability-candidate-periods{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.availability-candidate-periods>button{display:grid;gap:3px;min-height:48px;padding:8px 4px;font-size:.82rem}
+.availability-candidate-periods>button[aria-pressed=true]{background:var(--color-accent);color:var(--color-on-accent);border-color:var(--color-accent)}
+.availability-candidate-periods small{font-size:.68rem;font-weight:400}
+.availability-candidate-detail p{font-size:.78rem;line-height:1.5}
+.availability-candidate-members{list-style:none;margin:12px 0;padding:0;display:grid;gap:8px}
+.availability-candidate-members li{display:flex;justify-content:space-between;gap:12px;font-size:.82rem}
+.availability-candidate-members li>span{min-width:0;overflow-wrap:anywhere}
+.availability-candidate-members b{white-space:nowrap}
+.availability-candidate-confirm{min-height:42px;width:100%}
