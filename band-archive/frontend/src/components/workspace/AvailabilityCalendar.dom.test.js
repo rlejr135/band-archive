@@ -66,43 +66,113 @@ test('an empty active roster has no false all-unavailable aggregate', async () =
   fireEvent.click(slot(view)); assert.ok(within(view.getByRole('dialog')).getByText('활성 멤버가 없습니다.'));
 });
 
-test('one own-slot click sends one revision-aware day and keeps the calendar pending through confirming GET', async () => {
+test('draft clicks only preview locally, revert cleanly and batch multiple changed dates on explicit save', async () => {
   await load(); const write = deferred(); const confirm = deferred(); const calls = []; let gets = 0;
   const api = { requestJson: async (url, options = {}) => { calls.push({ url, options }); if (options.method) return write.promise; return gets++ === 0 ? snapshot() : confirm.promise; } };
   const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' }));
-  assert.match(slot(view).getAttribute('aria-label'), /내 일정 X 불가능/); assert.match(slot(view, date, 'evening').getAttribute('aria-label'), /내 일정 O 가능/);
-  fireEvent.click(slot(view)); fireEvent.click(slot(view));
-  assert.equal(calls.filter(({ options }) => options.method).length, 1);
+  const save = () => view.getByRole('button', { name: '저장', exact: true });
+  assert.equal(save().disabled, true); fireEvent.click(slot(view)); assert.equal(slot(view).textContent, '오전O'); assert.equal(save().disabled, false);
+  assert.equal(calls.length, 1); fireEvent.click(slot(view)); assert.equal(slot(view).textContent, '오전X'); assert.equal(save().disabled, true);
+  fireEvent.click(slot(view)); fireEvent.click(slot(view, dates[1], 'evening')); assert.equal(calls.length, 1);
+  const saveButton = save(); fireEvent.click(saveButton); fireEvent.click(saveButton); assert.equal(calls.filter(({ options }) => options.method).length, 1);
   const sent = calls.find(({ options }) => options.method); assert.match(sent.url, /\/me\/batch$/);
-  assert.deepEqual(JSON.parse(sent.options.body), { generation: 0, days: [{ date, revision: 3, morning: 'AVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }] });
-  assert.equal(slot(view).classList.contains('is-pending'), true); assert.equal(slot(view).getAttribute('aria-busy'), 'true'); assert.equal(view.getByRole('button', { name: '다음 달' }).disabled, true); assert.equal(view.getByRole('button', { name: '멤버 선택 여부 보기' }).disabled, true);
+  const expected = [{ date, revision: 3, morning: 'AVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }, { date: dates[1], revision: 0, morning: 'UNAVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }];
+  assert.deepEqual(JSON.parse(sent.options.body), { generation: 0, days: expected });
+  assert.equal(slot(view).getAttribute('aria-busy'), 'true'); assert.equal(view.getByRole('button', { name: '다음 달' }).disabled, true);
   await act(async () => write.resolve({ changed: true, generation: 0 })); await waitFor(() => assert.equal(gets, 2));
   assert.ok(view.container.querySelector('table')); assert.equal(slot(view).disabled, true);
-  await act(async () => confirm.resolve(snapshot({ days: [{ ...snapshot().days[0], morning: 'AVAILABLE', revision: 4 }] })));
-  await waitFor(() => assert.equal(slot(view).disabled, false)); assert.equal(slot(view).textContent, '오전O'); assert.equal(slot(view).getAttribute('aria-busy'), 'false');
+  await act(async () => confirm.resolve(snapshot({ days: expected.map((row) => ({ ...row, membership_id: 12, revision: row.revision + 1 })) })));
+  await waitFor(() => assert.equal(slot(view).disabled, false)); assert.equal(slot(view).textContent, '오전O'); assert.equal(save().disabled, true);
 });
-
 for (const status of [409, 500]) test(`failed toggle ${status} reloads latest without automatically repeating PUT`, async () => {
   await load(); let gets = 0; let writes = 0;
   const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) { writes += 1; const error = new Error('failed'); error.status = status; throw error; } return snapshot({ generation: gets++ ? 7 : 0 }); } }));
-  await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+  await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '저장', exact: true }));
   await waitFor(() => assert.equal(gets, 2)); await waitFor(() => assert.equal(slot(view).disabled, false)); assert.equal(writes, 1);
-  assert.ok(view.getByText(status === 409 ? /다른 기기에서 수정했거나/ : /자동으로 재시도하지 않습니다/));
+  assert.ok(view.getByText(/다른 기기에서 수정했거나/)); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true);
 });
 
 test('auth loss during toggle hides schedule data and does not replay a write', async () => {
   await load(); let writes = 0;
   const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) { writes += 1; const error = new Error('forbidden'); error.status = 403; throw error; } return snapshot(); } }));
-  await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+  await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '저장', exact: true }));
   await view.findByRole('alert'); assert.equal(view.container.querySelector('table') === null, true); assert.equal(view.queryByText('밴드 보컬') === null, true); assert.equal(writes, 1);
 });
 
 test('a failed confirming GET hides stale data until manual reload and never repeats PUT', async () => {
   await load(); let gets = 0; let writes = 0;
   const api = { requestJson: async (_url, options = {}) => { if (options.method) { writes += 1; return {}; } gets += 1; if (gets === 2) throw new Error('GET unavailable'); return snapshot(); } };
-  const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+  const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '저장', exact: true }));
   await view.findByRole('alert'); assert.equal(view.container.querySelector('table') === null, true); assert.equal(writes, 1);
   fireEvent.click(view.getByRole('button', { name: '다시 시도', exact: true })); await ready(view); assert.equal(writes, 1); assert.equal(gets, 3);
+});
+
+test('network failure preserves a verifiably unchanged draft for manual retry only', async () => {
+  await load(); let writes = 0; let gets = 0;
+  const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) { writes += 1; throw new TypeError('connection lost'); } gets += 1; return snapshot(); } }));
+  await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+  fireEvent.click(view.getByRole('button', { name: '저장', exact: true })); await view.findByText(/초안을 유지했습니다/);
+  assert.equal(writes, 1); assert.equal(gets, 2); assert.equal(slot(view).textContent, '오전O'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
+});
+
+test('ambiguous PUT plus unavailable GET stays locked until read-only verification confirms the submitted values', async () => {
+  await load(); let gets = 0; let writes = 0;
+  const api = { requestJson: async (_url, options = {}) => { if (options.method) { writes += 1; throw new TypeError('response lost'); } gets += 1; if (gets === 2) throw new TypeError('GET failed'); return gets === 1 ? snapshot() : snapshot({ days: [{ ...snapshot().days[0], morning: 'AVAILABLE', revision: 4 }] }); } };
+  const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '저장', exact: true }));
+  await view.findByRole('alert'); assert.equal(view.queryByRole('button', { name: '저장', exact: true }) === null, true); assert.equal(writes, 1);
+  fireEvent.click(view.getByRole('button', { name: '다시 시도', exact: true })); await ready(view);
+  assert.equal(slot(view).textContent, '오전O'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true); assert.equal(writes, 1); assert.equal(gets, 3);
+});
+
+test('API identity refresh cannot silently rebase a dirty draft onto a new reset generation', async () => {
+  await load(); let writes = 0; const api = { requestJson: async () => snapshot() };
+  const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+  view.rerender(app({ requestJson: async (_url, options = {}) => { if (options.method) writes += 1; return snapshot({ generation: 9 }); } }));
+  await view.findByText(/최신 상태를 복구했으니 다시 선택/); await ready(view);
+  assert.equal(slot(view).textContent, '오전X'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true); assert.equal(writes, 0);
+});
+
+test('discard guards protect navigation while independent note saving preserves availability drafts', async () => {
+  await load(); const calls = []; const previous = window.confirm; window.confirm = () => false;
+  try {
+    const view = render(app({ requestJson: async (_url, options = {}) => { calls.push(options); return snapshot(); } })); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+    const beforeUnload = new window.Event('beforeunload', { cancelable: true }); window.dispatchEvent(beforeUnload); assert.equal(beforeUnload.defaultPrevented, true);
+    fireEvent.click(view.getByRole('button', { name: '멤버 선택 여부 보기' })); fireEvent.click(view.getByRole('button', { name: '다음 달' })); fireEvent.click(view.getByRole('button', { name: '새로고침' })); fireEvent.click(view.getByRole('link', { name: '확정 일정' }));
+    assert.equal(view.getByRole('button', { name: '내 일정 선택하기' }).getAttribute('aria-pressed'), 'true'); assert.equal(slot(view).textContent, '오전O'); assert.equal(calls.length, 1);
+    fireEvent.click(view.getByText('선택 개인 일정 메모')); const user = userEvent.setup({ document: dom.window.document }); await user.type(view.getByLabelText('개인 일정 (선택)'), '메모 초안'); fireEvent.click(view.getByRole('button', { name: '메모 저장' }));
+    await waitFor(() => assert.equal(calls.length, 3)); await waitFor(() => assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false));
+    assert.equal(slot(view).textContent, '오전O');
+    assert.equal(calls.filter((options) => options.method && JSON.parse(options.body).days).length, 0);
+    assert.equal(calls.filter((options) => options.method && JSON.parse(options.body).body === '메모 초안').length, 1);
+    window.confirm = () => true; fireEvent.click(view.getByRole('button', { name: '변경 취소' }));
+    assert.equal(slot(view).textContent, '오전X'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true);
+    const cleanUnload = new window.Event('beforeunload', { cancelable: true }); window.dispatchEvent(cleanUnload); assert.equal(cleanUnload.defaultPrevented, false);
+  } finally { window.confirm = previous; }
+});
+
+test('candidate details stay persisted and cancelling a candidate transition never writes an availability draft', async () => {
+  await load(); let reads = 0; let writes = 0; const previous = window.confirm; window.confirm = () => false;
+  try {
+    const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) writes += 1; else reads += 1; return snapshot(); } }, { band: { ...band, membership: { ...band.membership, role: 'owner' } } }));
+    await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' }));
+    const today = seoulToday(); fireEvent.click(slot(view, today, 'afternoon')); assert.equal(slot(view, today, 'afternoon').textContent, '오후O');
+    fireEvent.click(view.getByRole('button', { name: `${today} 후보 시간대별 멤버 가능 여부 보기` }));
+    const detail = view.getByRole('dialog', { name: `${today} 후보 상세` }); fireEvent.click(within(detail).getByRole('button', { name: /오후 가능/ }));
+    assert.equal(within(detail).getAllByText('X 불가능').length, 2);
+    fireEvent.click(within(detail).getByRole('button', { name: `${today} 오후 확인` }));
+    assert.equal(reads, 1); assert.equal(writes, 0); assert.equal(slot(view, today, 'afternoon').textContent, '오후O');
+    assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
+  } finally { window.confirm = previous; }
+});
+
+test('cancelling a reset discard confirmation preserves dirty days and never resets remotely', async () => {
+  await load(); let writes = 0; const previous = window.confirm; let confirms = 0; window.confirm = () => ++confirms === 1;
+  try {
+    const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) writes += 1; return snapshot({ can_reset: true }); } }));
+    await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+    fireEvent.click(view.getByRole('button', { name: '이번 달 내 상태 초기화' }));
+    assert.equal(confirms, 2); assert.equal(writes, 0); assert.equal(slot(view).textContent, '오전O'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
+  } finally { window.confirm = previous; }
 });
 
 test('malformed existing day fields are rejected instead of silently overwriting another period', async () => {
@@ -137,7 +207,7 @@ test('self and owner resets remain explicit and use generation without changing 
 test('account change aborts a pending toggle and ignores its late completion', async () => {
   await load(); const write = deferred(); let signal;
   const api = { requestJson: async (_url, options = {}) => { if (options.method) { signal = options.signal; return write.promise; } return snapshot(); } };
-  const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
+  const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '저장', exact: true }));
   view.rerender(app(api, { workspaceKey: '8:other-user', band: { ...band, membership: null } })); assert.equal(signal.aborted, true);
   await act(async () => write.resolve({ changed: true })); assert.equal(view.container.querySelector('table') === null, true);
 });

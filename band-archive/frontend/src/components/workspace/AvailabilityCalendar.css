@@ -91,4 +91,6 @@
 .availability-candidate-members li{display:flex;justify-content:space-between;gap:12px;font-size:.82rem}
 .availability-candidate-members li>span{min-width:0;overflow-wrap:anywhere}
 .availability-candidate-members b{white-space:nowrap}
-.availability-candidate-confirm{min-height:42px;width:100%}
+.availability-candidate-confirm{min-height:42px;width:100%}.availability-draft-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:14px 0}
+.availability-draft-actions>span{flex:1 1 100%;font-size:.82rem;color:var(--color-text-muted)}
+.availability-draft-actions button{min-height:42px}
