@@ -13,6 +13,7 @@ export const toggleDraft = (data, drafts, date, period) => {
   return next;
 };
 export const draftRows = (drafts) => Object.values(drafts).sort((a, b) => a.date.localeCompare(b.date));
+export const isDraftChanged = (data, drafts, date, period) => Boolean(drafts[date] && binaryStatus(drafts[date][period]) !== binaryStatus(ownDay(data, date)[period]));
 export const previewDraft = (data, drafts) => !data ? data : ({ ...data, days: [...data.days.filter((row) => row.membership_id !== data.my_membership_id || !drafts[row.date]), ...draftRows(drafts).map((row) => ({ ...row, membership_id: data.my_membership_id }))] });
 
 export const reconcileDraft = (baseline, drafts, latest) => {

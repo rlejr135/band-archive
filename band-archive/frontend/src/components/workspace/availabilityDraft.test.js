@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { draftRows, previewDraft, reconcileDraft, toggleDraft } from './availabilityDraft.js';
+import { draftRows, isDraftChanged, previewDraft, reconcileDraft, toggleDraft } from './availabilityDraft.js';
 const data = { band_id: 1, generation: 2, my_membership_id: 7, members: [{ membership_id: 7 }], days: [{ membership_id: 7, date: '2026-11-08', revision: 4, morning: 'UNKNOWN', afternoon: 'AVAILABLE', evening: 'UNAVAILABLE' }] };
 test('draft toggles preserve original revisions, remove reverted days and never change baseline', () => {
   const first = toggleDraft(data, {}, '2026-11-08', 'morning');
+  assert.equal(isDraftChanged(data, first, '2026-11-08', 'morning'), true);
+  assert.equal(isDraftChanged(data, first, '2026-11-08', 'afternoon'), false);
+  const unavailable = toggleDraft(data, first, '2026-11-08', 'afternoon');
+  assert.equal(isDraftChanged(data, unavailable, '2026-11-08', 'afternoon'), true);
+  assert.equal(isDraftChanged(data, toggleDraft(data, first, '2026-11-08', 'morning'), '2026-11-08', 'morning'), false);
   const both = toggleDraft(data, first, '2026-11-09', 'evening');
   assert.deepEqual(draftRows(both), [{ date: '2026-11-08', revision: 4, morning: 'AVAILABLE', afternoon: 'AVAILABLE', evening: 'UNAVAILABLE' }, { date: '2026-11-09', revision: 0, morning: 'UNAVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }]);
   assert.equal(data.days[0].morning, 'UNKNOWN'); assert.equal(previewDraft(data, both).days[0].morning, 'AVAILABLE');

@@ -34,6 +34,7 @@ test('Sunday-first view aggregates all active members and popovers use band name
   assert.equal(view.container.querySelectorAll('[data-availability-slot]').length, dates.length * 3);
   assert.equal(view.container.querySelectorAll('.availability-empty-day button').length, 0);
   assert.equal(slot(view).textContent, '오전X'); assert.equal(slot(view, date, 'evening').textContent, '저녁△');
+  assert.equal(view.container.querySelectorAll('.availability-slot-button.is-dirty').length, 0);
   assert.match(slot(view).getAttribute('aria-label'), /전원 불가능/); assert.match(slot(view, date, 'evening').getAttribute('aria-label'), /일부 가능·일부 불가능/);
   fireEvent.pointerEnter(slot(view, date, 'evening').parentElement, { pointerType: 'mouse' });
   const tip = view.getByRole('tooltip'); assert.ok(within(tip).getByText('밴드 베이스 (나)')); assert.ok(within(tip).getByText('밴드 보컬'));
@@ -72,7 +73,13 @@ test('draft clicks only preview locally, revert cleanly and batch multiple chang
   const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' }));
   const save = () => view.getByRole('button', { name: '저장', exact: true });
   assert.equal(save().disabled, true); fireEvent.click(slot(view)); assert.equal(slot(view).textContent, '오전O'); assert.equal(save().disabled, false);
+  assert.equal(slot(view).classList.contains('is-dirty'), true); assert.match(slot(view).getAttribute('aria-label'), /저장 전 변경/);
+  assert.equal(slot(view).querySelector('.availability-dirty-marker') !== null, true);
+  assert.equal(slot(view, date, 'afternoon').classList.contains('is-dirty'), false); assert.equal(slot(view, date, 'evening').classList.contains('is-dirty'), false);
+  fireEvent.click(slot(view, date, 'evening')); assert.equal(slot(view, date, 'evening').textContent, '저녁X'); assert.equal(slot(view, date, 'evening').classList.contains('is-dirty'), true);
+  fireEvent.click(slot(view, date, 'evening')); assert.equal(slot(view, date, 'evening').classList.contains('is-dirty'), false); assert.equal(slot(view).classList.contains('is-dirty'), true);
   assert.equal(calls.length, 1); fireEvent.click(slot(view)); assert.equal(slot(view).textContent, '오전X'); assert.equal(save().disabled, true);
+  assert.equal(slot(view).classList.contains('is-dirty'), false); assert.doesNotMatch(slot(view).getAttribute('aria-label'), /저장 전 변경/);
   fireEvent.click(slot(view)); fireEvent.click(slot(view, dates[1], 'evening')); assert.equal(calls.length, 1);
   const saveButton = save(); fireEvent.click(saveButton); fireEvent.click(saveButton); assert.equal(calls.filter(({ options }) => options.method).length, 1);
   const sent = calls.find(({ options }) => options.method); assert.match(sent.url, /\/me\/batch$/);
@@ -83,6 +90,7 @@ test('draft clicks only preview locally, revert cleanly and batch multiple chang
   assert.ok(view.container.querySelector('table')); assert.equal(slot(view).disabled, true);
   await act(async () => confirm.resolve(snapshot({ days: expected.map((row) => ({ ...row, membership_id: 12, revision: row.revision + 1 })) })));
   await waitFor(() => assert.equal(slot(view).disabled, false)); assert.equal(slot(view).textContent, '오전O'); assert.equal(save().disabled, true);
+  assert.equal(view.container.querySelectorAll('.availability-slot-button.is-dirty').length, 0);
 });
 for (const status of [409, 500]) test(`failed toggle ${status} reloads latest without automatically repeating PUT`, async () => {
   await load(); let gets = 0; let writes = 0;
@@ -90,6 +98,7 @@ for (const status of [409, 500]) test(`failed toggle ${status} reloads latest wi
   await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '저장', exact: true }));
   await waitFor(() => assert.equal(gets, 2)); await waitFor(() => assert.equal(slot(view).disabled, false)); assert.equal(writes, 1);
   assert.ok(view.getByText(/다른 기기에서 수정했거나/)); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true);
+  assert.equal(view.container.querySelectorAll('.availability-slot-button.is-dirty').length, 0);
 });
 
 test('auth loss during toggle hides schedule data and does not replay a write', async () => {
@@ -113,6 +122,7 @@ test('network failure preserves a verifiably unchanged draft for manual retry on
   await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); fireEvent.click(slot(view));
   fireEvent.click(view.getByRole('button', { name: '저장', exact: true })); await view.findByText(/초안을 유지했습니다/);
   assert.equal(writes, 1); assert.equal(gets, 2); assert.equal(slot(view).textContent, '오전O'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, false);
+  assert.equal(slot(view).classList.contains('is-dirty'), true);
 });
 
 test('ambiguous PUT plus unavailable GET stays locked until read-only verification confirms the submitted values', async () => {
@@ -146,6 +156,7 @@ test('discard guards protect navigation while independent note saving preserves 
     assert.equal(calls.filter((options) => options.method && JSON.parse(options.body).body === '메모 초안').length, 1);
     window.confirm = () => true; fireEvent.click(view.getByRole('button', { name: '변경 취소' }));
     assert.equal(slot(view).textContent, '오전X'); assert.equal(view.getByRole('button', { name: '저장', exact: true }).disabled, true);
+    assert.equal(view.container.querySelectorAll('.availability-slot-button.is-dirty').length, 0);
     const cleanUnload = new window.Event('beforeunload', { cancelable: true }); window.dispatchEvent(cleanUnload); assert.equal(cleanUnload.defaultPrevented, false);
   } finally { window.confirm = previous; }
 });
