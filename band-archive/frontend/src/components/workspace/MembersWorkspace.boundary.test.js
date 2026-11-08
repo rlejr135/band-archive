@@ -12,7 +12,9 @@ test('member screens and personal playback depend on leaf modules and App uses t
   ]);
   for (const source of [members, detail, playback, unavailable]) {
     assert.doesNotMatch(source, /from ['"][^'"]*BandWorkspace\.jsx['"]/);
-    assert.doesNotMatch(source, /import ['"][^'"]*\.css['"]/);
+    // The roster owns its icon-button style; shared shell CSS stays outside these leaves.
+    const importsWithoutOwnedStyle = source === members ? source.replace("import './MembersWorkspace.css';", '') : source;
+    assert.doesNotMatch(importsWithoutOwnedStyle, /import ['"][^'"]*\.css['"]/);
   }
   for (const name of ['MembersWorkspace', 'MemberDetailWorkspace']) {
     assert.match(app, new RegExp(`import \\{ ${name} \\} from './components/workspace/members/${name}\\.jsx'`));
