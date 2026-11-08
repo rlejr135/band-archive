@@ -30,6 +30,8 @@ test('Sunday-first view aggregates all active members and popovers use band name
   assert.equal(calendarCard.firstElementChild === modes, true);
   assert.equal(modes.nextElementSibling === view.getByRole('heading', { name: '멤버 가능 시간' }), true);
   assert.equal(view.getAllByRole('group', { name: '달력 모드' }).length, 1);
+  assert.equal(view.container.querySelector('.availability-overview-grid') !== null, true);
+  assert.equal(view.container.querySelector('.availability-editor-grid') === null, true);
   assert.deepEqual([...view.container.querySelectorAll('thead th')].map((th) => th.textContent), ['일', '월', '화', '수', '목', '금', '토']);
   assert.equal(view.container.querySelectorAll('[data-availability-slot]').length, dates.length * 3);
   assert.equal(view.container.querySelectorAll('.availability-empty-day button').length, 0);
@@ -57,6 +59,7 @@ test('touch pin toggles, closes explicitly or outside, and clears on mode and mo
   fireEvent.click(slot(view)); const outside = view.getByRole('button', { name: '다음 달' }); outside.focus(); fireEvent.pointerDown(outside);
   assert.equal(view.queryByRole('dialog') === null, true); assert.equal(document.activeElement === outside, true);
   fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' })); assert.equal(view.queryByRole('dialog') === null, true);
+  assert.equal(view.container.querySelector('.availability-editor-grid') !== null, true);
   fireEvent.click(view.getByRole('button', { name: '멤버 선택 여부 보기' })); fireEvent.click(slot(view)); fireEvent.click(view.getByRole('button', { name: '다음 달' }));
   await waitFor(() => assert.equal(view.queryByRole('dialog') === null, true));
 });
