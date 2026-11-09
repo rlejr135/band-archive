@@ -75,6 +75,11 @@ test('draft clicks only preview locally, revert cleanly and batch multiple chang
   const api = { requestJson: async (url, options = {}) => { calls.push({ url, options }); if (options.method) return write.promise; return gets++ === 0 ? snapshot() : confirm.promise; } };
   const view = render(app(api)); await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' }));
   const save = () => view.getByRole('button', { name: '저장', exact: true });
+  assert.equal(slot(view, dates[1], 'morning').textContent, '오전O');
+  assert.equal(slot(view, dates[1], 'afternoon').textContent, '오후O');
+  assert.equal(slot(view, dates[1], 'evening').textContent, '저녁O');
+  assert.equal(view.container.querySelectorAll('.availability-slot-button.is-dirty').length, 0);
+  assert.equal(calls.length, 1);
   assert.equal(save().disabled, true); fireEvent.click(slot(view)); assert.equal(slot(view).textContent, '오전O'); assert.equal(save().disabled, false);
   assert.equal(slot(view).classList.contains('is-dirty'), true); assert.match(slot(view).getAttribute('aria-label'), /저장 전 변경/);
   assert.equal(slot(view).querySelector('.availability-dirty-marker') !== null, true);
@@ -86,7 +91,7 @@ test('draft clicks only preview locally, revert cleanly and batch multiple chang
   fireEvent.click(slot(view)); fireEvent.click(slot(view, dates[1], 'evening')); assert.equal(calls.length, 1);
   const saveButton = save(); fireEvent.click(saveButton); fireEvent.click(saveButton); assert.equal(calls.filter(({ options }) => options.method).length, 1);
   const sent = calls.find(({ options }) => options.method); assert.match(sent.url, /\/me\/batch$/);
-  const expected = [{ date, revision: 3, morning: 'AVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }, { date: dates[1], revision: 0, morning: 'UNAVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }];
+  const expected = [{ date, revision: 3, morning: 'AVAILABLE', afternoon: 'UNAVAILABLE', evening: 'AVAILABLE' }, { date: dates[1], revision: 0, morning: 'AVAILABLE', afternoon: 'AVAILABLE', evening: 'UNAVAILABLE' }];
   assert.deepEqual(JSON.parse(sent.options.body), { generation: 0, days: expected });
   assert.equal(slot(view).getAttribute('aria-busy'), 'true'); assert.equal(view.getByRole('button', { name: '다음 달' }).disabled, true);
   await act(async () => write.resolve({ changed: true, generation: 0 })); await waitFor(() => assert.equal(gets, 2));
@@ -165,11 +170,11 @@ test('discard guards protect navigation while independent note saving preserves 
 });
 
 test('candidate details stay persisted and cancelling a candidate transition never writes an availability draft', async () => {
-  await load(); let reads = 0; let writes = 0; const previous = window.confirm; window.confirm = () => false;
+  await load(); let reads = 0; let writes = 0; const previous = window.confirm; window.confirm = () => false; const today = seoulToday();
   try {
-    const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) writes += 1; else reads += 1; return snapshot(); } }, { band: { ...band, membership: { ...band.membership, role: 'owner' } } }));
+    const view = render(app({ requestJson: async (_url, options = {}) => { if (options.method) writes += 1; else reads += 1; return snapshot({ days: [{ ...snapshot().days[0], date: today }] }); } }, { band: { ...band, membership: { ...band.membership, role: 'owner' } } }));
     await ready(view); fireEvent.click(view.getByRole('button', { name: '내 일정 선택하기' }));
-    const today = seoulToday(); fireEvent.click(slot(view, today, 'afternoon')); assert.equal(slot(view, today, 'afternoon').textContent, '오후O');
+    fireEvent.click(slot(view, today, 'afternoon')); assert.equal(slot(view, today, 'afternoon').textContent, '오후O');
     fireEvent.click(view.getByRole('button', { name: `${today} 후보 시간대별 멤버 가능 여부 보기` }));
     const detail = view.getByRole('dialog', { name: `${today} 후보 상세` }); fireEvent.click(within(detail).getByRole('button', { name: /오후 가능/ }));
     assert.equal(within(detail).getAllByText('X 불가능').length, 2);

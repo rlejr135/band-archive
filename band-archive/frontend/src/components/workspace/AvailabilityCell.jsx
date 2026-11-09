@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useId, useRef } from 'react';
 import { aggregateSlot, binaryStatus, PERIOD_LABELS, slotChoices, STATUS_LABELS } from './availabilityState.js';
+import { ownDraftDay } from './availabilityDraft.js';
 
 export default function AvailabilityCell({ data, dayIndex, date, period, mode, disabled, pending, changed = false, popover, setPopover, onToggle, onDate }) {
   const root = useRef(null); const trigger = useRef(null); const id = useId();
   const suppressFocus = useRef(false);
   const choices = slotChoices(data, date, period, dayIndex);
-  const own = choices.find((entry) => entry.membership_id === data.my_membership_id);
-  const symbol = mode === 'mine' ? binaryStatus(own?.status) === 'AVAILABLE' ? 'O' : 'X' : aggregateSlot(choices);
+  const symbol = mode === 'mine' ? binaryStatus(ownDraftDay(data, date)[period]) === 'AVAILABLE' ? 'O' : 'X' : aggregateSlot(choices);
   const active = mode === 'view' && popover?.kind !== 'candidate' && popover?.date === date && popover.period === period;
   const pinned = active && popover.pinned;
   const dirty = mode === 'mine' && changed;
