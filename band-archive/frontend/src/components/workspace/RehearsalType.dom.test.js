@@ -49,21 +49,53 @@ test('rehearsal type helper uses the fixed labels and treats absent or unknown v
   assert.equal(rehearsalTypeLabel('LIVE'), '라이브공연');
 });
 
-test('current rehearsal form defaults to REGULAR and submits scoped type and date', async () => {
+test('current rehearsal form defaults to REGULAR and submits the selected date and time', async () => {
   await load(); const mock = mockApi(); let saved = 0;
   const view = render(app(createElement(form, { onCancel: () => {}, onDone: () => { saved += 1; } }), mock.api));
   assert.equal(view.getByLabelText('합주 유형').value, 'REGULAR');
   await user.type(view.getByLabelText('제목'), '정기 합주');
-  await user.type(view.getByLabelText('날짜'), '2026-10-30');
+  const date = view.getByLabelText('날짜');
+  const time = view.getByLabelText('시간');
+  assert.equal(date.type, 'date');
+  assert.equal(date.required, true);
+  assert.equal(time.type, 'time');
+  assert.equal(time.required, false);
+  await user.type(date, '2026-10-30');
+  await user.type(time, '19:30');
   await user.click(view.getByRole('button', { name: '저장', exact: true }));
   await waitFor(() => assert.equal(mock.writes.length, 1));
   assert.equal(mock.writes[0].method, 'POST');
   assert.equal(mock.writes[0].path, bandWorkspacePaths.rehearsals(8));
   assert.equal(mock.writes[0].body.rehearsal_type, 'REGULAR');
   assert.equal(mock.writes[0].body.date, '2026-10-30');
+  assert.equal(mock.writes[0].body.time, '19:30');
   assert.deepEqual(mock.writes[0].body.song_ids, []);
   assert.equal(Object.hasOwn(mock.writes[0].body, 'band_id'), false);
   assert.equal(saved, 1);
+});
+
+test('an existing free-text or second-precision time is preserved until selected or cleared', async () => {
+  await load();
+  for (const { time, selectTime, clearTime, expected } of [
+    { time: '저녁 7시 반', expected: '저녁 7시 반' },
+    { time: '19:30:45', expected: '19:30:45' },
+    { time: '저녁 7시 반', selectTime: '20:15', expected: '20:15' },
+    { time: '저녁 7시 반', clearTime: true, expected: '' },
+  ]) {
+    const mock = mockApi();
+    const item = { id: 44, title: '기존 일정', date: '2026-10-20', rehearsal_type: 'REGULAR', time, songs: [] };
+    const view = render(app(createElement(form, { item, onCancel: () => {}, onDone: () => {} }), mock.api));
+    const input = view.getByLabelText('시간');
+    assert.equal(input.value, '');
+    assert.match(view.getByText(/기존 시간은/).textContent, new RegExp(time));
+    if (selectTime) await user.type(input, selectTime);
+    if (clearTime) await user.click(view.getByRole('button', { name: '기존 시간 지우기' }));
+    await user.click(view.getByRole('button', { name: '저장', exact: true }));
+    await waitFor(() => assert.equal(mock.writes.length, 1));
+    assert.equal(mock.writes[0].method, 'PATCH');
+    assert.equal(mock.writes[0].body.time, expected);
+    view.unmount();
+  }
 });
 
 test('current rehearsal edit preserves an absent or unknown type while keeping existing fields', async () => {

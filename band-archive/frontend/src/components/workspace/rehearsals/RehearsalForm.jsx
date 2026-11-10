@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useServicePolicy } from '../../../context/ServicePolicyContext.jsx';
 import { reviewPublicVisibility } from '../../../services/uploadPolicy.js';
@@ -9,6 +9,8 @@ import BandPlacePicker from '../BandPlacePicker.jsx';
 import { useWorkspace } from '../WorkspaceContext.jsx';
 import { RehearsalSongPicker } from './RehearsalSongPicker.jsx';
 import './RehearsalWorkspace.css';
+
+const minuteTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 export const RehearsalForm = ({ item, onDone, onCancel, onSavingChange }) => {
   const { config } = useServicePolicy();
@@ -22,6 +24,10 @@ export const RehearsalForm = ({ item, onDone, onCancel, onSavingChange }) => {
   const originalRehearsalType = useRef(item ? normalizeRehearsalType(item.rehearsal_type) : 'REGULAR');
   const initial = { title: item?.title || '', date: item?.date || candidate.current?.date || '', start_date: item?.start_date || '', end_date: item?.end_date || '', time: item?.time || '', location: item?.location || '', memo: item?.memo || '', color: item?.color || '', rehearsal_type: item ? normalizeRehearsalType(item.rehearsal_type) : 'REGULAR', visibility: item?.visibility || band.default_visibility || 'MEMBERS', song_ids: item?.songs?.map((song) => String(song.id)) || [] };
   const [value, setValue] = useState(initial);
+  // Older schedules can contain free text or seconds. Keep that exact value until edited.
+  const pickerTime = minuteTime.test(value.time) ? value.time : '';
+  const legacyTime = Boolean(value.time && !pickerTime);
+  const legacyTimeHint = useId();
 
   const change = (event) => setValue((previous) => ({ ...previous, [event.target.name]: event.target.value }));
   const save = async (event) => {
@@ -51,5 +57,33 @@ export const RehearsalForm = ({ item, onDone, onCancel, onSavingChange }) => {
     } }
     finally { savingRef.current = false; if (live.current) { setSaving(false); onSavingChange?.(false); } }
   };
-  return <form className="workspace-form" onSubmit={save}><h2>{item ? '수정' : '새로 추가'}</h2>{candidate.current && <p className="availability-notice">조율 후보: {candidate.current.date} · {PERIOD_LABELS[candidate.current.period]}. 정확한 합주 시각은 직접 입력해 주세요. 저장 직전 가능 상태를 다시 확인하지만 예약이나 참석을 보장하지는 않습니다.</p>}<label>제목<input required name="title" value={value.title} onChange={change} /></label><label>합주 유형<select name="rehearsal_type" value={value.rehearsal_type} onChange={change}>{REHEARSAL_TYPES.map(([type, text]) => <option key={type} value={type}>{type === 'UNCLASSIFIED' ? `${text} (유형 선택)` : text}</option>)}</select></label>{value.rehearsal_type === 'UNCLASSIFIED' && <p className="workspace-muted">기존 합주 유형은 추정하지 않았습니다. 실제 유형을 선택해 주세요.</p>}<label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label><label>시간<input name="time" value={value.time} onChange={change} /></label><label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label><BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} /><RehearsalSongPicker bandId={band.id} api={api} initialSongs={item?.songs} selectedIds={value.song_ids} onChange={(song_ids) => setValue((previous) => ({ ...previous, song_ids }))} /><label>메모<textarea name="memo" value={value.memo} onChange={change} /></label><label>공개 범위<select name="visibility" value={value.visibility} onChange={change}><option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option></select></label>{error && <p className="workspace-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button><button className="primary-btn" disabled={saving || resultUnknown}>{saving ? '저장 중…' : '저장'}</button></div></form>;
+  return <form className="workspace-form rehearsal-form" onSubmit={save}>
+    <h2>{item ? '수정' : '새로 추가'}</h2>
+    {candidate.current && <p className="availability-notice">조율 후보: {candidate.current.date} · {PERIOD_LABELS[candidate.current.period]}. 정확한 합주 시각은 직접 선택해 주세요. 저장 직전 가능 상태를 다시 확인하지만 예약이나 참석을 보장하지는 않습니다.</p>}
+    <label>제목<input required name="title" value={value.title} onChange={change} /></label>
+    <label>합주 유형<select name="rehearsal_type" value={value.rehearsal_type} onChange={change}>
+      {REHEARSAL_TYPES.map(([type, text]) => <option key={type} value={type}>{type === 'UNCLASSIFIED' ? `${text} (유형 선택)` : text}</option>)}
+    </select></label>
+    {value.rehearsal_type === 'UNCLASSIFIED' && <p className="workspace-muted">기존 합주 유형은 추정하지 않았습니다. 실제 유형을 선택해 주세요.</p>}
+    <label>날짜<input required type="date" name="date" value={value.date} onChange={change} /></label>
+    <label>시간<input type="time" name="time" value={pickerTime} aria-describedby={legacyTime ? legacyTimeHint : undefined} onChange={(event) => {
+      if (event.target.value || !legacyTime) change(event);
+    }} /></label>
+    {legacyTime && <div className="rehearsal-legacy-time">
+      <p id={legacyTimeHint} className="workspace-muted">기존 시간은 ‘{value.time}’입니다. 새 시간을 선택하면 바뀝니다.</p>
+      <button type="button" className="secondary-btn" disabled={saving} onClick={() => setValue((previous) => ({ ...previous, time: '' }))}>기존 시간 지우기</button>
+    </div>}
+    <label>장소<input name="location" value={value.location} maxLength={200} onChange={change} /></label>
+    <BandPlacePicker bandId={band.id} workspaceKey={workspaceKey} api={api} onSelect={(location) => setValue((previous) => ({ ...previous, location }))} />
+    <RehearsalSongPicker bandId={band.id} api={api} initialSongs={item?.songs} selectedIds={value.song_ids} onChange={(song_ids) => setValue((previous) => ({ ...previous, song_ids }))} />
+    <label>메모<textarea name="memo" value={value.memo} onChange={change} /></label>
+    <label>공개 범위<select name="visibility" value={value.visibility} onChange={change}>
+      <option value="MEMBERS">멤버 전용</option><option value="PUBLIC">공개</option>
+    </select></label>
+    {error && <p className="workspace-error" role="alert">{error}</p>}
+    <div className="form-actions">
+      <button type="button" className="secondary-btn" disabled={saving} onClick={onCancel}>취소</button>
+      <button className="primary-btn" disabled={saving || resultUnknown}>{saving ? '저장 중…' : '저장'}</button>
+    </div>
+  </form>;
 };

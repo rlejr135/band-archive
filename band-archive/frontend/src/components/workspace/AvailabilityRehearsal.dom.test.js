@@ -35,7 +35,7 @@ test('candidate date prefills but exact time stays blank; changed availability n
     const view = render(app()); const title = await view.findByLabelText('제목'); assert.equal(view.getByLabelText('날짜').value, day); assert.equal(view.getByLabelText('시간').value, '');
     await userEvent.type(title, '다음 합주'); fireEvent.submit(title.closest('form'));
     await waitFor(() => assert.equal(confirms, 1)); assert.equal(mock.calls.filter(({ options }) => options.method === 'POST').length, 0);
-    assert.ok(view.getByText(/정확한 합주 시각은 직접 입력/));
+    assert.ok(view.getByText(/정확한 합주 시각은 직접 선택/));
   } finally { mock.restore(); window.confirm = previousConfirm; }
 });
 test('unknown candidate creation result blocks blind retry rather than making duplicate rehearsals', async () => {
