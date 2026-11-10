@@ -214,3 +214,16 @@ for (const kind of ['song', 'rehearsal']) {
     assert.equal(visible(view, 'Strict abandoned media'), false);
   });
 }
+
+for (const kind of ['song', 'rehearsal']) {
+  test(`${kind} detail shows empty media and preserves a later refresh failure`, async () => {
+    await load();
+    const initial = makeApi(() => page([]));
+    const view = render(detail(kind, initial.api));
+    await view.findByText(/표시할 미디어가 없습니다/);
+    const failed = makeApi(() => Promise.reject(new Error('Refresh failed')));
+    view.rerender(detail(kind, failed.api));
+    await view.findByText('미디어를 불러오지 못했습니다.');
+    assert.equal(view.queryByText(/표시할 미디어가 없습니다/) === null, true);
+  });
+}
