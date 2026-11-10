@@ -1,5 +1,7 @@
 # Band Archive 도메인 용어집
 
+FE 코드 지도 갱신: **2026-11-10**. 과거 FE 화면과 전용 helper를 정리했으며, 현재 재생 공통 코어는 provider·네트워크 요청을 소유하지 않는다. 변경 범위와 검증·한계는 [FE 중복 정리 보고서](docs/reports/2026-11-10-fe-duplication-refactoring.md)를 따른다. 아래 BE 배포 기준 기록은 별도로 유지한다.
+
 현행 코드 지도 갱신: **2026-11-04**. 최초 분석은 2026-10-24 `b2b5610`이며, 이후 경계 추출을 반영했다. 도메인·DB·API 이름을 전면 변경하는 문서가 아니다.
 
 현재 제품 기준은 **`d5cae87`**(댓글·투표·시작 복구 추출)이다. 전체 BE **1,738 passed·978 warnings·0 failed·0 skipped**, 제품 일반 push와 **Fly v91 배포·HTTP/CORS/시작 로그·기존 Pages 번들 확인을 완료**했다. 범위·실행 증거·한계는 [단일 최종 보고서](docs/reports/2026-11-04-architecture-refactoring-final.md)에 기록한다. 문서 커밋은 제품 커밋과 구분한다.
@@ -83,7 +85,7 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 
 | 권장 업무 명칭 / 영문 | 현재 Frontend 명칭 | 현재 Backend 명칭 | API / JSON | DB Model / Table |
 |---|---|---|---|---|
-| 곡 / **Song** | `workspace/songs/{SongWorkspace,SongDetail,SongForm}.jsx`; 과거 `SongList`, `SongContext` | `song_service.py::{create_song,update_song,delete_song}`, `serialize_song` | `B/songs`, `B/songs/{songId}` | `Song` / `song` (M:505) |
+| 곡 / **Song** | `workspace/songs/{SongWorkspace,SongDetail,SongForm}.jsx` | `song_service.py::{create_song,update_song,delete_song}`, `serialize_song` | `B/songs`, `B/songs/{songId}` | `Song` / `song` (M:505) |
 | 곡 진행 상태 / **SongStatus** | `Practice/Completed/OnHold` 선택 | `Song.status`, 곡 payload 검증 | JSON `status` | `Song.status` |
 | 곡 미디어 / **SongMedia** (문맥 명확하면 **Media**) | 미디어 목록, `MediaPlayer`, `MediaEngagement` | `serialize_media`, `Media` | 조회 `B/songs/{songId}/media`, `B/rehearsals/{rehearsalId}/media`; 삭제 `DELETE B/media/{mediaId}` | `Media` / `media` (M:585) |
 | 미디어 표시명 / **MediaDisplayName** | v2 `display_name` → player의 `name` | `_media_display_name`, 원본 이름 기반 정제 | `display_name`; v1은 `filename`도 사용 | 원본 메타데이터 `original_filename` 등에서 파생; 별도 테이블 없음 |
@@ -112,9 +114,9 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 
 | 권장 업무 명칭 / 영문 | 현재 Frontend 명칭 | 현재 Backend 명칭 | API / JSON | DB Model / Table |
 |---|---|---|---|---|
-| 합주·공연 일정 / **Rehearsal** | `workspace/rehearsals/{RehearsalWorkspace,RehearsalDetail,RehearsalForm}.jsx`; 과거 화면에 `RehearsalCalendar`, `RehearsalModal` | `rehearsal_service.py`의 생성·수정·삭제·곡 연결, `serialize_rehearsal` | `B/rehearsals`, `B/rehearsals/{id}` | `Rehearsal` / `rehearsal` (M:956) |
+| 합주·공연 일정 / **Rehearsal** | `workspace/rehearsals/{RehearsalWorkspace,RehearsalDetail,RehearsalForm}.jsx` | `rehearsal_service.py`의 생성·수정·삭제·곡 연결, `serialize_rehearsal` | `B/rehearsals`, `B/rehearsals/{id}` | `Rehearsal` / `rehearsal` (M:956) |
 | 일정 유형 / **RehearsalType** | `REHEARSAL_TYPES`, `RehearsalTypeBadge` | `validate_rehearsal_type`, `REHEARSAL_TYPES` | `rehearsal_type` | `Rehearsal.rehearsal_type` |
-| 일정 장소 / **RehearsalLocation** · 장소 검색 결과 / **PlaceSearchResult** | `BandPlacePicker`, 기존 `LocationPicker` | `place_search_service.py::search_places_for_member`, `place_search.py`의 guard·결과 정리·NAVER 연동 | `GET B/search-places?query=...`; 결과 배열 | 일정의 `location/latitude/longitude`; **별도 Place/Venue 모델 없음** |
+| 일정 장소 / **RehearsalLocation** · 장소 검색 결과 / **PlaceSearchResult** | `BandPlacePicker` | `place_search_service.py::search_places_for_member`, `place_search.py`의 guard·결과 정리·NAVER 연동 | `GET B/search-places?query=...`; 결과 배열 | 일정의 `location/latitude/longitude`; **별도 Place/Venue 모델 없음** |
 | 일정에 연결된 곡 목록 / **RehearsalSongs** | 일정 `song_ids`, 응답 `songs` | `Rehearsal.songs`, `Song.rehearsals` | 일정 쓰기의 `song_ids`, 읽기의 `songs` | 다대다 연결 `rehearsal_songs` (M:950) |
 | 합주 가능 일정 / **MemberAvailability** | `AvailabilityWorkspace`, `AvailabilityCalendar`, `availabilityState` | `availability_service.snapshot/update_days` | `B/availability`, `/me/batch`, `/me/{date}`, `/reset` | `BandAvailabilityDay` / `band_availability_day` (M:150) |
 | 일정 조율 후보 / **AvailabilityCandidate** | 날짜·시간대별 가능/불가/미정 인원 집계 | 가능 일정 데이터 제공 | FE 집계용 `{date,period,available,unavailable,unknown,all,total}` | **저장 모델 없음**. UI 계산 결과 |
@@ -158,7 +160,7 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 | 함께 공연해요 / TogetherBoard | 같은 컴포넌트, `/community/together` | FE 준비중 틀. 실제 밴드 `Rehearsal` 공연 일정과 별개 |
 | 연습실·공연 후기 / ReviewsBoard | 같은 컴포넌트, `/community/reviews` | FE 준비중 틀. 장소·후기·게시글 모델 없음 |
 
-`components/dashboard/Dashboard.jsx`, `members/MemberDashboard.jsx`, `songs/SongSuggestion.jsx`, `context/SongContext.jsx` 같은 과거 화면 코드도 남아 있다. 현재 App에서 직접 라우팅하지 않는 것과 삭제해도 된다는 것은 다르다. `MediaPlayer`처럼 현재 workspace에서도 사용하는 공용 컴포넌트는 실제 호출처로 구분한다. `RehearsalCalendar`·`RehearsalModal`은 과거 Dashboard의 호출 경로이며, 현행 일정 폼은 `workspace/rehearsals/RehearsalForm.jsx`다.
+과거 Dashboard·SongContext·곡/합주/멤버/갤러리/제안 화면과 전용 helper는 제품·테스트·Storybook·native 참조를 확인한 뒤 삭제했다. 현행 일정 폼은 `workspace/rehearsals/RehearsalForm.jsx`다. 공유 `MediaPlayer`·업로드 서비스 및 현재 native/v1 전송 경계는 보존한다. FE 화면 삭제가 BE v1 API 삭제를 뜻하지 않는다.
 
 ## 4. 겹치는 이름과 중요한 필드 경계
 
@@ -224,8 +226,8 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 - `Song`, `Media`, `Rehearsal`, `Comment` 응답은 `serialize_song/media/rehearsal/comment`가 만든 dict다 (`backend/v2_content_serializers.py:183`, `:209`, `:232`, `:274`).
 - 프로필·개인 연습 기록·사진·공지·제안은 `serialize_member/personal_log/gallery_image/announcement/suggestion` dict다 (`backend/v2_remaining_read_serializers.py:67`, `:90`, `:137`, `:153`, `:164`).
 - FE `bandWorkspacePaths`, `songPayload`, `suggestionPayload`, `rehearsalPayload` 등이 이 계약을 사용하는 경계다 (`frontend/src/services/bandWorkspaceApi.js:5`, `:55` 이후).
-- `MediaPlayback`은 서버의 `playback` 응답, `PlaybackMedia`는 이를 `MediaPlayer`의 `{type,name,url,audio_url,...}` 형태로 변환한 FE 재생 DTO를 가리키는 문서상 명칭이다. 같은 데이터 경계의 양쪽 표현이지 두 콘텐츠 엔티티가 아니다.
-- `PlaybackMedia`, `MemberProfile`, `AvailabilityCandidate`는 이 문서에서 구분하는 **업무·데이터 형태 명칭**이다. TS 타입이 이미 선언됐다고 가정하지 않는다.
+- `MediaPlayback`은 서버의 `playback` 응답이다. `services/playbackMedia.js::workspaceMediaFile`이 곡 미디어·개인 기록을 공통 player의 `{type,name,url,audio_url,...}` 형태로 변환한다. `workspace/media/PlaybackMedia.jsx`는 삭제·댓글·갱신을 소유하는 화면 wrapper다. 같은 데이터 경계의 양쪽 표현이지 두 콘텐츠 엔티티가 아니다.
+- `MemberProfile`, `AvailabilityCandidate`는 이 문서에서 구분하는 **업무·데이터 형태 명칭**이다. TS 타입이 이미 선언됐다고 가정하지 않는다.
 - v1 `Model.to_dict()`와 v2 serializer는 공개 범위·권한·파일명/서명 URL 계약이 다르다. 이름이 비슷하다는 이유로 단순 병합하지 않는다 (`backend/v2_content_serializers.py:1`).
 
 ### 실제 명명 타입·구조체

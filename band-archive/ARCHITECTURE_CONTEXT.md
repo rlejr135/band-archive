@@ -1,5 +1,7 @@
 # Band Archive — Architecture Context
 
+FE 구조 갱신: **2026-11-10**. 브라우저 경로(`bandUiPaths`), 활성 밴드 멤버십(`bandMembership`), 재생 DTO(`playbackMedia`)와 순수 재생 코어(`MediaPlayer`), 곡·합주 상세 query 조회(`useQueryDetail`)를 공유한다. 화면별 wrapper가 댓글·삭제·서버 capability·처리 상태 조회·URL 재조회를 소유한다. [FE 중복 정리 보고서](docs/reports/2026-11-10-fe-duplication-refactoring.md)에 검증과 한계를 기록한다. 아래 BE 배포 기준 기록은 변경하지 않았다.
+
 현행 코드 지도 갱신: **2026-11-04**. 최초 조사 `b2b5610` 이후 경계 추출을 반영했다. 제품 기준 **`d5cae87`**, 전체 BE **1,738 passed·978 warnings·0 failed·0 skipped**, 제품 일반 push와 **Fly v91 배포 확인 완료**다. 공개 HTTP/CORS·시작 로그·기존 Pages 번들 확인, runtime 차이와 선택 보류는 [단일 최종 보고서](docs/reports/2026-11-04-architecture-refactoring-final.md)를 따른다. 문서 커밋은 제품과 구분한다.
 
 이 문서는 현재 독서 경로를 안내한다. 과거 Wave 1~7의 시행 과정과 당시 검증 결과는 `docs/reports/`의 기존 아키텍처 Wave 보고서에 보존하며, 오래된 대기 문구를 현재 상태로 다시 나열하지 않는다. 줄 번호보다 아래 파일·함수 이름을 우선한다.
@@ -185,7 +187,7 @@ ServicePolicyProvider → AuthProvider → BandProvider → UploadProvider → A
 
 `BandWorkspace.jsx`는 `AnnouncementEditor`, `FeaturedMediaEditor`, `SuggestionsWorkspace`, `GalleryWorkspace`, `SongWorkspace`, `RehearsalWorkspace`를 도메인 모듈에서 import하고 기존 export 이름도 재수출한다. `App.jsx`와 관련 테스트는 Song·Rehearsal 진입점을 직접 사용한다. 관리 화면은 편집기를 도메인 모듈에서 직접 import한다. `BandUploadInput.jsx`는 UploadContext가 있을 때만 `FileUpload`를 렌더링하는 leaf 경계로, provider가 없는 표면에서는 비활성 상태를 유지한다. Gallery 경계 회귀 테스트는 `components/workspace/GalleryWorkspace.boundary.test.js`에 있다. `WorkspaceContext.jsx`는 `WorkspaceContext/useWorkspace`를 소유하며 `useCollection.js`, `usePagedRead.js`, `WorkspaceWriteGuidance.jsx`는 workspace 본체와 분리돼 있다. `WorkspaceFeedback.jsx`의 `ErrorState`는 workspace와 대표 미디어 편집기가 공유하는 leaf UI다. 추출 모듈은 `BandWorkspace.jsx`를 역으로 import하지 않는다.
 
-현행 `BandActivityDashboard`는 react-calendar를 직접 사용한다. `calendar/RehearsalCalendar.jsx`와 `RehearsalModal.jsx`는 legacy Dashboard 호출 경로에 있으므로 현행 workspace가 재사용하는 일정 폼으로 해석하지 않는다.
+현행 `BandActivityDashboard`는 react-calendar를 직접 사용한다. 과거 Dashboard와 전용 달력·모달은 참조 확인 후 삭제했다. 현행 일정 폼은 `workspace/rehearsals/RehearsalForm.jsx`이며 모바일 dialog와 가능 일정 연계를 별도로 유지한다.
 
 ## 7. 데이터 접근·DB·마이그레이션
 
@@ -230,7 +232,7 @@ SQLite 경로는 `app.py:129`의 호환 `_run_migrations`에 남아 있다. 테�
 
 ## 8. 상태 관리와 갱신 경계
 
-곡·합주 상세의 미디어 조회는 `components/workspace/media/useDetailMedia.js`가 공유하며, 소유 상세 컴포넌트의 workspace·band·resource key가 재생/댓글 상태와 재시도 예산을 함께 초기화한다. `useCollection`의 append, `usePagedRead`의 first-wins dedupe·404·abort, FeaturedMedia의 same-ID update는 별도 정책이다.
+곡·합주 상세 query 조회는 `components/workspace/useQueryDetail.js`가 ID·밴드 검증과 취소·generation을 공유한다. query가 없으면 상세 GET 없이 각 화면의 로컬 선택을 사용한다. 곡·합주 상세의 미디어 조회는 `components/workspace/media/useDetailMedia.js`가 공유하며, 소유 상세 컴포넌트의 workspace·band·resource key가 재생/댓글 상태와 재시도 예산을 함께 초기화한다. `useCollection`의 append, `usePagedRead`의 first-wins dedupe·404·abort, FeaturedMedia의 same-ID update는 별도 정책이다.
 
 현재 웹은 Redux/Zustand/React Query 전역 store 구조가 아니라 **Context + 페이지별 state/ref + 명시적 reload/refresh**를 사용한다.
 
@@ -406,8 +408,8 @@ migration_runner → migration_bootstrap + migrations + db
 | PostgreSQL/Supabase DB | `config.py` DATABASE_URL, `extensions.py`, startup/migration 코드 | Flask가 SQLAlchemy로 접근. 브라우저 DB 역할 격리는 schema/startup 계약으로 검사. 실제 DSN·현재 schema는 승인된 운영 확인 필요 |
 | Cloudflare R2 | `storage.py`, upload/delete/processing 서비스, S3_* 설정명 | boto3 S3v4, GET/PUT 서명·HEAD·multipart·다운로드/삭제. 공개 URL은 DB의 영구 식별자가 아님 |
 | Cloudflare Turnstile | `turnstile.js`, `TurnstileChallenge.jsx`, `AuthPages.jsx` | widget token을 Auth 요청에 전달. 실제 콘솔 설정은 확인하지 않음 |
-| NAVER Local Search / Maps | `place_search_service.py`, `routes/search.py`, `place_search.py`, `BandPlacePicker.jsx`, `calendar/LocationPicker.jsx` | 검색 proxy와 구 지도 컴포넌트가 함께 존재. 현행 밴드 폼 검색 진입점은 확인했으나 운영 key/허용 도메인은 미확인 |
-| YouTube/외부 링크 | `services/youtube.js`, `safeExternalUrl.js`; legacy `songs/SongDetail.jsx:184`, `SongSuggestion.jsx:162` | 파싱·안전한 URL 처리와 legacy iframe 삽입은 저장 미디어와 다른 경로. 공용 `MediaPlayer`에는 iframe이 없으며 모든 링크를 R2에 내려받는 파이프라인도 아님 |
+| NAVER Local Search / Maps | `place_search_service.py`, `routes/search.py`, `place_search.py`, `BandPlacePicker.jsx` | 현행 밴드 폼은 밴드 범위 검색 proxy를 사용한다. 과거 LocationPicker는 삭제했다. 운영 key/허용 도메인은 이번 검증 범위가 아님 |
+| 외부 링크 | `services/safeExternalUrl.js` | 안전한 HTTP(S) 링크 검증을 유지한다. 과거 YouTube 전용 helper·iframe UI는 소비자와 함께 삭제했다. 공용 `MediaPlayer`는 발급된 영상·음원 URL을 재생하며 iframe이나 다운로드 파이프라인을 소유하지 않는다. |
 | 메일 | Supabase Auth 흐름, `BandRequestEmailOutbox`와 설정/정책 출처 | Auth 메일과 밴드 생성 요청 결정 메일 outbox는 다름. factory가 후자의 발송 polling worker를 등록하지 않으므로 테이블 존재만으로 발송 중이라고 볼 수 없음 |
 | Fly.io | `backend/fly.toml`, Dockerfile | Flask/Gunicorn, nrt, shared CPU2/2GB, /data, HTTPS, autostop off 선언. 이번 실시간 조회 결과가 아님 |
 | Cloudflare Pages | Vite 산출물, `AGENTS.md`의 기존 배포 약정 | 정적 SPA 배포 대상. 현재 Pages root/build/env·Git 연결은 외부 설정이며 저장소에 전체 콘솔 상태는 없음 |
