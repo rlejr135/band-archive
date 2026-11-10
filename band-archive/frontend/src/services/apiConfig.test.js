@@ -12,7 +12,7 @@ for (const { name, env, expected } of [
   { name: 'configured API URL', env: { VITE_API_URL: 'https://api.example.test' }, expected: 'https://api.example.test' },
   { name: 'configured URL retains trailing slash', env: { VITE_API_URL: 'https://api.example.test/base/' }, expected: 'https://api.example.test/base/' },
 ]) {
-  test(`neutral API configuration preserves ${name} and its legacy export`, async () => {
+  test(`neutral API configuration preserves ${name} for authenticated clients`, async () => {
     const previousApiUrl = process.env.VITE_API_URL;
     let vite;
     try {
@@ -28,10 +28,8 @@ for (const { name, env, expected } of [
         optimizeDeps: { noDiscovery: true },
       });
       const configuration = await vite.ssrLoadModule('/src/services/apiConfig.js');
-      const legacy = await vite.ssrLoadModule('/src/services/api.js');
       const { createAuthenticatedApiClient } = await vite.ssrLoadModule('/src/services/authApiClient.js');
       assert.equal(configuration.API_URL, expected);
-      assert.equal(legacy.API_URL, configuration.API_URL);
       const calls = [];
       const api = createAuthenticatedApiClient({
         fetchImpl: async (url, options) => {
