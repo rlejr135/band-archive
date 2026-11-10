@@ -1,5 +1,4 @@
 import { isActiveBandMembership } from '../../../services/bandMembership.js';
-/* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useId, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { bandWorkspacePaths } from '../../../services/bandWorkspaceApi.js';
@@ -9,12 +8,13 @@ import { ErrorState } from '../WorkspaceFeedback.jsx';
 import { useWorkspace } from '../WorkspaceContext.jsx';
 import { useCollection } from '../useCollection.js';
 import { WriteGuidance } from '../WorkspaceWriteGuidance.jsx';
-import { requestOptions } from '../workspaceReadSupport.js';
-import { strictPositiveId } from '../bandDashboardState.js';
+import { useQueryDetail } from '../useQueryDetail.js';
 import { RehearsalDetail } from './RehearsalDetail.jsx';
 import { RehearsalForm } from './RehearsalForm.jsx';
 import { RehearsalCreateDialog } from './RehearsalCreateDialog.jsx';
 import './RehearsalWorkspace.css';
+
+const extractDetail = (response) => response?.rehearsal;
 
 export const RehearsalWorkspace = () => {
   const { band, workspaceKey } = useWorkspace();
@@ -22,7 +22,7 @@ export const RehearsalWorkspace = () => {
 };
 
 const RehearsalContentWorkspace = () => {
-  const { band, api, workspaceKey } = useWorkspace();
+  const { band, workspaceKey } = useWorkspace();
   const { loading, error, entries, pagination, refresh, loadMore } = useCollection('rehearsals');
   const [searchParams, setSearchParams] = useSearchParams();
   const [selected, setSelected] = useState(null);
@@ -33,9 +33,11 @@ const RehearsalContentWorkspace = () => {
   const createTrigger = useRef(null);
   const headerCreate = useRef(null);
   const detailValue = searchParams.get('rehearsal');
-  const detailId = detailValue == null ? null : strictPositiveId(detailValue);
-  const [queryDetail, setQueryDetail] = useState({ id: null, loading: false, error: '', item: null });
-  const detailEpoch = useRef(0);
+  const queryDetail = useQueryDetail({
+    identity: workspaceKey, detailValue,
+    pathForId: (id) => bandWorkspacePaths.rehearsal(band.id, id),
+    extract: extractDetail,
+  });
   const member = isActiveBandMembership(band.membership);
   const label = '합주';
   const detailPanelId = useId();
@@ -47,34 +49,7 @@ const RehearsalContentWorkspace = () => {
     update(); media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
-  useEffect(() => {
-    if (detailValue == null) {
-      detailEpoch.current += 1;
-      setQueryDetail({ id: null, loading: false, error: '', item: null });
-      return undefined;
-    }
-    const epoch = ++detailEpoch.current;
-    if (!detailId) {
-      setQueryDetail({ id: null, loading: false, error: '요청한 항목을 찾을 수 없습니다.', item: null });
-      return undefined;
-    }
-    const controller = new AbortController();
-    setQueryDetail({ id: detailId, loading: true, error: '', item: null });
-    api.requestJson(bandWorkspacePaths.rehearsal(band.id, detailId), requestOptions(controller.signal)).then((response) => {
-      const item = response?.rehearsal;
-      const sameBand = item?.band_id == null || Number(item.band_id) === Number(band.id);
-      if (controller.signal.aborted || epoch !== detailEpoch.current) return;
-      if (!item || Number(item.id) !== detailId || !sameBand) {
-        setQueryDetail({ id: detailId, loading: false, error: '요청한 항목을 찾을 수 없습니다.', item: null });
-        return;
-      }
-      setQueryDetail({ id: detailId, loading: false, error: '', item });
-    }).catch(() => {
-      if (!controller.signal.aborted && epoch === detailEpoch.current) setQueryDetail({ id: detailId, loading: false, error: '요청한 항목을 찾을 수 없습니다.', item: null });
-    });
-    return () => controller.abort();
-  }, [api, band.id, detailId, detailValue, workspaceKey]);
-  const activeItem = detailValue == null ? selected : (queryDetail.id === detailId && !queryDetail.loading ? queryDetail.item : null);
+  const activeItem = detailValue == null ? selected : (!queryDetail.loading ? queryDetail.item : null);
   const clearDetailQuery = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('rehearsal');

@@ -1,17 +1,17 @@
 import { isActiveBandMembership } from '../../../services/bandMembership.js';
-/* eslint-disable react-hooks/set-state-in-effect */
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { bandWorkspacePaths } from '../../../services/bandWorkspaceApi.js';
 import { ErrorState } from '../WorkspaceFeedback.jsx';
 import { useWorkspace } from '../WorkspaceContext.jsx';
 import { useCollection } from '../useCollection.js';
 import { WriteGuidance } from '../WorkspaceWriteGuidance.jsx';
-import { requestOptions } from '../workspaceReadSupport.js';
-import { strictPositiveId } from '../bandDashboardState.js';
+import { useQueryDetail } from '../useQueryDetail.js';
 import { SongDetail } from './SongDetail.jsx';
 import { SongForm } from './SongForm.jsx';
 import './SongWorkspace.css';
+
+const extractDetail = (response) => response?.song;
 
 export const SongWorkspace = () => {
   const { band, workspaceKey } = useWorkspace();
@@ -21,7 +21,6 @@ export const SongWorkspace = () => {
 const SongContentWorkspace = () => {
   const {
     band,
-    api,
     workspaceKey
   } = useWorkspace();
   const {
@@ -37,75 +36,14 @@ const SongContentWorkspace = () => {
   const [formMode, setFormMode] = useState(() => null);
   const detailParam = 'song';
   const detailValue = searchParams.get(detailParam);
-  const detailId = detailValue == null ? null : strictPositiveId(detailValue);
-  const [queryDetail, setQueryDetail] = useState({
-    id: null,
-    loading: false,
-    error: '',
-    item: null
+  const queryDetail = useQueryDetail({
+    identity: workspaceKey, detailValue,
+    pathForId: (id) => bandWorkspacePaths.song(band.id, id),
+    extract: extractDetail,
   });
-  const detailEpoch = useRef(0);
   const member = isActiveBandMembership(band.membership);
   const label = '곡';
-  useEffect(() => {
-    if (detailValue == null) {
-      detailEpoch.current += 1;
-      setQueryDetail({
-        id: null,
-        loading: false,
-        error: '',
-        item: null
-      });
-      return undefined;
-    }
-    const epoch = ++detailEpoch.current;
-    if (!detailId) {
-      setQueryDetail({
-        id: null,
-        loading: false,
-        error: '요청한 항목을 찾을 수 없습니다.',
-        item: null
-      });
-      return undefined;
-    }
-    const controller = new AbortController();
-    setQueryDetail({
-      id: detailId,
-      loading: true,
-      error: '',
-      item: null
-    });
-    const resource = 'song';
-    api.requestJson(bandWorkspacePaths[resource](band.id, detailId), requestOptions(controller.signal)).then(response => {
-      const item = response?.[resource];
-      const sameBand = item?.band_id == null || Number(item.band_id) === Number(band.id);
-      if (controller.signal.aborted || epoch !== detailEpoch.current) return;
-      if (!item || Number(item.id) !== detailId || !sameBand) {
-        setQueryDetail({
-          id: detailId,
-          loading: false,
-          error: '요청한 항목을 찾을 수 없습니다.',
-          item: null
-        });
-        return;
-      }
-      setQueryDetail({
-        id: detailId,
-        loading: false,
-        error: '',
-        item
-      });
-    }).catch(() => {
-      if (!controller.signal.aborted && epoch === detailEpoch.current) setQueryDetail({
-        id: detailId,
-        loading: false,
-        error: '요청한 항목을 찾을 수 없습니다.',
-        item: null
-      });
-    });
-    return () => controller.abort();
-  }, [api, band.id, detailId, detailValue, workspaceKey]);
-  const activeItem = detailValue == null ? selected : queryDetail.id === detailId && !queryDetail.loading ? queryDetail.item : null;
+  const activeItem = detailValue == null ? selected : !queryDetail.loading ? queryDetail.item : null;
   const clearDetailQuery = () => {
     const next = new URLSearchParams(searchParams);
     next.delete(detailParam);
