@@ -49,6 +49,29 @@ test('small band files use direct presign PUT then authenticated completion with
   assert.equal(result.media.id, 9);
 });
 
+test('direct band uploads use the signed MIME type when the browser supplies no file type', async () => {
+  for (const [name, expectedType] of [['practice.M4A', 'audio/mp4'], ['practice.mkv', 'video/x-matroska']]) {
+    const calls = [];
+    let signedType;
+    const api = { requestJson: async (path, options) => {
+      calls.push(path);
+      if (path.endsWith('/initiate')) {
+        // The v2 server guesses from the filename if the request omitted the MIME type.
+        signedType = JSON.parse(options.body).content_type || expectedType;
+        return { session_id: 'd1', upload_capability_token: 'cap', upload_url: 'https://r2.invalid/direct' };
+      }
+      return { media: { id: 9 } };
+    } };
+    const transport = createBandUploadTransport({ bandId: 42, api, putPart: async (_url, _file, contentType) => {
+      assert.equal(contentType, signedType, 'PUT must match the signed Content-Type');
+      assert.equal(contentType, expectedType);
+    } });
+    const result = await uploadBandMediaFile({ transport, file: { name, type: '', size: 8 }, songId: 7, onProgress: () => {} });
+    assert.equal(result.media.id, 9);
+    assert.deepEqual(calls, ['/api/v2/bands/42/uploads/direct/initiate', '/api/v2/bands/42/uploads/direct/d1/complete']);
+  }
+});
+
 test('band initiate refreshes a rejected bearer and retries the same immutable endpoint once', async () => {
   const headers = [];
   const api = createAuthenticatedApiClient({

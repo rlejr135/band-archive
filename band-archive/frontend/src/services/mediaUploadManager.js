@@ -10,6 +10,14 @@ export { normalizeMedia } from './uploadMediaResponse.js';
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
 const MAX_PART_RETRIES = 3;
+const BAND_MEDIA_CONTENT_TYPES = new Map([
+  ['mp3', 'audio/mpeg'], ['wav', 'audio/wav'], ['ogg', 'audio/ogg'],
+  ['m4a', 'audio/mp4'], ['aac', 'audio/aac'], ['flac', 'audio/flac'],
+  ['mp4', 'video/mp4'], ['webm', 'video/webm'], ['mov', 'video/quicktime'],
+  ['avi', 'video/x-msvideo'], ['mkv', 'video/x-matroska'],
+  ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'], ['webp', 'image/webp'], ['pdf', 'application/pdf'],
+]);
 const webTransport = createWebUploadTransport({ apiUrl: API_URL });
 export const getWebUploadTransport = () => webTransport;
 const runtimeTransport = createTransportCache(() => resolveUploadTransport({ apiUrl: API_URL }));
@@ -169,10 +177,14 @@ export const uploadBandMediaFile = async ({ transport, ...options }) => {
   if (isVideo(file) && file.size > MAX_VIDEO_BYTES) throw new Error('영상 파일은 1GiB를 초과할 수 없습니다.');
   if (isVideo(file) && file.size >= MULTIPART_THRESHOLD_BYTES) return uploadMultipart({ ...options, target, transport });
   throwIfCancelled(isCancelled);
-  const session = await transport.initiateDirect(initiatePayload(target, file, options.uploadPolicy));
+  // Direct PUT signs Content-Type. Send the same value even when File.type is empty.
+  const extension = file.name.split('.').pop().toLowerCase();
+  const contentType = file.type?.trim() || BAND_MEDIA_CONTENT_TYPES.get(extension) || 'application/octet-stream';
+  const payload = { ...initiatePayload(target, file, options.uploadPolicy), content_type: contentType };
+  const session = await transport.initiateDirect(payload);
   setSession?.({ ...session, uploadMode: 'direct' });
   if (isCancelled?.()) throw new DOMException('업로드가 취소되었습니다.', 'AbortError');
-  await transport.putPart(session.upload_url, file, file.type || 'application/octet-stream', (loaded) => onProgress(loaded, file.size), registerXhr);
+  await transport.putPart(session.upload_url, file, contentType, (loaded) => onProgress(loaded, file.size), registerXhr);
   throwIfCancelled(isCancelled);
   return transport.completeDirect(session);
 };
