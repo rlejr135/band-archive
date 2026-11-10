@@ -150,4 +150,3 @@ RehearsalTypeBadge·story, 공통 플레이어와 practicePlayback·commentTimes
 자동 검증·배포 결과와 별개로 위 시각 검증 한계는 남는다. PC·모바일 실화면 및 실제 codec/오디오 출력 확인을 포함한 모든 검증이 완료됐다고 해석하지 않는다.
 
 재현 명령은 anything-regression-validation 스킬의 bundled Node·현재 test glob을 사용한다. 최종 로그는 로컬 frontend의 `final-fe-suite-rerun-20261110.log`, `final-fe-lint-20261110.log`, `final-fe-build-20261110.log`, `final-fe-storybook-20261110.log`에 보존한다.
-
