@@ -4,7 +4,9 @@ import { JSDOM } from 'jsdom';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createElement as h, StrictMode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { createServer } from 'vite';
+import { createUploadCompletionStore } from '../../services/uploadCompletionStore.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Event: dom.window.Event });
@@ -227,3 +229,83 @@ for (const kind of ['song', 'rehearsal']) {
     assert.equal(view.queryByText(/표시할 미디어가 없습니다/) === null, true);
   });
 }
+
+test('rehearsal upload uses the chosen linked song and refreshes its own media after the picker changes', async () => {
+  await load();
+  const { UploadContext } = await vite.ssrLoadModule('/src/context/UploadContext.jsx');
+  const { ServicePolicyContext } = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx');
+  const store = createUploadCompletionStore();
+  const batches = [];
+  const pendingUpload = deferred();
+  const upload = {
+    nativePending: [], transport: { kind: 'web' }, subscribeMediaCompletion: store.subscribe,
+    uploadBatch: (batch) => { batches.push(batch); return pendingUpload.promise; },
+  };
+  const config = { policies: { ready: true, upload: { enabled: true, version: 'u1', default_visibility: 'MEMBERS', notice_url: '/upload-policy' } } };
+  const uploadBand = { ...band, default_visibility: 'PUBLIC' };
+  const songs = [{ id: 11, title: 'First song', effective_visibility: 'PUBLIC' }, { id: 12, title: 'Second song', effective_visibility: 'MEMBERS' }];
+  const uploaded = media(55, 'Uploaded rehearsal clip');
+  let hasUpload = false;
+  const { api, calls } = makeApi(() => page(hasUpload ? [uploaded] : []));
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/api\/v2\/me$/);
+    return { ok: true, json: async () => ({ user: { upload_policy_acceptance_required: false } }) };
+  };
+  try {
+    const user = userEvent.setup({ document: dom.window.document });
+    const view = render(h(MemoryRouter, null,
+      h(ServicePolicyContext.Provider, { value: { config } },
+        h(UploadContext.Provider, { value: upload }, detail('rehearsal', api, 27, { band: uploadBand }, false, { songs, effective_visibility: 'PUBLIC' })))));
+    await view.findByText('표시할 미디어가 없습니다.');
+    assert.equal(view.container.querySelector('input[type="file"]') === null, true);
+    await user.selectOptions(view.getByLabelText('업로드할 곡'), '12');
+    await user.upload(view.container.querySelector('input[type="file"]'), new dom.window.File(['video'], 'practice.mp4', { type: 'video/mp4' }));
+    await user.selectOptions(view.getByLabelText('공개 범위'), 'PUBLIC');
+    assert.ok(view.getByText(/유효 공개 범위: 밴드 멤버 전용/));
+    await user.click(view.getByLabelText(/자동 처리·공개 범위/));
+    await user.click(view.getByLabelText(/선택한 파일을 이 범위로 게시/));
+    await user.click(view.getByRole('button', { name: '업로드 시작' }));
+    assert.equal(batches.length, 1);
+    const options = batches[0].items[0].options;
+    assert.equal(options.band.id, 41);
+    assert.equal(options.songId, 12);
+    assert.equal(options.rehearsalId, 27);
+
+    await user.selectOptions(view.getByLabelText('업로드할 곡'), '11');
+    await act(async () => {
+      store.publish({ target: { bandId: 42, songId: 12, rehearsalId: 27 }, media: { id: 99 } });
+      store.publish({ target: { bandId: 41, songId: 12, rehearsalId: 28 }, media: { id: 98 } });
+    });
+    assert.equal(calls.length, 1);
+    await act(async () => {
+      hasUpload = true;
+      store.publish({ target: { bandId: 41, songId: 12, rehearsalId: 27 }, media: uploaded });
+      pendingUpload.resolve([]);
+    });
+    await view.findByText('Uploaded rehearsal clip', { exact: true });
+    assert.equal(calls.length, 2);
+    assert.equal(calls.at(-1).resourceId, 27);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('rehearsal upload needs an active membership and at least one linked song', async () => {
+  await load();
+  const { UploadContext } = await vite.ssrLoadModule('/src/context/UploadContext.jsx');
+  const { api } = makeApi(() => page([]));
+  const upload = { nativePending: [], transport: { kind: 'web' }, subscribeMediaCompletion: () => () => {} };
+  const app = (songs, membership) => h(UploadContext.Provider, { value: upload },
+    detail('rehearsal', api, 27, { band: { ...band, membership } }, false, { songs }));
+  const view = render(app([], { status: 'active' }));
+  await view.findByText('미디어를 올리려면 일정에 곡을 연결해 주세요.');
+  assert.equal(view.container.querySelector('input[type="file"]') === null, true);
+  const songs = [{ id: 11, title: 'Only song' }];
+  view.rerender(app(songs, { status: 'ACTIVE' }));
+  assert.equal(view.container.querySelector('input[type="file"]') !== null, true);
+  assert.equal(view.queryByLabelText('업로드할 곡') === null, true);
+  view.rerender(app(songs, { status: 'left' }));
+  assert.equal(view.queryByRole('region', { name: '합주 미디어 업로드' }) === null, true);
+  assert.equal(view.container.querySelector('input[type="file"]') === null, true);
+});
