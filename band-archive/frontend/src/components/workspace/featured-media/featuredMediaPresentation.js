@@ -1,20 +1,3 @@
-import { safeExternalHttpUrl } from '../../../services/safeExternalUrl.js';
-
-export const mediaPlayerFile = (media) => {
-  const playback = media?.playback || {};
-  const video = media?.file_type === 'video';
-  const audioUrl = video ? safeExternalHttpUrl(playback.audio_url) : undefined;
-  return {
-    id: media?.id,
-    type: media?.file_type,
-    name: media?.display_name || `${video ? '영상' : '음원'} #${media?.id}`,
-    url: video ? (playback.video_url || playback.url) : (playback.audio_url || playback.url),
-    audio_url: audioUrl,
-    transcoding_status: video && audioUrl ? 'completed' : media?.transcoding_status,
-    transcoding_error: media?.transcoding_error,
-  };
-};
-
 export const mergeUniqueEntries = (previous, next) => {
   const updates = new Map(next.map((entry) => [String(entry.id), entry]));
   const merged = previous.map((entry) => updates.get(String(entry.id)) || entry);

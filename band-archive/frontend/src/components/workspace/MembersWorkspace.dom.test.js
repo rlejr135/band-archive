@@ -105,6 +105,8 @@ test('personal log URL refresh replaces the selected ID source and preserves pag
   try {
     const view = render(h(App)); await view.findByText('First log'); fireEvent.click(view.getByText('First log'));
     await waitFor(() => assert.equal(view.container.querySelector('audio')?.getAttribute('src'), 'https://media.invalid/source-1.m4a'));
+    assert.equal(view.getByRole('combobox', { name: '재생 속도' }).options.length, 4);
+    assert.equal(view.getByRole('button', { name: 'A-B 구간 반복' }) !== null, true);
     fireEvent.error(view.container.querySelector('audio'));
     await waitFor(() => assert.equal(view.container.querySelector('audio')?.getAttribute('src'), 'https://media.invalid/source-2.m4a'));
     fireEvent.error(view.container.querySelector('audio')); assert.equal(reads, 2);
@@ -112,4 +114,20 @@ test('personal log URL refresh replaces the selected ID source and preserves pag
     assert.equal(view.container.querySelectorAll('.workspace-list li').length, 2);
     assert.ok(view.container.querySelector('.workspace-row.selected'));
   } finally { globalThis.fetch = previousFetch; }
+});
+
+test('completed personal video processing refreshes the parent playback page once without treating status as a source', async () => {
+  await load(); let refreshes = 0; const requests = [];
+  const api = { requestJson: async (path) => { requests.push(path); return { processing: { status: 'completed', audio_url: 'https://media.invalid/status-is-not-playback.m4a' } }; } };
+  const log = { id: 17, title: 'Completed practice', file_type: 'video', playback: { video_url: 'https://media.invalid/video.mp4' } };
+  const app = (content) => h(auth.AuthContext.Provider, { value: authValue }, h(context.WorkspaceContext.Provider, { value: { band, api, workspaceKey: 'alpha:account-a' } }, h(playback.PersonalLogPlayback, { log: content, workspaceKey: 'alpha:account-a:member-1', onRefresh: () => { refreshes += 1; }, onDeleted: () => {} })));
+  const view = render(app(log));
+  await waitFor(() => assert.equal(refreshes, 1));
+  assert.equal(view.queryByRole('button', { name: '음원만 듣기' }) === null, true);
+  assert.equal(view.container.querySelector('audio') === null, true);
+  view.rerender(app({ ...log, playback: { ...log.playback, audio_url: 'https://media.invalid/fresh-audio.m4a' } }));
+  fireEvent.click(view.getByRole('button', { name: '음원만 듣기' }));
+  assert.equal(view.container.querySelector('audio')?.getAttribute('src'), 'https://media.invalid/fresh-audio.m4a');
+  assert.equal(requests.length, 1); assert.match(requests[0], /\/api\/v2\/bands\/\d+\/personal-logs\/17\/processing$/);
+  assert.equal(refreshes, 1);
 });

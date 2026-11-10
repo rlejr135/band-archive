@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { bandWorkspacePaths } from '../../../services/bandWorkspaceApi.js';
+import { workspaceMediaFile } from '../../../services/playbackMedia.js';
 import MediaPlayer from '../../common/MediaPlayer.jsx';
 import { ErrorState } from '../WorkspaceFeedback.jsx';
 import { useWorkspace } from '../WorkspaceContext.jsx';
 import { genericError, PAGE_SIZE, requestOptions } from '../workspaceReadSupport.js';
 import { takeOneStaleRefresh } from '../workspaceRouteState.js';
 import { FeaturedMediaEditor } from './FeaturedMediaEditor.jsx';
-import { formatRepresentativeDate, mediaPlayerFile, mergeUniqueEntries } from './featuredMediaPresentation.js';
+import { formatRepresentativeDate, mergeUniqueEntries } from './featuredMediaPresentation.js';
 
 export const RepresentativeMediaWorkspace = () => {
   const { band, api, workspaceKey } = useWorkspace();
@@ -106,19 +107,20 @@ export const RepresentativeMediaWorkspace = () => {
         {canFeatureSongs.map((song) => <option key={song.id} value={song.id}>{song.title} · {song.artist}</option>)}
       </select>
       {songs.pagination?.has_more && <button type="button" className="secondary-btn" disabled={songs.loading} onClick={() => loadSongs({ offset: songs.pagination?.next_offset ?? songs.entries.length, append: true })}>{songs.loading ? '곡을 불러오는 중…' : '곡 더 불러오기'}</button>}
-      {selectedSongId && <FeaturedMediaEditor key={`${workspaceKey}:${selectedSongId}`} song={canFeatureSongs.find((song) => String(song.id) === selectedSongId)} band={band} api={api} onSaved={async () => { await loadFeatured(); setMutationError(''); }} onError={setMutationError} />}
+      {selectedSongId && <FeaturedMediaEditor key={`${workspaceKey}:${selectedSongId}`} workspaceKey={workspaceKey} song={canFeatureSongs.find((song) => String(song.id) === selectedSongId)} band={band} api={api} onSaved={async () => { await loadFeatured(); setMutationError(''); }} onError={setMutationError} />}
     </section> : !songs.loading && <p className="workspace-muted">대표 미디어를 지정할 수 있는 곡이 없습니다. 밴드 소유자 또는 플랫폼 superadmin만 지정할 수 있습니다.</p>}
   </section>;
 };
 
 const RepresentativeMediaCard = ({ item, busy, loading, onUnset, onPlaybackError }) => {
+  const { band, workspaceKey } = useWorkspace();
   const [playing, setPlaying] = useState(false);
   return <article className="workspace-card representative-media-card">
     <header><h2>{item.song_summary?.title || '곡 제목 없음'}</h2><p>{item.song_summary?.artist || '아티스트 정보 없음'}</p></header>
     <p className="representative-media-meta"><span>{item.file_type === 'video' ? '영상' : '음원'}</span><span>{formatRepresentativeDate(item.created_at)}</span></p>
     <p className="representative-media-name">{item.display_name || `${item.file_type === 'video' ? '영상' : '음원'} #${item.id}`}</p>
     <button type="button" className="primary-btn" aria-expanded={playing} onClick={() => setPlaying((current) => !current)}>{playing ? '재생 닫기' : '재생'}</button>
-    {playing && <><MediaPlayer file={mediaPlayerFile(item)} preload="none" onPlaybackError={() => onPlaybackError(item)} /><button type="button" className="secondary-btn" disabled={loading} onClick={() => onPlaybackError(item)}>{loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></>}
+    {playing && <><MediaPlayer file={workspaceMediaFile(item)} playbackIdentity={`${workspaceKey}:band:${band.id}:featured:${item.id}`} preload="none" onPlaybackError={() => onPlaybackError(item)} /><button type="button" className="secondary-btn" disabled={loading} onClick={() => onPlaybackError(item)}>{loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></>}
     {item.can_feature && <button type="button" className="secondary-btn" disabled={busy} onClick={() => onUnset(item)}>{busy ? '처리 중…' : '대표 미디어 해제'}</button>}
   </article>;
 };

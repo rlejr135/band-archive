@@ -65,6 +65,9 @@ for (const kind of ['song', 'rehearsal']) {
       playback: { video_url: 'https://media.invalid/shared.mp4', audio_url: 'https://media.invalid/shared.m4a' },
     })]));
     const view = render(detail(kind, api)); await view.findByText('Shared media in resource 1', { exact: true });
+    assert.equal(view.getByRole('combobox', { name: '재생 속도' }).options.length, 4);
+    assert.equal(view.getByRole('button', { name: '5초 뒤로 이동' }) !== null, true);
+    assert.equal(view.getByRole('button', { name: 'A-B 구간 반복' }) !== null, true);
     fireEvent.click(view.getByRole('button', { name: '음원만 듣기', exact: true }));
     await user.type(view.getByRole('textbox', { name: '댓글 내용' }), 'Resource one private draft');
     fireEvent.error(view.container.querySelector('audio'));

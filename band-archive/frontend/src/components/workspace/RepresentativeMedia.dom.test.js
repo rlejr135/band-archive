@@ -69,6 +69,8 @@ test('representative media uses the normal featured playback serializer and safe
     fireEvent.change(view.getByRole('combobox', { name: '곡 선택' }), { target: { value: '601' } });
     await view.findByText('합주 영상.mp4');
     await userEvent.click(view.getByRole('button', { name: '재생 미리보기' }));
+    assert.equal(view.getByRole('combobox', { name: '재생 속도' }).options.length, 4);
+    assert.equal(view.getByRole('button', { name: 'A-B 구간 반복' }) !== null, true);
     await waitFor(() => assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://media.invalid/source.mp4'));
     assert.equal(view.container.querySelector('video')?.getAttribute('preload'), 'none');
     await userEvent.click(view.getByRole('button', { name: '대표로 지정' }));
@@ -77,6 +79,8 @@ test('representative media uses the normal featured playback serializer and safe
     assert.equal(view.container.querySelector('video'), null);
     assert.equal(view.getAllByText('2026년 9월 27일').length, 2);
     await userEvent.click(view.getByRole('button', { name: '재생', exact: true }));
+    assert.equal(view.getByRole('combobox', { name: '재생 속도' }).options.length, 4);
+    assert.equal(view.getByRole('button', { name: '5초 뒤로 이동' }) !== null, true);
     await waitFor(() => assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://media.invalid/feature.mp4'));
     fireEvent.error(view.container.querySelector('video'));
     await waitFor(() => assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://media.invalid/feature-3.mp4'));
@@ -128,7 +132,7 @@ test('v2 video playback with a safe audio_url enables radio mode without transco
     const view = render(app('/bands/media-band/representative-media'));
     await view.findByText('라디오의 밤');
     await userEvent.click(view.getByRole('button', { name: '재생', exact: true }));
-    const radioMode = view.getByRole('button', { name: '라디오 (데이터 절약)' });
+    const radioMode = view.getByRole('button', { name: '음원만 듣기' });
     assert.equal(radioMode.disabled, false);
     await userEvent.click(radioMode);
     await waitFor(() => assert.equal(view.container.querySelector('audio')?.getAttribute('src'), 'https://media.invalid/private-audio.m4a'));

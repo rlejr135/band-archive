@@ -1,15 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import useMediaUpload from '../../hooks/useMediaUpload';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getMediaType } from '../../services/mediaPresentation';
 import { getCommentTimestampSeekPlan } from '../../services/commentTimestamp';
 import { captureModeTransition, clampPracticeMarkers, clampPracticeTime, consumeModeTransition, createPracticePlaybackState, formatPracticeTime, getPracticeLoopDecision, normalizePracticeRate, PRACTICE_PLAYBACK_RATES, validatePracticeLoop } from '../../services/practicePlayback';
 import './MediaPlayer.css';
 
-const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlaybackController, onPlaybackError, preload = 'metadata' }) => {
-  const sourceKey = file?.id || file?.url || `${file?.name || ''}:${file?.audio_url || ''}`;
+// Playback owns only media-element state. Upload subscriptions, processing
+// requests, mutations and signed-URL refreshes belong to the screen wrapper.
+const MediaPlayerInstance = ({ file, playbackIdentity, onPlaybackController, onPlaybackError, onRefresh, showTitle = true, preload = 'metadata' }) => {
+  const sourceKey = playbackIdentity;
   const initialPracticeState = createPracticePlaybackState();
   const [isPlaying, setIsPlaying] = useState(initialPracticeState.isPlaying);
-  const [isRadioMode, setIsRadioMode] = useState(initialPracticeState.isRadioMode);
+  const [isRadioMode, setIsRadioMode] = useState(() => getMediaType(file || {}) === 'video' && !file?.url && Boolean(file?.audio_url));
   const [currentTime, setCurrentTime] = useState(initialPracticeState.currentTime);
   const [duration, setDuration] = useState(initialPracticeState.duration);
   const [playbackRate, setPlaybackRate] = useState(initialPracticeState.playbackRate);
@@ -23,11 +24,20 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlayb
   const loopRef = useRef(loopEnabled);
   const durationRef = useRef(duration);
   const rateRef = useRef(playbackRate);
-  const onMediaUpdateRef = useRef(onMediaUpdate);
-  const { retryAudio, watch } = useMediaUpload();
-  const watchMedia = useMemo(() => ({ id: file?.id, transcoding_status: file?.transcoding_status }), [file?.id, file?.transcoding_status]);
+  const attachMedia = useCallback((node) => {
+    const previous = mediaRef.current;
+    if (!node && previous) {
+      // The URL may have expired while this content remains selected. Capture
+      // before replacing the element, just as for a video/audio mode switch.
+      transitionRef.current = captureModeTransition(transitionRef.current, {
+        time: previous.currentTime, playing: !previous.paused, volume: previous.volume,
+        rate: rateRef.current, markers: markersRef.current, loopEnabled: loopRef.current,
+      }, sourceKey);
+      if (!previous.paused) previous.pause();
+    }
+    mediaRef.current = node;
+  }, [sourceKey]);
 
-  useEffect(() => { onMediaUpdateRef.current = onMediaUpdate; }, [onMediaUpdate]);
   useEffect(() => { markersRef.current = markers; }, [markers]);
   useEffect(() => { loopRef.current = loopEnabled; }, [loopEnabled]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
@@ -56,21 +66,17 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlayb
     return () => onPlaybackController(null);
   }, [onPlaybackController]);
 
-  const watchable = watchMedia.id && file?.type === 'video' && ['queued', 'pending', 'processing'].includes(watchMedia.transcoding_status);
-  useEffect(() => {
-    if (!watchable) return undefined;
-    return watch(watchMedia, (media) => onMediaUpdateRef.current?.(media), mediaKind);
-  }, [mediaKind, watch, watchMedia, watchable]);
-
   if (!file) return null;
   const mediaType = getMediaType(file);
   const isVideo = mediaType === 'video';
   const isAudio = mediaType === 'audio';
   const isImage = mediaType === 'image';
   const isDocument = mediaType === 'document';
-  const radioReady = isVideo && file.transcoding_status === 'completed' && Boolean(file.audio_url);
-  const radioModeActive = isRadioMode && radioReady;
-  const mediaUrl = radioModeActive ? file.audio_url : file.url;
+  const videoUrl = isVideo ? file.url : null;
+  const audioUrl = file.audio_url || (isAudio ? file.url : null);
+  const radioReady = isVideo && Boolean(videoUrl && audioUrl);
+  const radioModeActive = isVideo && Boolean(audioUrl) && (isRadioMode || !videoUrl);
+  const mediaUrl = radioModeActive || isAudio ? audioUrl : file.url;
   const processing = ['queued', 'pending', 'processing'].includes(file.transcoding_status);
   const loopValidation = validatePracticeLoop({ ...markers, duration });
 
@@ -125,7 +131,24 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlayb
       setCurrentTime(pendingTime);
       pendingSeekRef.current = null;
     }
-    if (restore.playing) media.play().then(() => setIsPlaying(true)).catch(() => { setIsPlaying(false); setPracticeStatus('브라우저가 자동 재생을 허용하지 않았습니다. 재생 버튼을 눌러주세요.'); });
+    if (restore.playing) resumePlayback(media);
+  };
+
+  const resumePlayback = (media) => {
+    // A pending play promise from an older mode must not update the new one.
+    try {
+      Promise.resolve(media.play()).then(() => {
+        if (mediaRef.current === media) setIsPlaying(true);
+      }).catch(() => {
+        if (mediaRef.current !== media) return;
+        setIsPlaying(false);
+        setPracticeStatus('브라우저가 자동 재생을 허용하지 않았습니다. 재생 버튼을 눌러주세요.');
+      });
+    } catch {
+      if (mediaRef.current !== media) return;
+      setIsPlaying(false);
+      setPracticeStatus('브라우저가 자동 재생을 허용하지 않았습니다. 재생 버튼을 눌러주세요.');
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -144,7 +167,7 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlayb
   const handleEnded = () => {
     const media = mediaRef.current;
     const decision = getPracticeLoopDecision({ time: durationRef.current, ...markersRef.current, duration: durationRef.current, enabled: loopRef.current });
-    if (media && decision.shouldLoop) { media.currentTime = decision.seekTime; media.play().catch(() => setIsPlaying(false)); return; }
+    if (media && decision.shouldLoop) { media.currentTime = decision.seekTime; resumePlayback(media); return; }
     setIsPlaying(false);
   };
 
@@ -177,9 +200,7 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlayb
     if (media) transitionRef.current = captureModeTransition(transitionRef.current, { time: media.currentTime, playing: !media.paused, volume: media.volume, rate: rateRef.current, markers: markersRef.current, loopEnabled: loopRef.current }, sourceKey);
     setIsRadioMode(radio);
   };
-  const handleRetry = async () => { try { await retryAudio(file.id, () => {}, onMediaUpdate, mediaKind); } catch (error) { window.alert(error.message || '음원 추출 재시도에 실패했습니다.'); } };
-
-  const mediaProps = { ref: mediaRef, src: mediaUrl, controls: true, onPlay: () => setIsPlaying(true), onPause: () => setIsPlaying(false), onLoadedMetadata: restorePlayback, onDurationChange: syncDuration, onTimeUpdate: handleTimeUpdate, onEnded: handleEnded, onRateChange: (event) => { const nextRate = normalizePracticeRate(event.currentTarget.playbackRate); rateRef.current = nextRate; setPlaybackRate(nextRate); } };
+  const mediaProps = { ref: attachMedia, src: mediaUrl, controls: true, onPlay: () => setIsPlaying(true), onPause: () => setIsPlaying(false), onLoadedMetadata: (event) => { if (event.currentTarget === mediaRef.current) restorePlayback(); }, onDurationChange: syncDuration, onTimeUpdate: handleTimeUpdate, onEnded: handleEnded, onRateChange: (event) => { const nextRate = normalizePracticeRate(event.currentTarget.playbackRate); rateRef.current = nextRate; setPlaybackRate(nextRate); } };
   const practiceControls = (isVideo || isAudio) && mediaUrl && <div className="practice-controls" role="group" aria-label="연습 재생 도구">
     <div className="practice-time" aria-live="polite">{formatPracticeTime(currentTime)} / {Number.isFinite(duration) ? formatPracticeTime(duration) : '--:--'}</div>
     <div className="practice-actions">
@@ -191,18 +212,18 @@ const MediaPlayerInstance = ({ file, onMediaUpdate, mediaKind = 'media', onPlayb
     <p className="practice-status" role="status">{practiceStatus || (loopValidation.valid ? `A–B ${formatPracticeTime(loopValidation.start)}–${formatPracticeTime(loopValidation.end)} 준비됨` : loopValidation.reason) || (isPlaying ? '재생 중' : '일시정지')}</p>
   </div>;
 
-  return <div className="media-player"><div className="player-header"><div className="player-info"><span className="player-icon">{radioModeActive ? '📻' : (isVideo ? '🎬' : (isAudio ? '🎵' : (isImage ? '🖼️' : '📄')))}</span><span className="player-title">{file.name}</span></div>{isVideo && <div className="media-mode-controls" role="group" aria-label="재생 모드"><button type="button" className={!radioModeActive ? 'selected' : ''} onClick={() => changeMode(false)}>영상</button><button type="button" className={radioModeActive ? 'selected' : ''} onClick={() => changeMode(true)} disabled={!radioReady}>라디오 (데이터 절약)</button></div>}</div><div className="player-content">
-    {!radioModeActive && isVideo && mediaUrl && <><video key={`video-${sourceKey}`} {...mediaProps} preload={preload} onError={onPlaybackError} className="video-player">Your browser does not support the video tag.</video>{practiceControls}</>}
-    {(radioModeActive || isAudio) && mediaUrl && <div className="audio-player-container"><div className="audio-visualizer"><div className="album-art">{radioModeActive ? '📻' : '🎵'}</div><div className="audio-info"><div className="audio-mode-badge">{radioModeActive ? 'RADIO MODE' : 'AUDIO'}</div><div className="audio-filename">{file.name}</div></div></div><audio key={`audio-${sourceKey}-${radioModeActive}`} {...mediaProps} preload={preload} onError={onPlaybackError} className="audio-element">Your browser does not support the audio tag.</audio>{practiceControls}</div>}
-    {isVideo && processing && <p className="media-processing" role="status">{file.transcoding_status === 'processing' ? '음원을 추출 중입니다. 완료되면 라디오 모드를 사용할 수 있습니다.' : '업로드 완료 · 음원 대기 중입니다.'}</p>}
-    {isVideo && file.transcoding_status === 'failed' && <div className="media-processing error" role="alert"><p>음원 추출에 실패했습니다: {file.transcoding_error || '서버 오류'}</p><button type="button" onClick={handleRetry}>음원 추출 재시도</button></div>}
+  return <div className="media-player"><div className="player-header">{showTitle && <div className="player-info"><span className="player-icon">{radioModeActive ? '📻' : (isVideo ? '🎬' : (isAudio ? '🎵' : (isImage ? '🖼️' : '📄')))}</span><span className="player-title">{file.name}</span></div>}{radioReady && <div className="media-mode-controls media-modes" role="group" aria-label="재생 모드"><button type="button" className={!radioModeActive ? 'selected' : ''} onClick={() => changeMode(false)}>영상</button><button type="button" className={radioModeActive ? 'selected' : ''} onClick={() => changeMode(true)}>음원만 듣기</button></div>}</div><div className="player-content">
+    {!radioModeActive && isVideo && mediaUrl && <><video key={`video-${mediaUrl}`} {...mediaProps} preload={preload} onError={onPlaybackError} className="video-player">브라우저가 영상을 지원하지 않습니다.</video>{practiceControls}</>}
+    {(radioModeActive || isAudio) && mediaUrl && <div className="audio-player-container"><div className="audio-visualizer"><div className="album-art">{radioModeActive ? '📻' : '🎵'}</div><div className="audio-info"><div className="audio-mode-badge">{radioModeActive ? 'RADIO MODE' : 'AUDIO'}</div>{showTitle && <div className="audio-filename">{file.name}</div>}</div></div><audio key={`audio-${mediaUrl}`} {...mediaProps} preload={preload} onError={onPlaybackError} className="audio-element">브라우저가 오디오를 지원하지 않습니다.</audio>{practiceControls}</div>}
+    {isVideo && processing && <div className="media-processing" role="status"><p>{file.transcoding_status === 'processing' ? '음원을 추출 중입니다. 완료되면 음원만 들을 수 있습니다.' : '업로드 완료 · 음원 대기 중입니다.'}</p>{onRefresh && <button type="button" className="secondary-btn" onClick={onRefresh}>재생 정보 새로고침</button>}</div>}
+    {isVideo && file.transcoding_status === 'failed' && <div className="media-processing error" role="alert"><p>음원 추출에 실패했습니다: {file.transcoding_error || '서버 오류'}</p>{onRefresh && <button type="button" onClick={onRefresh}>재생 정보 새로고침</button>}</div>}
     {isImage && mediaUrl && <div className="image-preview"><img src={mediaUrl} alt={file.name} className="preview-image" /></div>}{isDocument && mediaUrl && <div className="document-preview"><a href={mediaUrl} target="_blank" rel="noreferrer" className="document-link">📄 {file.name} 다운로드</a></div>}{!mediaUrl && <div className="no-preview"><p>미리보기를 사용할 수 없습니다</p></div>}
   </div></div>;
 };
 
 const MediaPlayer = (props) => {
-  const sourceKey = props.file?.id || props.file?.url || `${props.file?.name || ''}:${props.file?.audio_url || ''}`;
-  return <MediaPlayerInstance key={sourceKey} {...props} />;
+  const identity = props.playbackIdentity ?? props.file?.id ?? props.file?.url ?? `${props.file?.name || ''}:${props.file?.audio_url || ''}`;
+  return <MediaPlayerInstance key={identity} {...props} playbackIdentity={identity} />;
 };
 
 export default MediaPlayer;

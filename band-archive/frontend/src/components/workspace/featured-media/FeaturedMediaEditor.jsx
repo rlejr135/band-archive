@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bandWorkspacePaths } from '../../../services/bandWorkspaceApi.js';
+import { workspaceMediaFile } from '../../../services/playbackMedia.js';
 import MediaPlayer from '../../common/MediaPlayer.jsx';
 import { ErrorState } from '../WorkspaceFeedback.jsx';
 import { takeOneStaleRefresh } from '../workspaceRouteState.js';
-import { formatRepresentativeDate, mediaPlayerFile, mergeUniqueEntries } from './featuredMediaPresentation.js';
+import { formatRepresentativeDate, mergeUniqueEntries } from './featuredMediaPresentation.js';
 import '../BandWorkspace.css';
 
 const PAGE_SIZE = 20;
 const requestOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
-export const FeaturedMediaEditor = ({ song, band, api, onSaved, onError, managementOnly = false }) => {
+export const FeaturedMediaEditor = ({ song, band, api, workspaceKey = '', onSaved, onError, managementOnly = false }) => {
   const [candidates, setCandidates] = useState({ loading: true, error: '', entries: [], pagination: null });
   const [media, setMedia] = useState({ loading: true, error: '', entries: [], pagination: null });
   const [previewId, setPreviewId] = useState(null);
@@ -112,7 +113,7 @@ export const FeaturedMediaEditor = ({ song, band, api, onSaved, onError, managem
         {managementOnly && candidate.is_featured
           ? <button type="button" className="secondary-btn" disabled={Boolean(busyId)} onClick={() => unset(candidate)}>{busyId === candidate.id ? '해제 중…' : '대표 해제'}</button>
           : <button type="button" className={candidate.is_featured ? 'secondary-btn' : 'primary-btn'} disabled={Boolean(busyId) || candidate.is_featured} onClick={() => choose(candidate)}>{busyId === candidate.id ? '저장 중…' : candidate.is_featured ? '현재 대표 미디어' : '대표로 지정'}</button>}
-        {!managementOnly && previewId === candidate.id && playableMedia && <div className="representative-preview"><MediaPlayer file={mediaPlayerFile(playableMedia)} preload="none" onPlaybackError={() => refreshCandidatePlayback(candidate, playableMedia)} /><button type="button" className="secondary-btn" disabled={media.loading} onClick={() => refreshCandidatePlayback(candidate, playableMedia)}>{media.loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></div>}
+        {!managementOnly && previewId === candidate.id && playableMedia && <div className="representative-preview"><MediaPlayer file={workspaceMediaFile(playableMedia)} playbackIdentity={`${workspaceKey}:band:${band.id}:song:${song.id}:candidate:${playableMedia.id}`} preload="none" onPlaybackError={() => refreshCandidatePlayback(candidate, playableMedia)} /><button type="button" className="secondary-btn" disabled={media.loading} onClick={() => refreshCandidatePlayback(candidate, playableMedia)}>{media.loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></div>}
         {!managementOnly && previewId === candidate.id && !playableMedia && media.error && <p className="workspace-muted" role="status">{media.error}</p>}
       </article>;
     })}</div>}
