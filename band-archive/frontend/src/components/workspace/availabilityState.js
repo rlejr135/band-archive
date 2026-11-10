@@ -74,6 +74,6 @@ export const slotChoices = (data, date, period, index = new Map(data.days.map((d
 export const aggregateSlot = (choices) => {
   if (!choices.length) return '—';
   const available = choices.filter((entry) => entry.status === 'AVAILABLE').length;
-  return available === 0 ? 'X' : available === choices.length ? 'O' : '△';
+  return available === 0 ? '-' : available === choices.length ? 'O' : '△';
 };
 export const toggleDay = (data, date, period) => batchDays(data, [cellKey(date, period)], binaryStatus(ownDay(data, date)[period]) === 'AVAILABLE' ? 'UNAVAILABLE' : 'AVAILABLE');

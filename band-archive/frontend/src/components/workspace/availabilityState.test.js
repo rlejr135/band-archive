@@ -19,7 +19,7 @@ test('single slot toggle preserves revision and other periods, treating missing 
 });
 test('view aggregation includes all active members and excludes foreign rows', () => {
   assert.equal(aggregateSlot(slotChoices(data, '2026-10-17', 'evening')), '△');
-  assert.equal(aggregateSlot(slotChoices(data, '2026-10-17', 'afternoon')), 'X');
+  assert.equal(aggregateSlot(slotChoices(data, '2026-10-17', 'afternoon')), '-');
   const everyone = { ...data, days: [...data.days, { membership_id: 2, date: '2026-10-17', evening: 'AVAILABLE' }, { membership_id: 999, date: '2026-10-17', evening: 'UNAVAILABLE' }] };
   assert.equal(aggregateSlot(slotChoices(everyone, '2026-10-17', 'evening')), 'O');
   assert.equal(slotChoices(everyone, '2026-10-17', 'evening').length, 2);

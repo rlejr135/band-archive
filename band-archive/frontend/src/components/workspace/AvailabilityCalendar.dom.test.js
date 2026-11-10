@@ -35,7 +35,8 @@ test('Sunday-first view aggregates all active members and popovers use band name
   assert.deepEqual([...view.container.querySelectorAll('thead th')].map((th) => th.textContent), ['일', '월', '화', '수', '목', '금', '토']);
   assert.equal(view.container.querySelectorAll('[data-availability-slot]').length, dates.length * 3);
   assert.equal(view.container.querySelectorAll('.availability-empty-day button').length, 0);
-  assert.equal(slot(view).textContent, '오전X'); assert.equal(slot(view, date, 'evening').textContent, '저녁△');
+  assert.equal(slot(view).textContent, '오전-'); assert.equal(slot(view, date, 'evening').textContent, '저녁△');
+  assert.equal(slot(view).classList.contains('state-unavailable'), true);
   assert.equal(view.container.querySelectorAll('.availability-slot-button.is-dirty').length, 0);
   assert.match(slot(view).getAttribute('aria-label'), /전원 불가능/); assert.match(slot(view, date, 'evening').getAttribute('aria-label'), /일부 가능·일부 불가능/);
   fireEvent.pointerEnter(slot(view, date, 'evening').parentElement, { pointerType: 'mouse' });

@@ -10,7 +10,7 @@ export default function AvailabilityCell({ data, dayIndex, date, period, mode, d
   const active = mode === 'view' && popover?.kind !== 'candidate' && popover?.date === date && popover.period === period;
   const pinned = active && popover.pinned;
   const dirty = mode === 'mine' && changed;
-  const description = mode === 'mine' ? STATUS_LABELS[symbol === 'O' ? 'AVAILABLE' : 'UNAVAILABLE'] : { O: '전원 가능', X: '전원 불가능', '△': '일부 가능·일부 불가능', '—': '집계할 활성 멤버 없음' }[symbol];
+  const description = mode === 'mine' ? STATUS_LABELS[symbol === 'O' ? 'AVAILABLE' : 'UNAVAILABLE'] : { O: '전원 가능', '-': '전원 불가능', '△': '일부 가능·일부 불가능', '—': '집계할 활성 멤버 없음' }[symbol];
   const closeAndRestoreFocus = useCallback(() => {
     setPopover(null);
     if (trigger.current?.isConnected && document.activeElement !== trigger.current) {
@@ -28,7 +28,7 @@ export default function AvailabilityCell({ data, dayIndex, date, period, mode, d
   }, [active, setPopover, closeAndRestoreFocus]);
   const inspect = () => { if (!popover?.pinned) setPopover({ date, period, pinned: false }); };
   return <div ref={root} className="availability-slot" onPointerEnter={(event) => { if (mode === 'view' && event.pointerType !== 'touch') inspect(); }} onPointerLeave={() => { if (active && !pinned) setPopover(null); }} onBlur={(event) => { if (active && !pinned && !event.currentTarget.contains(event.relatedTarget)) setPopover(null); }}>
-    <button ref={trigger} type="button" data-availability-slot="true" data-date={date} data-period={period} disabled={disabled} aria-busy={Boolean(pending)} className={`availability-slot-button state-${symbol === 'O' ? 'available' : symbol === 'X' ? 'unavailable' : symbol === '—' ? 'empty' : 'mixed'}${pending ? ' is-pending' : ''}${dirty ? ' is-dirty' : ''}`} aria-label={`${date} ${PERIOD_LABELS[period]} ${mode === 'mine' ? '내 일정' : '멤버 선택'} ${symbol} ${description}${dirty ? ' 저장 전 변경' : ''}`} aria-pressed={mode === 'mine' ? symbol === 'O' : undefined} aria-expanded={mode === 'view' ? Boolean(active) : undefined} aria-describedby={active ? id : undefined} onFocus={() => { if (!suppressFocus.current && mode === 'view') inspect(); }} onClick={() => { onDate(date); if (mode === 'mine') onToggle(date, period); else setPopover(pinned ? null : { date, period, pinned: true }); }}>
+    <button ref={trigger} type="button" data-availability-slot="true" data-date={date} data-period={period} disabled={disabled} aria-busy={Boolean(pending)} className={`availability-slot-button state-${symbol === 'O' ? 'available' : symbol === 'X' || symbol === '-' ? 'unavailable' : symbol === '—' ? 'empty' : 'mixed'}${pending ? ' is-pending' : ''}${dirty ? ' is-dirty' : ''}`} aria-label={`${date} ${PERIOD_LABELS[period]} ${mode === 'mine' ? '내 일정' : '멤버 선택'} ${symbol} ${description}${dirty ? ' 저장 전 변경' : ''}`} aria-pressed={mode === 'mine' ? symbol === 'O' : undefined} aria-expanded={mode === 'view' ? Boolean(active) : undefined} aria-describedby={active ? id : undefined} onFocus={() => { if (!suppressFocus.current && mode === 'view') inspect(); }} onClick={() => { onDate(date); if (mode === 'mine') onToggle(date, period); else setPopover(pinned ? null : { date, period, pinned: true }); }}>
       <span>{PERIOD_LABELS[period]}</span><b aria-hidden="true">{pending ? '…' : symbol}</b>
       {dirty && <span className="availability-dirty-marker" aria-hidden="true" />}
     </button>
