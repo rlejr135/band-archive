@@ -9,7 +9,7 @@ import { fireEvent } from '@testing-library/react';
 import { createServer } from 'vite';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
-Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Event: dom.window.Event, FormData: dom.window.FormData });
+Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Event: dom.window.Event, FormData: dom.window.FormData, requestAnimationFrame: (callback) => setTimeout(callback, 0) });
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
 dom.window.HTMLElement.prototype.attachEvent = () => {}; dom.window.HTMLElement.prototype.detachEvent = () => {};
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
@@ -34,6 +34,35 @@ const AccountBands = ({ children, authValue, entry, strict = false }) => {
 };
 const account = (id = null) => ({ user: id ? { id, email: 'person@example.test' } : null, getAccessToken: async () => 'test-token', refreshSession: async () => 'test-token', signOut: async () => {}, loading: false, configError: null, hasRecoverySession: false });
 const renderRoutes = (entry, authValue = account(), strict = false) => render(createElement(AccountBands, { entry, authValue, strict }, createElement(routes)));
+
+test('upload target opens the original band song detail through the real AppRoutes tree', async () => {
+  await load(); const previousFetch = globalThis.fetch; const calls = [];
+  const original = { id: 41, name: '원래 밴드', slug: 'origin-band', membership: { role: 'member' } };
+  const selected = { id: 42, name: '선택 밴드', slug: 'selected-band', membership: { role: 'member' } };
+  globalThis.fetch = async (url) => {
+    const path = String(url); calls.push(path);
+    if (path.endsWith('/api/v2/bands')) return response({ bands: [selected, original], pending_memberships: [] });
+    if (path.includes('/by-slug/origin-band')) return response({ band: original });
+    if (path.includes('/by-slug/selected-band')) return response({ band: selected });
+    if (path.endsWith('/bands/41/songs/7')) return response({ song: { id: 7, band_id: 41, title: '원래 밴드 대상 곡', artist: '원래 연주자', status: 'Practice' } });
+    if (path.includes('/songs/7/media?')) return response({ media: [], pagination: { has_more: false } });
+    if (path.includes('/songs?')) return response({ songs: [], pagination: { has_more: false } });
+    return response({});
+  };
+  try {
+    const task = { id: 'origin-task', name: 'practice.mp4', bandId: 41, bandSlug: 'origin-band', bandName: original.name, target: { bandId: 41, songId: 7 }, targetLabel: '곡 #7', status: 'completed', mediaId: 99 };
+    const view = render(createElement(auth.AuthContext.Provider, { value: account('upload-route-user') }, createElement(bands.BandProvider, null,
+      createElement(uploads.UploadContext.Provider, { value: { tasks: [task], nativePending: [], subscribeMediaCompletion: () => () => {} } },
+        createElement(MemoryRouter, { initialEntries: ['/bands/selected-band/songs'] }, createElement(Location), createElement(routes))))));
+    await view.findByRole('heading', { name: '곡 목록' });
+    fireEvent.click(view.getByRole('button', { name: /업로드함/ }));
+    fireEvent.click(view.getByRole('button', { name: '대상 열기' }));
+    await view.findByRole('heading', { name: '원래 밴드 대상 곡' });
+    assert.equal(view.getByTestId('route').textContent, '/bands/origin-band/songs?song=7');
+    assert.equal(calls.some((path) => path.endsWith('/bands/41/songs/7')), true);
+    assert.equal(calls.some((path) => path.endsWith('/bands/42/songs/7')), false);
+  } finally { globalThis.fetch = previousFetch; }
+});
 
 test('anonymous home is a static example plus the real login form and performs no domain reads', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];

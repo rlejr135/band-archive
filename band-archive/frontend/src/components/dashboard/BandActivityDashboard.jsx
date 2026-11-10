@@ -1,3 +1,4 @@
+import { bandUiPaths } from '../../services/bandUiPaths.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Calendar from 'react-calendar';
 import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
@@ -12,7 +13,6 @@ import {
   mergeDashboardPage,
   parseIsoDate,
   rehearsalsForDate,
-  strictPositiveId,
 } from '../workspace/bandDashboardState.js';
 import './BandActivityDashboard.css';
 import { activeAvailabilityMember } from '../workspace/availabilityState.js';
@@ -42,15 +42,8 @@ const statusRows = [
   ['Other', '기타'],
 ];
 
-const songHref = (band, song) => {
-  const id = strictPositiveId(String(song?.id ?? ''));
-  return id ? `/bands/${encodeURIComponent(band.slug)}/songs?song=${id}` : null;
-};
-
-const rehearsalHref = (band, rehearsal) => {
-  const id = strictPositiveId(String(rehearsal?.id ?? ''));
-  return id ? `/bands/${encodeURIComponent(band.slug)}/rehearsals?rehearsal=${id}` : null;
-};
+const songHref = (band, song) => bandUiPaths.song(band.slug, song?.id);
+const rehearsalHref = (band, rehearsal) => bandUiPaths.rehearsal(band.slug, rehearsal?.id);
 
 const RehearsalSummary = ({ band, rehearsal, compact = false }) => {
   const href = rehearsalHref(band, rehearsal);

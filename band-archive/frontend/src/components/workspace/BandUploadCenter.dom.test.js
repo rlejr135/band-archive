@@ -30,14 +30,25 @@ test('UploadCenter labels a completed task with its immutable origin band and op
     target: { bandId: 41, songId: 7 }, targetLabel: '곡 #7', status: 'completed', mediaId: 99,
   };
   const context = { tasks: [task], cancel: () => {}, retryTask: async () => {}, clearHistory: () => {} };
-  const Location = () => createElement('output', { 'data-testid': 'location' }, useLocation().pathname);
+  const Location = () => { const location = useLocation(); return createElement('output', { 'data-testid': 'location' }, location.pathname + location.search); };
   const view = render(createElement(MemoryRouter, { initialEntries: ['/bands/second-band/songs'] },
     createElement(uploadContext.UploadContext.Provider, { value: context }, createElement(upload.default), createElement(Location)),
   ));
   await userEvent.click(view.getByRole('button', { name: /업로드함/ }));
   await view.findByText('첫 밴드 · 곡 #7');
   await act(async () => { await userEvent.click(view.getByRole('button', { name: '대상 열기' })); });
-  await waitFor(() => assert.equal(view.getByTestId('location').textContent, '/bands/first-band/songs/7'));
+  await waitFor(() => assert.equal(view.getByTestId('location').textContent, '/bands/first-band/songs?song=7'));
+});
+
+test('UploadCenter disables target navigation when immutable origin or target data is invalid', async () => {
+  await load();
+  for (const data of [{ target: { songId: 7 } }, { bandSlug: 'first', target: { songId: 0 } }, { bandSlug: 'first', target: { memberId: 'bad' } }, { bandSlug: 'first', target: {} }]) {
+    const task = { id: 'invalid', status: 'completed', mediaId: 99, name: 'invalid.mp4', ...data };
+    const view = render(createElement(MemoryRouter, { initialEntries: ['/bands/selected/songs'] }, createElement(uploadContext.UploadContext.Provider, { value: { tasks: [task] } }, createElement(upload.default))));
+    await userEvent.click(view.getByRole('button', { name: /업로드함/ }));
+    assert.equal(view.getByRole('button', { name: '대상 열기' }).disabled, true);
+    view.unmount();
+  }
 });
 
 test('UploadCenter does not offer a band task the unscoped legacy audio retry route', async () => {

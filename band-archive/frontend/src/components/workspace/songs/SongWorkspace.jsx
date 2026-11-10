@@ -1,3 +1,4 @@
+import { isActiveBandMembership } from '../../../services/bandMembership.js';
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -44,7 +45,7 @@ const SongContentWorkspace = () => {
     item: null
   });
   const detailEpoch = useRef(0);
-  const member = Boolean(band.membership);
+  const member = isActiveBandMembership(band.membership);
   const label = '곡';
   useEffect(() => {
     if (detailValue == null) {

@@ -1,3 +1,4 @@
+import { isActiveBandMembership } from '../../../services/bandMembership.js';
 import { useCallback, useRef, useState } from 'react';
 import { useServicePolicy } from '../../../context/ServicePolicyContext.jsx';
 import { reviewPublicVisibility } from '../../../services/uploadPolicy.js';
@@ -18,7 +19,7 @@ export const SuggestionsWorkspace = () => {
     return { entries: response?.suggestions, pagination: response?.pagination };
   }, [api, band.id]);
   const suggestions = usePagedRead('suggestions', fetchSuggestions);
-  const member = Boolean(band.membership && String(band.membership.status || 'ACTIVE').toLowerCase() === 'active');
+  const member = isActiveBandMembership(band.membership);
   const suggestionCards = suggestions.entries.map((suggestion) => <SuggestionCard key={suggestion.id} suggestion={suggestion} member={member} onChanged={suggestions.refresh} />);
   const [creating, setCreating] = useState(false);
   return <section className="workspace-page workspace-suggestions-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>{member ? '추천곡을 등록하고 투표해 보세요.' : '공개된 추천곡을 확인할 수 있습니다.'}</p></div>{member && <button type="button" className="primary-btn workspace-suggestions-add" onClick={() => setCreating(true)}>추천곡 추가</button>}</div>

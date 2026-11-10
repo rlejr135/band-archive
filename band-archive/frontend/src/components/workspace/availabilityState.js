@@ -1,9 +1,10 @@
+import { isActiveBandMembership } from '../../services/bandMembership.js';
 export const PERIODS = ['morning', 'afternoon', 'evening'];
 export const availabilityPath = (bandId, from, to) => `/api/v2/bands/${Number(bandId)}/availability?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
 export const PERIOD_LABELS = { morning: '오전', afternoon: '오후', evening: '저녁' };
 export const STATUS_LABELS = { AVAILABLE: '가능', UNAVAILABLE: '불가능' };
 export const binaryStatus = (value) => value === 'AVAILABLE' ? 'AVAILABLE' : 'UNAVAILABLE';
-export const activeAvailabilityMember = (band) => Boolean(band.membership && String(band.membership.status || 'active').toLowerCase() === 'active');
+export const activeAvailabilityMember = (band) => isActiveBandMembership(band?.membership);
 export const seoulToday = () => {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type).value).join('-');

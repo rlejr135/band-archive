@@ -1,3 +1,4 @@
+import { isActiveBandMembership } from '../../../services/bandMembership.js';
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useId, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -25,7 +26,7 @@ const RehearsalContentWorkspace = () => {
   const { loading, error, entries, pagination, refresh, loadMore } = useCollection('rehearsals');
   const [searchParams, setSearchParams] = useSearchParams();
   const [selected, setSelected] = useState(null);
-  const [formMode, setFormMode] = useState(() => searchParams.get('create') === '1' && band.membership ? 'create' : null);
+  const [formMode, setFormMode] = useState(() => searchParams.get('create') === '1' && isActiveBandMembership(band.membership) ? 'create' : null);
   const [createPresentation, setCreatePresentation] = useState(() => typeof window !== 'undefined' && window.matchMedia?.('(max-width: 760px)').matches ? 'modal' : 'pane');
   const [createSaving, setCreateSaving] = useState(false);
   const createSavingRef = useRef(false);
@@ -35,7 +36,7 @@ const RehearsalContentWorkspace = () => {
   const detailId = detailValue == null ? null : strictPositiveId(detailValue);
   const [queryDetail, setQueryDetail] = useState({ id: null, loading: false, error: '', item: null });
   const detailEpoch = useRef(0);
-  const member = Boolean(band.membership);
+  const member = isActiveBandMembership(band.membership);
   const label = '합주';
   const detailPanelId = useId();
   const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && Boolean(window.matchMedia?.('(max-width: 760px)').matches));

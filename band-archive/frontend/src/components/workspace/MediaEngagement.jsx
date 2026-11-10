@@ -1,3 +1,4 @@
+import { isActiveBandMembership } from '../../services/bandMembership.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bandWorkspacePaths, commentPayload, votePayload } from '../../services/bandWorkspaceApi.js';
 import { buildCommentThreads, mergeCommentPage, voteTarget } from '../../services/mediaEngagement.js';
@@ -7,7 +8,6 @@ const PAGE_SIZE = 20;
 const readOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
 const writeOptions = (method, body, signal) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
 const genericError = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
-const activeMembership = (membership) => Boolean(membership && !['inactive', 'removed', 'suspended'].includes(String(membership.status || '').toLowerCase()));
 
 const CommentNode = ({ comment, member, editing, editValue, onEditValue, onEdit, band, workspaceKey, onDeleted, onReply, onSaveEdit, onCancelEdit, busy }) => (
   <li className="media-comment" data-comment-id={comment.id}>
@@ -19,7 +19,7 @@ const CommentNode = ({ comment, member, editing, editValue, onEditValue, onEdit,
 );
 
 export const MediaEngagement = ({ band, api, media, workspaceKey, onMediaUpdate, onAuthoritativeRefresh }) => {
-  const member = activeMembership(band.membership);
+  const member = isActiveBandMembership(band.membership);
   const [viewerVote, setViewerVote] = useState(Number.isInteger(media.viewer_vote) ? media.viewer_vote : 0);
   const [voteBusy, setVoteBusy] = useState(false);
   const [voteError, setVoteError] = useState('');

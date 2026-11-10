@@ -1,3 +1,4 @@
+import { isActiveBandMembership } from '../services/bandMembership.js';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './AuthContext.jsx';
 import { createAuthenticatedApiClient } from '../services/authApiClient.js';
@@ -112,7 +113,7 @@ const BandStateProvider = ({ children, userId }) => {
     const response = await api.requestJson(`/api/v2/bands/by-slug/${encodeURIComponent(bandSlug)}`, signal ? { signal } : {});
     const band = response?.band;
     if (Number(band?.id) !== id) return null;
-    const hasActiveMembership = Boolean(band.membership && (band.membership.status === undefined || band.membership.status === 'active'));
+    const hasActiveMembership = isActiveBandMembership(band.membership);
     setState((previous) => ({
       ...previous,
       activeBands: previous.activeBands.flatMap((item) => Number(item.id) !== id ? [item] : (hasActiveMembership ? [band] : [])),
