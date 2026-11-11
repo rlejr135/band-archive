@@ -76,26 +76,32 @@ def test_band_initiate_requires_active_membership_scopes_keys_and_reserves_quota
         session = db.session.get(MultipartUploadSession, payload['session_id'])
         assert session.band_id == band_id and session.created_by_membership_id == membership_id
         assert session.is_legacy is False
-        assert session.object_key == f'bands/{band_id}/media/{payload["filename"]}'
-    assert calls == [f'bands/{band_id}/media/{payload["filename"]}']
+        assert session.object_key == f'media/band-a/{payload["filename"]}'
+    assert calls == [f'media/band-a/{payload["filename"]}']
     # The live session itself reserves 10 bytes, so another 10-byte initiate
     # cannot oversubscribe this band's 15-byte quota.
     assert _initiate(write_client, band_id, principals['member'], song_id).status_code == 409
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('preexisting_key', (False, True), ids=('new-band-folder', 'old-v2-folder'))
 def test_capability_continues_parts_but_complete_rechecks_current_membership(
-        access_app, write_client, principals, monkeypatch):
+        access_app, write_client, principals, monkeypatch, preexisting_key):
     band_id = _band_id(access_app)
     song_id, membership_id = _song(access_app, band_id)
     monkeypatch.setattr(storage, 'create_multipart_upload', lambda key, content_type: 'phase8')
-    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 10})
+    verified = []
+    monkeypatch.setattr(storage, 'head', lambda key: verified.append(key) or {'ContentLength': 10})
     started = _initiate(write_client, band_id, principals['member'], song_id)
     assert started.status_code == 201
     session = started.get_json(); session_id = session['session_id']
     capability = {session['capability_header']: session['upload_capability_token']}
     base = f'/api/v2/bands/{band_id}/uploads/multipart/{session_id}'
+    expected_key = (f'bands/{band_id}/media/{session["filename"]}' if preexisting_key
+                    else f'media/band-a/{session["filename"]}')
     with access_app.app_context():
+        if preexisting_key:
+            db.session.get(MultipartUploadSession, session_id).object_key = expected_key
         membership = db.session.get(BandMembership, membership_id)
         membership.status = 'left'; db.session.commit()
     # Capability routes remain resumable and intentionally do not require the
@@ -109,10 +115,11 @@ def test_capability_continues_parts_but_complete_rechecks_current_membership(
         db.session.get(BandMembership, membership_id).status = 'active'; db.session.commit()
     completed = write_client.post(f'{base}/complete', headers={**principals['member'], **capability})
     assert completed.status_code == 201
+    assert verified == [expected_key]
     with access_app.app_context():
         media = Media.query.filter_by(band_id=band_id).one()
         assert media.created_by_membership_id == membership_id
-        assert media.object_key == f'bands/{band_id}/media/{session["filename"]}'
+        assert media.object_key == expected_key
 
 
 def test_unrecovered_aborting_session_still_reserves_band_quota(
@@ -155,28 +162,34 @@ def test_direct_initiate_requires_membership_scopes_key_and_reserves_quota(
     started = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
     assert started.status_code == 201
     payload = started.get_json()
-    assert payload['upload_url'].endswith(f'bands/{band_id}/media/{payload["filename"]}')
+    assert payload['upload_url'].endswith(f'media/band-a/{payload["filename"]}')
     with access_app.app_context():
         session = db.session.get(DirectUploadSession, payload['session_id'])
         assert session.band_id == band_id and session.created_by_membership_id == membership_id
-        assert session.object_key == f'bands/{band_id}/media/{payload["filename"]}'
+        assert session.object_key == f'media/band-a/{payload["filename"]}'
         assert session.status == 'initiated'
     # The direct reservation is accounted together with the existing multipart
     # reservation pool, so a second 10-byte PUT cannot oversubscribe 15 bytes.
     assert _direct_initiate(write_client, band_id, principals['member'], song_id=song_id).status_code == 409
 
 
+@pytest.mark.parametrize('preexisting_key', (False, True), ids=('new-band-folder', 'old-v2-folder'))
 def test_direct_complete_requires_capability_and_current_membership_is_idempotent(
-        access_app, write_client, principals, monkeypatch):
+        access_app, write_client, principals, monkeypatch, preexisting_key):
     band_id = _band_id(access_app)
     song_id, membership_id = _song(access_app, band_id)
-    monkeypatch.setattr(storage, 'head', lambda key: {'ContentLength': 10})
+    verified = []
+    monkeypatch.setattr(storage, 'head', lambda key: verified.append(key) or {'ContentLength': 10})
     started = _direct_initiate(write_client, band_id, principals['member'], song_id=song_id)
     payload = started.get_json()
+    expected_key = (f'bands/{band_id}/media/{payload["filename"]}' if preexisting_key
+                    else f'media/band-a/{payload["filename"]}')
     complete = f'/api/v2/bands/{band_id}/uploads/direct/{payload["session_id"]}/complete'
     capability = {payload['capability_header']: payload['upload_capability_token']}
     assert write_client.post(complete, headers=principals['member'], json={}).status_code == 403
     with access_app.app_context():
+        if preexisting_key:
+            db.session.get(DirectUploadSession, payload['session_id']).object_key = expected_key
         db.session.get(BandMembership, membership_id).status = 'left'
         db.session.commit()
     assert write_client.post(complete, headers={**principals['member'], **capability}, json={}).status_code == 403
@@ -187,12 +200,16 @@ def test_direct_complete_requires_capability_and_current_membership_is_idempoten
     assert completed.status_code == 201
     repeated = write_client.post(complete, headers={**principals['member'], **capability}, json={})
     assert repeated.status_code == 200
+    assert verified == [expected_key]
     with access_app.app_context():
         session = db.session.get(DirectUploadSession, payload['session_id'])
         media = db.session.get(Media, session.media_id)
         assert session.status == 'completed' and media.band_id == band_id
-        assert media.object_key == f'bands/{band_id}/media/{payload["filename"]}'
+        assert media.object_key == expected_key
         assert Media.query.filter_by(band_id=band_id).count() == 1
+    listing = write_client.get(f'/api/v2/bands/{band_id}/songs/{song_id}/media', headers=principals['member'])
+    assert listing.status_code == 200
+    assert listing.get_json()['media'][0]['playback']['video_url'] == f'https://storage.test/{expected_key}'
 
 
 def test_gallery_direct_upload_is_tenant_scoped_quota_reserved_and_idempotent(

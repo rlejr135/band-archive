@@ -19,7 +19,7 @@ from media_processing import (
     stop_worker,
     utcnow,
 )
-from models import Media
+from models import Band, Media
 from media_sources import select_media_source_keys
 from storage import storage
 
@@ -346,6 +346,42 @@ def test_worker_passes_configured_heartbeat_interval(app, monkeypatch):
     with app.app_context():
         process_claimed_media(media_id, app.config)
     assert received['heartbeat_seconds'] == 9
+
+
+@pytest.mark.parametrize('source_format,allowed', (
+    ('media/{slug}/clip.mp4', True),
+    ('bands/{band_id}/media/clip.mp4', True),
+    ('media/clip.mp4', True),
+    ('media/another-band/clip.mp4', False),
+    ('media/{slug}/nested/clip.mp4', False),
+), ids=('band-folder', 'old-v2-folder', 'legacy-flat', 'foreign-folder', 'nested-folder'))
+def test_worker_extracts_audio_in_the_source_folder_only_for_owned_media(app, monkeypatch, source_format, allowed):
+    calls = []
+
+    def extract(_filename, *, source_key, destination_key, **_options):
+        calls.append((source_key, destination_key))
+        return 'clip_audio.m4a'
+
+    monkeypatch.setattr('media_processing.extract_m4a_audio', extract)
+    monkeypatch.setattr(storage, 'exists', lambda _key: True)
+    with app.app_context():
+        band = Band.query.filter_by(is_legacy_import=True).one()
+        source_key = source_format.format(band_id=band.id, slug=band.slug)
+        media = create_media(song_id=1, filename='clip.mp4', file_type='video',
+                             band_id=band.id, object_key=source_key)
+        db.session.add(media)
+        db.session.commit()
+        media_id = claim_next_queued_media()
+        process_claimed_media(media_id, app.config)
+        updated = db.session.get(Media, media_id)
+        if allowed:
+            output_key = f'{source_key.rsplit("/", 1)[0]}/clip_audio.m4a'
+            assert calls == [(source_key, output_key)]
+            assert updated.audio_object_key == output_key
+            assert updated.transcoding_status == 'completed'
+        else:
+            assert calls == []
+            assert updated.audio_object_key is None
 
 
 def test_ffmpeg_command_emits_heartbeat_while_running(monkeypatch):

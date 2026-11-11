@@ -16,6 +16,7 @@ from direct_upload_service import (
     expire_direct_sessions_for_band, persist_direct_cleanup_pending,
 )
 from errors import ValidationError
+from media_storage_keys import band_media_object_key
 from multipart_upload_service import MEDIA_TARGET, PERSONAL_LOG_TARGET, create_session
 from policy_service import validate_upload_assertion, record_upload_assertion
 from upload_authorization_service import (
@@ -80,7 +81,7 @@ def reserve_direct_upload(band_id, data, *, filename, secure_name, declared_byte
             )
         song_id, rehearsal_id = validate_media_upload_target(band.id, data)
         return _policy_session(create_direct_session, membership, assertion,
-            kind='media', object_key=f'bands/{band.id}/media/{secure_name}',
+            kind='media', object_key=band_media_object_key(band.slug, secure_name),
             song_id=song_id, rehearsal_id=rehearsal_id, **common,
         )
 
@@ -116,7 +117,7 @@ def reserve_multipart_upload(band_id, data, *, filename, secure_name, declared_b
         common = {
             'original_filename': filename, 'filename': secure_name,
             'content_type': content_type or guess_content_type(filename), 'declared_bytes': declared_bytes,
-            'object_key': f'bands/{band.id}/{{prefix}}/{secure_name}', 'commit': False,
+            'commit': False,
             'band_id': band.id, 'created_by_membership_id': membership.id, 'is_legacy': False,
         }
         if has_member:
@@ -124,11 +125,11 @@ def reserve_multipart_upload(band_id, data, *, filename, secure_name, declared_b
             if len(title or filename) > 200:
                 raise ValidationError('title must be 200 characters or less')
             member_id = validate_personal_log_upload_target(band.id, data.get('member_id'))
-            common['object_key'] = common['object_key'].format(prefix='personal_logs')
+            common['object_key'] = f'bands/{band.id}/personal_logs/{secure_name}'
             return _policy_session(create_session, membership, assertion, PERSONAL_LOG_TARGET,
                                       member_id=member_id, title=title or filename, **common)
         song_id, rehearsal_id = validate_media_upload_target(band.id, data)
-        common['object_key'] = common['object_key'].format(prefix='media')
+        common['object_key'] = band_media_object_key(band.slug, secure_name)
         return _policy_session(create_session, membership, assertion, MEDIA_TARGET,
                                   song_id=song_id, rehearsal_id=rehearsal_id, **common)
 

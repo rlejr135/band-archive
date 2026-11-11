@@ -254,7 +254,9 @@ def test_deletion_and_task_status_do_not_grant_author_admin_or_invalid_account_b
 
 @pytest.mark.parametrize('bad_key', ('bands/999/media/wrong.mp4', 'bands/1/media/../wrong.mp4',
                                     'https://example.com/video.mp4', 'media/legacy.mp4',
-                                    'bands/1/gallery/wrong.mp4'))
+                                    'bands/1/gallery/wrong.mp4', 'media/band-b/wrong.mp4',
+                                    'media/band-a/../wrong.mp4', 'media/band-a/nested/wrong.mp4',
+                                    'media/band-a/%2fwrong.mp4'))
 def test_invalid_or_untrusted_legacy_keys_fail_before_queue_or_storage(
         deletion_app, signer, authenticated_client, bad_key):
     band_id, resource_id = seed_file(deletion_app, 'media', object_key=bad_key)
@@ -434,9 +436,29 @@ def test_operator_announcement_clear_is_synchronous_worker_independent_and_keeps
         assert json.loads(audit_row.details_json)['reason'] == 'Synthetic clear request'
 
 
-def test_worker_revalidates_manifest_against_late_shared_reference_before_storage(
+def test_worker_deletes_media_original_and_audio_in_the_owned_band_folder(
         deletion_app, signer, authenticated_client, monkeypatch):
-    band_id, resource_id = seed_file(deletion_app, 'media')
+    expected_keys = ['media/band-a/original.mp4', 'media/band-a/sound.m4a']
+    band_id, resource_id = seed_file(
+        deletion_app, 'media', object_key=expected_keys[0], audio_object_key=expected_keys[1],
+        video_720_filename=None, video_720_object_key=None,
+    )
+    task_id = enqueue(authenticated_client, signer, band_id, 'media', resource_id)
+    calls = []
+    monkeypatch.setattr(storage, 'delete_bounded', calls.append)
+    with deletion_app.app_context():
+        assert db.session.get(R2DeletionTask, task_id).object_keys == expected_keys
+        assert process_task(*_claim_one(120)) is True
+        assert db.session.get(Media, resource_id) is None
+    assert calls == expected_keys
+
+
+@pytest.mark.parametrize('band_folder', (False, True), ids=('old-v2-folder', 'new-band-folder'))
+def test_worker_revalidates_manifest_against_late_shared_reference_before_storage(
+        deletion_app, signer, authenticated_client, monkeypatch, band_folder):
+    overrides = ({'object_key': 'media/band-a/original.mp4', 'audio_object_key': 'media/band-a/sound.m4a'}
+                 if band_folder else {})
+    band_id, resource_id = seed_file(deletion_app, 'media', **overrides)
     task_id = enqueue(authenticated_client, signer, band_id, 'media', resource_id)
     with deletion_app.app_context():
         target = db.session.get(Media, resource_id)

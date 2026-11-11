@@ -13,9 +13,10 @@ import time
 from sqlalchemy import func
 
 from extensions import db
-from models import Media, PersonalLog, R2DeletionTask
+from models import Band, Media, PersonalLog, R2DeletionTask
 from storage import storage
 from media_sources import select_media_source_keys
+from media_storage_keys import is_band_media_object_key
 
 SAFE_ERRORS = {
     'no_audio': 'Video has no audio track.',
@@ -397,7 +398,13 @@ def process_claimed_record(spec, record_id, config):
     ).filter(R2DeletionTask.status != 'completed').first():
         return
     source_key = getattr(record, 'object_key', None) or f'{spec.key_prefix}/{record.filename}'
-    if not source_key.startswith((f'bands/{record.band_id}/{spec.key_prefix}/', f'{spec.key_prefix}/')):
+    if spec.kind == 'media' and source_key.startswith('media/') and source_key.count('/') > 1:
+        # The unscoped media namespace also contains older flat objects. A
+        # nested source must belong to the record's exact band folder.
+        band = db.session.get(Band, record.band_id)
+        if band is None or not is_band_media_object_key(band.slug, source_key):
+            return
+    elif not source_key.startswith((f'bands/{record.band_id}/{spec.key_prefix}/', f'{spec.key_prefix}/')):
         return
     output_key = f"{source_key.rsplit('/', 1)[0]}/{audio_filename_for(source_key.rsplit('/', 1)[-1])}"
     try:

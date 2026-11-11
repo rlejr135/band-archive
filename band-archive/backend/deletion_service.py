@@ -4,13 +4,13 @@ The queue stores only server-derived object keys.  Callers never supply an
 object key, filename, URL, or storage account identifier.
 """
 from datetime import datetime, timezone
-import re
 import uuid
 
 from sqlalchemy import or_, and_
 
 from extensions import db
 from band_service import ACTIVE
+from media_storage_keys import is_band_media_object_key, validated_object_basename
 from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage,
                     Media, Member, PersonalLog, Rehearsal, R2DeletionTask, Song,
                     SongSuggestion)
@@ -28,7 +28,6 @@ RESOURCE_MODELS = {
 }
 FILE_RESOURCES = {'media', 'personal_log', 'gallery'}
 ERROR_CODES = {'none', 'storage_unavailable', 'key_conflict', 'invalid_key', 'unknown'}
-_BASENAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$')
 
 
 def utcnow():
@@ -69,14 +68,10 @@ def lock_band_and_membership(band_id, user_id, *, require_member):
     return band, membership
 
 
-def _validated_basename(value):
-    if not isinstance(value, str) or not _BASENAME.fullmatch(value) or value in {'.', '..'}:
-        raise ValueError('invalid_key')
-    return value
-
-
 def _canonical_or_legacy(band, category, canonical, legacy):
     if canonical:
+        if category == 'media' and is_band_media_object_key(band.slug, canonical):
+            return canonical
         expected = f'bands/{band.id}/{category}/'
         legacy_prefix = f'{category}/'
         if canonical.startswith(expected):
@@ -85,12 +80,11 @@ def _canonical_or_legacy(band, category, canonical, legacy):
             basename = canonical[len(legacy_prefix):]
         else:
             raise ValueError('invalid_key')
-        if '/' in basename or _validated_basename(basename) != basename:
-            raise ValueError('invalid_key')
+        validated_object_basename(basename)
         return canonical
     if not legacy:
         return None
-    basename = _validated_basename(legacy)
+    basename = validated_object_basename(legacy)
     if band.is_legacy_import:
         return f'{category}/{basename}'
     raise ValueError('invalid_key')

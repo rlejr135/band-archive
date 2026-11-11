@@ -59,7 +59,8 @@ def _fixture(invite_pg, monkeypatch, parent):
             band_id=ids['band'], user_id=ids['owner'], status='active').one()
         # A new ten-byte reservation exactly fills this band's quota. There
         # is no existing media, upload, expired cleanup or external R2 work.
-        db.session.get(Band, ids['band']).storage_quota_bytes = 10
+        band = db.session.get(Band, ids['band'])
+        band.storage_quota_bytes = 10
         song = Song(band_id=ids['band'], created_by_membership_id=membership.id,
                     title='Owned parent upload race', artist='Fixture', visibility='MEMBERS')
         db.session.add(song)
@@ -70,7 +71,7 @@ def _fixture(invite_pg, monkeypatch, parent):
                 title='Owned upload event', date=date(2026, 11, 4), visibility='MEMBERS')
             db.session.add(rehearsal)
         db.session.commit()
-        graph = {'band': ids['band'], 'owner': ids['owner'], 'membership': membership.id,
+        graph = {'band': band.id, 'band_slug': band.slug, 'owner': ids['owner'], 'membership': membership.id,
                  'song': song.id, 'rehearsal': rehearsal.id if rehearsal else None}
         db.session.remove()
 
@@ -173,8 +174,7 @@ def test_parent_deletion_and_upload_reservation_have_one_serialized_order(
                     reservation.song_id, reservation.rehearsal_id) == (
                         graph['band'], graph['membership'], graph['song'], graph['rehearsal'])
             assert reservation.status == 'initiated' and reservation.declared_bytes == 10
-            assert reservation.object_key.startswith(f"bands/{graph['band']}/media/")
-            assert reservation.object_key.endswith('/' + initiated[1]['filename'])
+            assert reservation.object_key == f"media/{graph['band_slug']}/{initiated[1]['filename']}"
             if kind == 'direct':
                 assert reservation.kind == 'media'
             else:

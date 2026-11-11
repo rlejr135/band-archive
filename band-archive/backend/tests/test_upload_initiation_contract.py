@@ -202,8 +202,10 @@ def test_initiation_preserves_actor_policy_cleanup_audit_commit_and_response_ord
     prefix = 'personal_logs' if kind == 'personal_log' else kind
     filename = 'safe-picture.jpg' if mode == 'gallery' else 'safe-recording.mp4'
     assert payload['filename'] == filename
+    expected_key = (f'media/band-a/{filename}' if kind == 'media'
+                    else f'bands/{initiation.ids[0]}/{prefix}/{filename}')
     assert rows == [{'id': payload['session_id'], 'kind': kind,
-                     'key': f'bands/{initiation.ids[0]}/{prefix}/{filename}', 'bytes': 10,
+                     'key': expected_key, 'bytes': 10,
                      'status': 'initiated', 'creator': initiation.ids[1]}]
     assert audits == [{'target': payload['session_id'], 'actor': initiation.ids[2], 'details': ASSERTION}]
 
