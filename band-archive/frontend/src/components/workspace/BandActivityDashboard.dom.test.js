@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.
 dom.window.HTMLElement.prototype.attachEvent = () => {};
 dom.window.HTMLElement.prototype.detachEvent = () => {};
 
-let vite; let workspace; let songScreen; let rehearsalScreen; let auth; let bands;
+let vite; let workspace; let songScreen; let rehearsalScreen; let auth; let bands; let uploads; let servicePolicy;
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload });
 const monthForTest = () => {
@@ -48,6 +48,8 @@ const load = async () => {
   workspace = await vite.ssrLoadModule('/src/components/workspace/BandWorkspace.jsx'); songScreen = await vite.ssrLoadModule('/src/components/workspace/songs/SongWorkspace.jsx'); rehearsalScreen = await vite.ssrLoadModule('/src/components/workspace/rehearsals/RehearsalWorkspace.jsx');
   auth = await vite.ssrLoadModule('/src/context/AuthContext.jsx');
   bands = await vite.ssrLoadModule('/src/context/BandContext.jsx');
+  uploads = await vite.ssrLoadModule('/src/context/UploadContext.jsx');
+  servicePolicy = await vite.ssrLoadModule('/src/context/ServicePolicyContext.jsx');
 };
 const QueryNavigation = () => {
   const navigate = useNavigate();
@@ -69,6 +71,14 @@ const ReadOnlyApp = ({ entry, strict = false, queryNavigation = false, authValue
       createElement(MemoryRouter, { initialEntries: [entry] }, strict ? createElement(StrictMode, null, routes) : routes),
     ),
   );
+};
+const UploadableDashboard = ({ uploadBatch = async () => [] } = {}) => {
+  const controller = { nativePending: [], transport: { kind: 'web' }, subscribeMediaCompletion: () => () => {}, uploadBatch };
+  const config = { policies: { ready: true, upload: { enabled: true, version: 'u1', default_visibility: 'MEMBERS', notice_url: '/upload-policy' } } };
+  const authValue = { ...visitor, user: { id: 'account-a' }, getAccessToken: async () => 'synthetic-token' };
+  return createElement(uploads.UploadContext.Provider, { value: controller },
+    createElement(servicePolicy.ServicePolicyContext.Provider, { value: { config } },
+      createElement(ReadOnlyApp, { entry: '/bands/upload-band', authValue })));
 };
 after(async () => { await vite?.close(); dom.window.close(); });
 afterEach(() => cleanup());
@@ -232,6 +242,102 @@ test('dashboard consistently labels types on upcoming rehearsals, month calendar
     await selectCalendarDay(view, 14);
     assert.equal(view.getByText('추가합주').getAttribute('data-rehearsal-type'), 'EXTRA');
     assert.ok(view.getByLabelText('1개 합주: 추가합주'));
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('monthly rehearsal uploads lazily load all linked songs and submit the selected song and rehearsal from the dashboard', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const month = monthForTest();
+  const songs = Array.from({ length: 6 }, (_, index) => ({ id: 501 + index, title: `업로드곡 ${index + 1}`, effective_visibility: 'PUBLIC' }));
+  const item = { id: 601, title: '월간 합주', date: `${month}-14`, effective_visibility: 'MEMBERS', songs };
+  const batches = [];
+  let detailReads = 0;
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    if (path.includes('/by-slug/upload-band')) return response({ band: { id: 401, slug: 'upload-band', name: '업로드 밴드', membership: { status: 'ACTIVE' }, default_visibility: 'PUBLIC' } });
+    if (path.includes('/bands/401/dashboard?')) return response({ dashboard: dashboardData(month, {
+      month_rehearsals: { items: [{ ...item, songs: songs.slice(0, 5), has_more_songs: true }], pagination: { total: 1, has_more: false } },
+    }) });
+    if (path.endsWith('/api/v2/bands/401/rehearsals/601')) {
+      detailReads += 1;
+      return response({ rehearsal: detailReads === 1 ? { ...item, band_id: 402 } : item });
+    }
+    if (path.endsWith('/api/v2/me')) return response({ user: { upload_policy_acceptance_required: false } });
+    throw new Error(`Unexpected request: ${path}`);
+  };
+  try {
+    const user = userEvent.setup({ document: dom.window.document });
+    const view = render(createElement(UploadableDashboard, { uploadBatch: async (batch) => { batches.push(batch); return []; } }));
+    await view.findByText('이번 달 공지입니다.');
+    await selectCalendarDay(view, 14);
+    const open = view.getByRole('button', { name: '월간 합주 미디어 업로드' });
+    assert.equal(view.getAllByRole('button', { name: /미디어 업로드/ }).length, 1);
+    assert.equal(view.getByRole('link', { name: '월간 합주' }).getAttribute('href'), '/bands/upload-band/rehearsals?rehearsal=601');
+    assert.equal(open.getAttribute('aria-expanded'), 'false');
+    assert.equal(detailReads, 0);
+    await user.click(open);
+    await view.findByText('요청한 항목을 찾을 수 없습니다.');
+    assert.equal(view.queryByLabelText('업로드할 곡') === null, true);
+    await user.click(view.getByRole('button', { name: '다시 시도' }));
+    const picker = await view.findByLabelText('업로드할 곡');
+    assert.equal(detailReads, 2);
+    assert.equal(picker.options.length, 7);
+    await user.selectOptions(picker, '506');
+    await user.upload(view.container.querySelector('input[type="file"]'), new dom.window.File(['video'], 'practice.mp4', { type: 'video/mp4' }));
+    await user.selectOptions(view.getByLabelText('공개 범위'), 'PUBLIC');
+    assert.ok(view.getByText(/유효 공개 범위: 밴드 멤버 전용/));
+    await user.click(view.getByLabelText(/자동 처리·공개 범위/));
+    await user.click(view.getByLabelText(/선택한 파일을 이 범위로 게시/));
+    await user.click(view.getByRole('button', { name: '업로드 시작' }));
+    assert.equal(batches.length, 1);
+    const { band, songId, rehearsalId } = batches[0].items[0].options;
+    assert.deepEqual({ bandId: band.id, songId, rehearsalId }, { bandId: 401, songId: 506, rehearsalId: 601 });
+    assert.equal(view.getByRole('link', { name: '월간 합주' }).getAttribute('href'), '/bands/upload-band/rehearsals?rehearsal=601');
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('a date change cancels a rehearsal upload lookup and pending members cannot open it', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const month = monthForTest();
+  const item = { id: 601, title: '월간 합주', date: `${month}-14`, start_date: `${month}-14`, end_date: `${month}-15`, songs: [] };
+  const pending = deferred();
+  const signals = [];
+  let membership = { status: 'active' };
+  globalThis.fetch = async (url, options) => {
+    const path = String(url);
+    if (path.includes('/by-slug/upload-band')) return response({ band: { id: 401, slug: 'upload-band', name: '업로드 밴드', membership } });
+    if (path.includes('/bands/401/dashboard?')) return response({ dashboard: dashboardData(month, {
+      month_rehearsals: { items: [item], pagination: { total: 1, has_more: false } },
+    }) });
+    if (path.endsWith('/api/v2/bands/401/rehearsals/601')) {
+      signals.push(options.signal);
+      return signals.length === 1 ? pending.promise : response({ rehearsal: item });
+    }
+    throw new Error(`Unexpected request: ${path}`);
+  };
+  try {
+    const view = render(createElement(UploadableDashboard));
+    await view.findByText('이번 달 공지입니다.');
+    await selectCalendarDay(view, 14);
+    await userEvent.click(view.getByRole('button', { name: '월간 합주 미디어 업로드' }));
+    await waitFor(() => assert.equal(signals.length, 1));
+    assert.ok(view.getByText('업로드할 곡을 불러오는 중입니다…'));
+    await selectCalendarDay(view, 15);
+    assert.equal(signals[0].aborted, true);
+    await userEvent.click(view.getByRole('button', { name: '월간 합주 미디어 업로드' }));
+    await view.findByText('미디어를 올리려면 일정에 곡을 연결해 주세요.');
+    await act(async () => pending.resolve(response({ rehearsal: { ...item, songs: [{ id: 500, title: '이전 조회의 곡' }] } })));
+    assert.equal(view.container.querySelector('input[type="file"]') === null, true);
+    view.unmount();
+
+    membership = { status: 'pending' };
+    const pendingView = render(createElement(UploadableDashboard));
+    await pendingView.findByText('이번 달 공지입니다.');
+    await selectCalendarDay(pendingView, 14);
+    assert.equal(pendingView.queryByRole('button', { name: /미디어 업로드/ }) === null, true);
+    assert.equal(signals.length, 2);
   } finally { globalThis.fetch = previousFetch; }
 });
 

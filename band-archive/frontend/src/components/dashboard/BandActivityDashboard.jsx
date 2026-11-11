@@ -1,12 +1,13 @@
 import { bandUiPaths } from '../../services/bandUiPaths.js';
 import { isActiveBandMembership } from '../../services/bandMembership.js';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Calendar from 'react-calendar';
 import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
 import { rehearsalTypeLabel } from '../../services/rehearsalTypes.js';
 import { Link } from 'react-router-dom';
 import 'react-calendar/dist/Calendar.css';
 import { bandWorkspacePaths } from '../../services/bandWorkspaceApi.js';
+import { UploadContext } from '../../context/UploadContext.jsx';
 import {
   DASHBOARD_PAGE_SIZE,
   isoMonthFromDate,
@@ -17,6 +18,8 @@ import {
 } from '../workspace/bandDashboardState.js';
 import './BandActivityDashboard.css';
 import { activeAvailabilityMember } from '../workspace/availabilityState.js';
+import { RehearsalMediaUpload } from '../workspace/rehearsals/RehearsalMediaUpload.jsx';
+import { useQueryDetail } from '../workspace/useQueryDetail.js';
 
 const requestOptions = (signal) => ({ authenticated: false, optionalAuth: true, signal });
 const DASHBOARD_ERROR = '대시보드를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
@@ -72,7 +75,7 @@ const BandStorageSummary = ({ storage }) => {
 const songHref = (band, song) => bandUiPaths.song(band.slug, song?.id);
 const rehearsalHref = (band, rehearsal) => bandUiPaths.rehearsal(band.slug, rehearsal?.id);
 
-const RehearsalSummary = ({ band, rehearsal, compact = false }) => {
+const RehearsalSummary = ({ band, rehearsal, compact = false, children }) => {
   const href = rehearsalHref(band, rehearsal);
   const hasValidRange = parseIsoDate(rehearsal.start_date) && parseIsoDate(rehearsal.end_date) && rehearsal.start_date <= rehearsal.end_date;
   const start = hasValidRange ? rehearsal.start_date : rehearsal.date;
@@ -92,7 +95,45 @@ const RehearsalSummary = ({ band, rehearsal, compact = false }) => {
       })}
       {rehearsal.has_more_songs && href && <Link className="activity-muted" to={href}>나머지 곡 보기</Link>}
     </div>}
+    {children}
   </article>;
+};
+
+const extractUploadRehearsal = (response) => {
+  const rehearsal = response?.rehearsal;
+  return Array.isArray(rehearsal?.songs) && rehearsal.has_more_songs !== true ? rehearsal : null;
+};
+
+const RehearsalUploadPanel = ({ band, rehearsalId, workspaceKey }) => {
+  const [attempt, setAttempt] = useState(0);
+  const { loading, error, item } = useQueryDetail({
+    identity: `${workspaceKey}:upload:${attempt}`,
+    detailValue: String(rehearsalId),
+    pathForId: (id) => bandWorkspacePaths.rehearsal(band.id, id),
+    extract: extractUploadRehearsal,
+  });
+
+  if (loading) return <p className="activity-muted" role="status">업로드할 곡을 불러오는 중입니다…</p>;
+  if (error) return <div className="activity-inline-error" role="alert">
+    <span>{error}</span>
+    <button type="button" className="secondary-btn activity-action" onClick={() => setAttempt((current) => current + 1)}>다시 시도</button>
+  </div>;
+  return item && <RehearsalMediaUpload band={band} item={item} />;
+};
+
+const DashboardRehearsalUpload = ({ band, rehearsal, workspaceKey }) => {
+  const upload = useContext(UploadContext);
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
+  if (!upload) return null;
+  const label = expanded ? '업로드 닫기' : '미디어 업로드';
+  return <div className="activity-rehearsal-upload">
+    <button type="button" className="secondary-btn activity-action" aria-expanded={expanded} aria-controls={panelId}
+      aria-label={`${rehearsal.title || '합주'} ${label}`} onClick={() => setExpanded((current) => !current)}>{label}</button>
+    <div id={panelId} className="activity-rehearsal-upload-panel" hidden={!expanded}>
+      {expanded && <RehearsalUploadPanel band={band} rehearsalId={rehearsal.id} workspaceKey={workspaceKey} />}
+    </div>
+  </div>;
 };
 
 const AnnouncementCard = ({ announcement, api, bandId, workspaceKey }) => {
@@ -143,6 +184,7 @@ const DashboardImage = ({ image, kind, workspaceKey, month, failedUrls, onError 
 };
 
 const BandActivityDashboard = ({ band, api, workspaceKey }) => {
+  const canUpload = isActiveBandMembership(band.membership);
   const [month, setMonth] = useState(() => seoulDate().slice(0, 7));
   const [selectedDate, setSelectedDate] = useState(() => seoulDate());
   const [state, setState] = useState({ month: '', loading: true, error: '', pageLoading: false, pageError: '', dashboard: null });
@@ -309,7 +351,11 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
           <div className="activity-selected-day" aria-live="polite">
             <h3>{displayDate(selectedDate)}</h3>
             {pagination.has_more && <p className="activity-incomplete-notice">이 달의 일정 일부만 표시 중입니다. 선택한 날짜에 더 많은 합주가 있는지 확인하려면 일정을 더 불러와 주세요.</p>}
-            {selectedItems.length ? <div className="activity-rehearsal-list">{selectedItems.map((rehearsal) => <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal} />)}</div> : !pagination.has_more && <p className="activity-muted">이 날짜에 등록된 합주가 없습니다.</p>}
+            {selectedItems.length ? <div className="activity-rehearsal-list">{selectedItems.map((rehearsal) => (
+              <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal}>
+                {canUpload && rehearsalHref(band, rehearsal) && <DashboardRehearsalUpload key={selectedDate} band={band} rehearsal={rehearsal} workspaceKey={workspaceKey} />}
+              </RehearsalSummary>
+            ))}</div> : !pagination.has_more && <p className="activity-muted">이 날짜에 등록된 합주가 없습니다.</p>}
           </div>
         </div>
         {state.pageError && <div className="activity-inline-error" role="alert"><span>{state.pageError}</span><button type="button" className="secondary-btn activity-action" onClick={() => requestPage({ targetMonth: month, offset: pagination.next_offset ?? loadedCount, mode: 'append' })}>다시 시도</button></div>}
