@@ -102,6 +102,74 @@ test('activity dashboard loads one scoped v2 bundle and bounds each summary sect
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test('dashboard shows shared band storage with reserved uploads and the binary quota for active members', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  const gib = 1024 ** 3;
+  let storage = { used_bytes: 1.25 * gib, reserved_bytes: 0.25 * gib, quota_bytes: 20 * gib };
+  globalThis.fetch = async (url) => {
+    const path = String(url);
+    requests.push(path);
+    if (path.includes('/by-slug/storage-band')) {
+      return response({ band: { id: 401, slug: 'storage-band', name: '저장 공간 밴드', membership: { status: 'ACTIVE' } } });
+    }
+    return response({ dashboard: dashboardData(monthForTest(), { storage }) });
+  };
+  try {
+    const authValue = { ...visitor, user: { id: 'account-a' }, getAccessToken: async () => 'synthetic-token' };
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/storage-band', authValue }));
+    await view.findByRole('region', { name: '밴드 저장 공간' });
+    assert.ok(view.getByText('1.5 GiB / 20 GiB'));
+    assert.ok(view.getByText('업로드 예약 256 MiB 포함'));
+    const usage = view.getByRole('meter', { name: '밴드 저장 공간 사용량' });
+    assert.equal(usage.value, 1.5 * gib);
+    assert.equal(usage.max, 20 * gib);
+    assert.equal(usage.getAttribute('aria-valuetext'), '20 GiB 중 1.5 GiB 사용');
+    assert.equal(requests.filter((path) => path.includes('/dashboard?')).length, 1);
+    view.unmount();
+
+    storage = { used_bytes: 32.25 * gib, reserved_bytes: 0, quota_bytes: 30 * gib };
+    const exceeded = render(createElement(ReadOnlyApp, { entry: '/bands/storage-band', authValue }));
+    await exceeded.findByText('32.3 GiB / 30 GiB');
+    assert.ok(exceeded.getByText('저장 공간 한도를 초과했습니다.'));
+    const fullUsage = exceeded.getByRole('meter', { name: '밴드 저장 공간 사용량' });
+    assert.equal(fullUsage.value, fullUsage.max);
+    assert.equal(fullUsage.getAttribute('aria-valuetext'), '30 GiB 중 32.3 GiB 사용');
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('dashboard distinguishes empty storage from missing data and keeps storage private for inactive memberships', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const emptyStorage = { used_bytes: 0, reserved_bytes: 0, quota_bytes: 20 * 1024 ** 3 };
+  let membership;
+  let storage;
+  globalThis.fetch = async (url) => String(url).includes('/by-slug/storage-band')
+    ? response({ band: { id: 401, slug: 'storage-band', name: '저장 공간 밴드', membership } })
+    : response({ dashboard: dashboardData(monthForTest(), { storage }) });
+  try {
+    for (const [currentMembership, currentStorage, shown] of [
+      [{ status: 'active' }, emptyStorage, true],
+      [{ status: 'active' }, undefined, false],
+      [{ status: 'active' }, { ...emptyStorage, quota_bytes: 0 }, false],
+      [{ status: 'pending' }, emptyStorage, false],
+      [null, emptyStorage, false],
+    ]) {
+      membership = currentMembership;
+      storage = currentStorage;
+      const view = render(createElement(ReadOnlyApp, { entry: '/bands/storage-band' }));
+      await view.findByText('이번 달 공지입니다.');
+      assert.equal(view.queryByRole('region', { name: '밴드 저장 공간' }) !== null, shown);
+      if (shown) {
+        assert.ok(view.getByText('0 B / 20 GiB'));
+        assert.equal(view.queryByText(/업로드 예약/) === null, true);
+      }
+      view.unmount();
+    }
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test('dashboard section actions share button styling and keep member-only scheduling and content links intact', async () => {
   await load(); const previousFetch = globalThis.fetch;
   let membership = { status: 'active', role: 'member' };

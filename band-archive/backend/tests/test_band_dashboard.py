@@ -1,12 +1,15 @@
 """Contracts for the bounded, band-scoped dashboard snapshot."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import event
 from sqlalchemy import text
 
 from extensions import db
-from models import Announcement, Band, BandMembership, GalleryImage, Rehearsal, Song
+from models import (
+    Announcement, Band, BandMembership, DirectUploadSession, GalleryImage, Media, Member,
+    MultipartUploadSession, PersonalLog, PersonalLogMultipartUploadSession, Rehearsal, Song,
+)
 from storage import storage
 from tests.test_auth import _install_jwks, _jwk, _token
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
@@ -95,6 +98,7 @@ def test_dashboard_aggregates_only_visible_current_band_graph(access_app, signer
     assert len(visitor['recent_gallery']) == 1
     assert visitor['recent_gallery'][0]['is_featured'] is False
     assert visitor['announcement'] is None
+    assert 'storage' not in visitor
     assert signed == [('bands/recent.jpg', 3600)]
 
     member_headers = _principal(signer, member_user.supabase_user_id, member_user.email)
@@ -108,10 +112,88 @@ def test_dashboard_aggregates_only_visible_current_band_graph(access_app, signer
     assert member_view['announcement']['content_truncated'] is True
     assert any(item['visibility'] == 'MEMBERS' for item in member_view['recent_gallery'])
     assert member_view['featured_gallery']['url'] == 'url:bands/featured.jpg'
+    assert member_view['storage']['used_bytes'] == member_view['storage']['reserved_bytes'] == 0
+    assert member_view['storage']['quota_bytes'] > 0
     assert signed[-3:] == [('bands/featured.jpg', 300), ('bands/featured.jpg', 300),
                            ('bands/recent.jpg', 3600)]
 
     assert client.get(f'/api/v2/bands/{private_band_id}/dashboard?month=2026-10').status_code == 404
+
+
+def test_dashboard_storage_counts_band_quota_without_cleaning_sessions_or_disclosing_to_nonmembers(access_app, signer, monkeypatch):
+    _install_jwks(access_app, [[_jwk(signer, 'key-1')]])
+    monkeypatch.setattr(storage, 'generate_url', lambda key, **_options: f'url:{key}')
+    deleted = []
+    monkeypatch.setattr(storage, 'delete', deleted.append)
+    expired_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    with access_app.app_context():
+        band = Band.query.filter_by(slug='band-b').one()
+        foreign = Band.query.filter_by(slug='band-a').one()
+        band.storage_quota_bytes = 1_000
+        expired_direct = None
+        for team, scale in ((band, 1), (foreign, 10)):
+            owner = BandMembership.query.filter_by(band_id=team.id, role='owner').one()
+            song = Song(band_id=team.id, created_by_membership_id=owner.id, title='Quota test song', artist='Artist')
+            member = Member(band_id=team.id, name='연주자', instrument='기타')
+            db.session.add_all((song, member))
+            db.session.flush()
+            common = {'band_id': team.id, 'created_by_membership_id': owner.id, 'visibility': 'MEMBERS'}
+            db.session.add_all((
+                Media(**common, song_id=song.id, filename='video.mp4', file_size=10 * scale,
+                      audio_object_key='audio.m4a', video_720_object_key='video720.mp4'),
+                PersonalLog(**common, member_id=member.id, title='연습 기록', filename='log.m4a',
+                            file_type='audio', file_size=20 * scale),
+                GalleryImage(**common, filename='image.jpg', file_size=30 * scale),
+            ))
+            session = {'band_id': team.id, 'created_by_membership_id': owner.id,
+                       'original_filename': 'upload.mp4', 'content_type': 'video/mp4'}
+            expired_upload = DirectUploadSession(
+                **session, kind='media', song_id=song.id, object_key='direct/expired',
+                capability_token_hash='test', declared_bytes=13 * scale, expires_at=expired_at,
+            )
+            if team.id == band.id:
+                expired_direct = expired_upload
+            db.session.add_all((
+                expired_upload,
+                DirectUploadSession(**session, kind='media', song_id=song.id, object_key='direct/cleanup',
+                                    capability_token_hash='test', declared_bytes=17 * scale, status='expiring'),
+                DirectUploadSession(**session, kind='media', song_id=song.id, object_key='direct/done',
+                                    capability_token_hash='test', declared_bytes=100 * scale, status='completed'),
+                MultipartUploadSession(**session, song_id=song.id, object_key='multipart/hold',
+                                       r2_upload_id='media-upload', declared_bytes=7 * scale, status='aborting'),
+                PersonalLogMultipartUploadSession(**session, member_id=member.id, title='연습 기록',
+                                                  object_key='multipart/log', r2_upload_id='log-upload',
+                                                  declared_bytes=11 * scale, status='completing'),
+            ))
+        db.session.commit()
+        expired_direct_id = expired_direct.id
+        band_id = band.id
+        member_headers = _principal(signer, '77777777-7777-7777-7777-777777777777', 'outsider@example.com')
+
+    client = access_app.test_client()
+    url = f'/api/v2/bands/{band_id}/dashboard?month=2026-10'
+    member_response = client.get(url, headers=member_headers)
+    assert member_response.status_code == 200
+    assert member_response.get_json()['dashboard']['storage'] == {
+        'used_bytes': 60, 'reserved_bytes': 48, 'quota_bytes': 1_000,
+    }
+    assert member_response.headers['Cache-Control'] == 'private, no-store'
+    assert 'Authorization' in member_response.headers['Vary']
+    nonmembers = [
+        {},
+        _headers(_token(signer)),
+        _principal(signer, '44444444-4444-4444-4444-444444444444', 'pending@example.com'),
+        _principal(signer, '55555555-5555-5555-5555-555555555555', 'rejected@example.com'),
+        _principal(signer, '66666666-6666-6666-6666-666666666666', 'left@example.com'),
+    ]
+    for headers in nonmembers:
+        response = client.get(url, headers=headers)
+        assert response.status_code == 200
+        assert 'storage' not in response.get_json()['dashboard']
+
+    assert deleted == []
+    with access_app.app_context():
+        assert db.session.get(DirectUploadSession, expired_direct_id).status == 'initiated'
 
 
 def test_dashboard_month_overlap_pagination_upcoming_and_month_validation(access_app, signer, monkeypatch):

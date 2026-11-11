@@ -1,4 +1,5 @@
 import { bandUiPaths } from '../../services/bandUiPaths.js';
+import { isActiveBandMembership } from '../../services/bandMembership.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Calendar from 'react-calendar';
 import RehearsalTypeBadge from '../calendar/RehearsalTypeBadge.jsx';
@@ -41,6 +42,32 @@ const statusRows = [
   ['OnHold', '보류'],
   ['Other', '기타'],
 ];
+
+const storageUnits = [[1024 ** 4, 'TiB'], [1024 ** 3, 'GiB'], [1024 ** 2, 'MiB'], [1024, 'KiB']];
+const storageNumber = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 1 });
+const formatStorageBytes = (bytes) => {
+  const [size, unit] = storageUnits.find(([size]) => bytes >= size) || [1, 'B'];
+  return `${storageNumber.format(bytes / size)} ${unit}`;
+};
+
+const BandStorageSummary = ({ storage }) => {
+  const { used_bytes: used, reserved_bytes: reserved = 0, quota_bytes: quota } = storage || {};
+  if (![used, reserved, quota].every(Number.isSafeInteger) || used < 0 || reserved < 0 || quota <= 0) return null;
+  const occupied = used + reserved;
+  if (!Number.isSafeInteger(occupied)) return null;
+  const overLimit = occupied > quota;
+  const occupiedLabel = formatStorageBytes(occupied);
+  const quotaLabel = formatStorageBytes(quota);
+  return <section className={`activity-card activity-storage${overLimit ? ' activity-storage-over-limit' : ''}`} aria-labelledby="activity-storage-title">
+    <div className="activity-card-heading">
+      <h2 id="activity-storage-title">밴드 저장 공간</h2>
+      <strong className="activity-storage-amount">{occupiedLabel} / {quotaLabel}</strong>
+    </div>
+    <meter min={0} max={quota} value={Math.min(occupied, quota)} aria-label="밴드 저장 공간 사용량" aria-valuetext={`${quotaLabel} 중 ${occupiedLabel} 사용`} />
+    {reserved > 0 && <p className="activity-muted">업로드 예약 {formatStorageBytes(reserved)} 포함</p>}
+    {overLimit && <p className="activity-storage-warning">저장 공간 한도를 초과했습니다.</p>}
+  </section>;
+};
 
 const songHref = (band, song) => bandUiPaths.song(band.slug, song?.id);
 const rehearsalHref = (band, rehearsal) => bandUiPaths.rehearsal(band.slug, rehearsal?.id);
@@ -236,6 +263,8 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
 
   return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title">
     <header className="activity-header"><div><h1 id="band-dashboard-title">{band.name}</h1><p className="workspace-description">{band.description || '밴드의 곡과 합주 기록을 한곳에서 확인하세요.'}</p></div><Link className="secondary-btn activity-action activity-all-songs" to={`/bands/${encodeURIComponent(band.slug)}/songs`}>전체 곡 보기</Link></header>
+
+    {isActiveBandMembership(band.membership) && <BandStorageSummary storage={dashboard?.storage} />}
 
     <section className="activity-card activity-featured" aria-labelledby="activity-featured-title">
       <div className="activity-card-heading"><h2 id="activity-featured-title">대표 사진</h2><Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>갤러리</Link></div>

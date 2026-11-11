@@ -9,17 +9,13 @@ records its retry marker only after rollback. Multipart R2 creation is not
 rolled back by DB failure, and no compensation is introduced here.
 """
 
-from sqlalchemy import func
-
 from auth_service import current_app_user
+from band_storage import read_band_storage_bytes
 from direct_upload_service import (
     DirectUploadCleanupPending, create_direct_session,
     expire_direct_sessions_for_band, persist_direct_cleanup_pending,
 )
 from errors import ValidationError
-from extensions import db
-from models import (Media, PersonalLog, GalleryImage, MultipartUploadSession,
-                    PersonalLogMultipartUploadSession, DirectUploadSession)
 from multipart_upload_service import MEDIA_TARGET, PERSONAL_LOG_TARGET, create_session
 from policy_service import validate_upload_assertion, record_upload_assertion
 from upload_authorization_service import (
@@ -55,26 +51,7 @@ def _used_and_reserved_bytes(band_id):
     # here: releasing that transaction between quota accounting and session
     # creation lets concurrent initiates oversubscribe the same band.
     expire_direct_sessions_for_band(band_id, commit=False)
-    used = sum((
-        db.session.query(func.coalesce(func.sum(Media.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(PersonalLog.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(GalleryImage.file_size), 0)).filter_by(band_id=band_id).scalar() or 0,
-    ))
-    reserved = sum((
-        db.session.query(func.coalesce(func.sum(MultipartUploadSession.declared_bytes), 0)).filter(
-            MultipartUploadSession.band_id == band_id,
-            MultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
-        ).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(PersonalLogMultipartUploadSession.declared_bytes), 0)).filter(
-            PersonalLogMultipartUploadSession.band_id == band_id,
-            PersonalLogMultipartUploadSession.status.in_(('initiated', 'completing', 'aborting')),
-        ).scalar() or 0,
-        db.session.query(func.coalesce(func.sum(DirectUploadSession.declared_bytes), 0)).filter(
-            DirectUploadSession.band_id == band_id,
-            DirectUploadSession.status.in_(('initiated', 'completing', 'expiring')),
-        ).scalar() or 0,
-    ))
-    return int(used), int(reserved)
+    return read_band_storage_bytes(band_id)
 
 
 def reserve_direct_upload(band_id, data, *, filename, secure_name, declared_bytes, content_type, has_member):

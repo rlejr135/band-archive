@@ -12,6 +12,7 @@ from band_access import (
     optional_auth, read_scope_for_id, visible_object_or_404, visible_query,
 )
 from band_content_predicates import _creator_is_scoped_sql, _not_pending_delete
+from band_storage import read_band_storage_bytes
 from content_queries import (
     _announcement_query, _featured_gallery_rows_query, _gallery_query,
     _media_pending_deletes_sql, _media_playable_sql, _song_graph_sql, _song_query,
@@ -702,7 +703,7 @@ def get_band_dashboard(band_id):
         if len(announcement_content) > 10_000:
             announcement['content_truncated'] = True
 
-    return jsonify({'dashboard': {
+    dashboard = {
         'band_id': scope.band_id,
         'month': month,
         'today': today.isoformat(),
@@ -720,7 +721,17 @@ def get_band_dashboard(band_id):
         'featured_gallery': featured_gallery,
         'recent_gallery': [serialize_gallery_image(scope, image) for image in recent_images],
         'announcement': announcement,
-    }})
+    }
+    if scope.is_member:
+        band = db.session.get(Band, scope.band_id)
+        if band is not None:
+            used_bytes, reserved_bytes = read_band_storage_bytes(scope.band_id)
+            dashboard['storage'] = {
+                'used_bytes': used_bytes,
+                'reserved_bytes': reserved_bytes,
+                'quota_bytes': band.storage_quota_bytes,
+            }
+    return jsonify({'dashboard': dashboard})
 
 
 @content_reads_bp.get('/members')
