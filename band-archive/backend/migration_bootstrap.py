@@ -49,6 +49,7 @@ PHASE21_REVISION = '20261020_21'
 PHASE22_REVISION = '20261021_22'
 PHASE23_REVISION = '20261023_23'
 PHASE24_REVISION = '20261024_24'
+PHASE25_REVISION = '20261114_25'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -88,7 +89,7 @@ PHASE4_COLUMNS = {
     'personal_log': {'band_id', 'created_by_membership_id', 'visibility', 'object_key', 'audio_object_key'},
     'personal_log_multipart_upload_session': {'band_id', 'created_by_membership_id', 'is_legacy'},
     'rehearsal': {'band_id', 'created_by_membership_id', 'visibility'},
-    'song': {'band_id', 'created_by_membership_id', 'visibility', 'sheet_music_object_key'},
+    'song': {'band_id', 'created_by_membership_id', 'visibility', 'sheet_music_object_key', 'public_override'},
     'song_suggestion': {'band_id', 'created_by_membership_id', 'visibility'},
     'song_vote': {'band_id', 'created_by_membership_id', 'is_legacy'},
 }
@@ -167,6 +168,7 @@ def _current_historical_metadata():
     metadata = MetaData()
     for table in db.metadata.tables.values():
         table.to_metadata(metadata)
+    metadata.tables['song']._columns.remove(metadata.tables['song'].c.public_override)
     return _remove_featured_media_index(metadata)
 
 
@@ -816,6 +818,9 @@ def _defaults_are_equivalent(expected_default, actual_default, column, table_nam
         expected_json = _member_positions_default(expected_default, column, dialect, reflected=False)
         actual_json = _member_positions_default(actual_default, column, dialect, reflected=True)
         return expected_json is not None and expected_json == actual_json
+    if dialect.name == 'sqlite' and table_name == 'song' and column.name == 'public_override':
+        return (_normalize_default(expected_default) in ('false', '0')
+                and _normalize_default(actual_default) in ('false', '0'))
     if dialect.name != 'postgresql':
         return _normalize_default(actual_default) == _normalize_default(expected_default)
     if expected_default is None:

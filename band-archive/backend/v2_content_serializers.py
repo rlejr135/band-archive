@@ -17,6 +17,7 @@ from content_visibility import (
     song_visibility, visible_to_scope,
 )
 from media_access_service import MEMBERS_URL_TTL, PUBLIC_URL_TTL, media_playback, prepare_media_access
+from public_archive_service import media_archive_flags, song_archive_flags
 
 
 def _iso(value):
@@ -86,6 +87,7 @@ def serialize_media(scope, media, viewer_vote=0):
         'viewer_vote': viewer_vote if viewer_vote in (-1, 0, 1) else 0,
         'created_at': _iso(media.created_at),
         'playback': media_playback(media, visibility),
+        **media_archive_flags(scope, media),
         **_flags(scope, media, visibility),
     }
 
@@ -102,6 +104,7 @@ def serialize_song(scope, song, *, include_children=True):
         'difficulty': song.difficulty, 'upvote_count': song.upvote_count,
         'downvote_count': song.downvote_count, 'vote_score': song.vote_score,
         'created_at': _iso(song.created_at), 'updated_at': _iso(song.updated_at),
+        **song_archive_flags(scope, song),
         **_flags(scope, song, visibility),
     }
     if include_children:

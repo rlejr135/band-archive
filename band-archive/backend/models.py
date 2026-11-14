@@ -503,6 +503,7 @@ def _audit_events_are_append_only(mapper, connection, target):
 
 
 class Song(db.Model):
+    public_override = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     id = db.Column(db.Integer, primary_key=True)
     band_id = db.Column(db.Integer, db.ForeignKey('band.id'), nullable=False, index=True)
     created_by_membership_id = db.Column(db.Integer, db.ForeignKey('band_membership.id'), nullable=True, index=True)

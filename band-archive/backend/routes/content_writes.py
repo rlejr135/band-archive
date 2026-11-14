@@ -23,6 +23,7 @@ from errors import ValidationError
 from featured_media_service import clear_song_featured_media, set_song_featured_media
 from gallery_featured_service import set_gallery_featured
 from models import Media
+from public_archive_service import change_media_visibility, change_song_public_override
 from rehearsal_service import (
     REHEARSAL_FIELDS as _REHEARSAL_FIELDS,
     create_rehearsal as create_band_rehearsal, delete_rehearsal as delete_band_rehearsal,
@@ -139,6 +140,20 @@ def update_song(band_id, song_id):
     return update_band_song(
         band_id=band_id, song_id=song_id, data=data, prepare_response=prepare_response,
     )
+
+
+@content_writes_bp.patch('/songs/<int:song_id>/public-override')
+@authenticated_write
+def patch_song_public_override(band_id, song_id):
+    actor = current_app_user(required=True)
+    return jsonify(song=change_song_public_override(band_id, song_id, actor.id, _payload()))
+
+
+@content_writes_bp.patch('/media/<int:media_id>/visibility')
+@authenticated_write
+def patch_media_visibility(band_id, media_id):
+    actor = current_app_user(required=True)
+    return jsonify(media=change_media_visibility(band_id, media_id, actor.id, _payload()))
 
 
 @content_writes_bp.delete('/songs/<int:song_id>')

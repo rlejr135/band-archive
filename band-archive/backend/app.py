@@ -31,6 +31,7 @@ from routes.migrations import migrations_bp
 from routes.auth import auth_bp
 from routes.bands import bands_bp
 from routes.content_reads import content_reads_bp
+from routes.public_archive import public_archive_bp
 from routes.deletion_tasks import deletion_tasks_bp
 from routes.availability import availability_bp
 from routes.member_profiles import member_profiles_bp
@@ -527,6 +528,7 @@ def create_app(config_class=None, start_worker=None):
     app.register_blueprint(auth_bp)
     app.register_blueprint(bands_bp)
     app.register_blueprint(content_reads_bp)
+    app.register_blueprint(public_archive_bp)
     app.register_blueprint(content_writes_bp)
     app.register_blueprint(deletion_tasks_bp)
     app.register_blueprint(availability_bp)
