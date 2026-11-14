@@ -49,10 +49,15 @@ const UploadTaskProvider = ({ children, userId }) => {
         delete next.file;
         registry.current.releaseSource(id);
       }
-      const bounded = retainUploadTaskHistory([...previous.filter((item) => item.id !== id), next]);
+      const byUpdate = previous.filter((item) => item.id !== id)
+        .sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0));
+      const bounded = retainUploadTaskHistory([...byUpdate, next]);
       bounded.filter((item) => item.retryUnavailable).forEach((item) => registry.current.releaseSource(item.id));
       previous.filter((item) => !bounded.some((kept) => kept.id === item.id)).forEach((item) => registry.current.releaseSource(item.id));
-      return bounded;
+      // Retention uses update recency, but the upload center uses insertion order.
+      const kept = new Map(bounded.map((item) => [item.id, item]));
+      const order = previous.some((item) => item.id === id) ? previous : [...previous, next];
+      return order.flatMap((item) => kept.has(item.id) ? [kept.get(item.id)] : []);
     });
   }, []);
 
