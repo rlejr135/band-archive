@@ -1,0 +1,12 @@
+.public-archive { display: grid; gap: 1.25rem; }
+.public-archive-preview { margin: 2rem auto; width: min(100%, 72rem); }
+.public-archive h1, .public-archive h2, .public-archive p { margin-block: 0 .6rem; }
+.public-archive-heading, .public-archive-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.public-archive-heading h2 { margin-block: 0; flex: 1; }
+.public-archive-list { padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: .75rem; }
+.public-archive-list li { border: 1px solid var(--border-color, #454752); border-radius: .75rem; padding: 1rem; display: grid; gap: .45rem; overflow-wrap: anywhere; }
+.public-archive-type { font-size: .875rem; }
+.public-archive-logo { width: 3rem; height: 3rem; object-fit: contain; }
+.public-archive-image { display: block; width: 100%; max-height: 24rem; object-fit: contain; border-radius: .75rem; }
+.workspace-media-visibility button[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: -2px; }
+.workspace-media-visibility a { text-decoration: none; }

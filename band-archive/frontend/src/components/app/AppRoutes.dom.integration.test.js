@@ -64,9 +64,9 @@ test('upload target opens the original band song detail through the real AppRout
   } finally { globalThis.fetch = previousFetch; }
 });
 
-test('anonymous home is a static example plus the real login form and performs no domain reads', async () => {
+test('anonymous home shows the login form, synthetic example and only anonymous archive reads', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
-  globalThis.fetch = async (url) => { calls.push(String(url)); throw new Error('anonymous home should not fetch domain data'); };
+  globalThis.fetch = async (url, options) => { calls.push([new URL(url).pathname + new URL(url).search, options.headers]); return response({ media: [] }); };
   try {
     const view = renderRoutes('/', account());
     await view.findByRole('heading', { name: '함께 만든 순간을 오래 남기다' });
@@ -74,7 +74,8 @@ test('anonymous home is a static example plus the real login form and performs n
     assert.ok(view.getByLabelText('이메일'));
     assert.equal(view.queryByRole('navigation', { name: '밴드 공간' }), null);
     assert.equal(view.queryByRole('button', { name: /곡 목록|멤버|갤러리|다음 곡 추천/ }), null);
-    assert.deepEqual(calls, []);
+    await view.findByText('표시할 공개 영상·음원이 없습니다.');
+    assert.deepEqual(calls, [['/api/v2/public/archive/media?limit=6&offset=0', {}]]);
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -253,4 +254,41 @@ test('legacy routes go to the landing, while the singular band alias retains onl
     assert.equal(unknownWorkspace.getByTestId('route').textContent, '/account');
     unknownWorkspace.unmount();
   } finally { globalThis.fetch = previousFetch; }
+});
+
+test('anonymous public archive follows band, song and playback links without credentials', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  const band = { slug: 'example-band', name: '공개 밴드' };
+  const song = { id: 91, title: '공개 곡 제목', artist: '공개 가수' };
+  const media = { id: 92, file_type: 'video', display_name: '공개 연주 영상', band, song };
+  const pagination = { has_more: false };
+  globalThis.fetch = async (url, options) => {
+    const { pathname } = new URL(url);
+    calls.push({ pathname, headers: options.headers });
+    switch (pathname) {
+      case '/api/v2/public/archive/media': return response({ media: [media], pagination });
+      case '/api/v2/public/archive/songs': return response({ songs: [{ ...song, band }], pagination });
+      case '/api/v2/public/archive/bands/example-band': return response({ band, songs: [song], pagination });
+      case '/api/v2/public/archive/bands/example-band/songs/91': return response({ band, song, media: [media], pagination });
+      case '/api/v2/public/archive/media/92': return response({ band, song, media: { ...media, playback: { video_url: 'https://files.example.test/play.mp4', audio_url: 'https://files.example.test/play.m4a' } } });
+      default: return response({}, 404);
+    }
+  };
+  try {
+    const view = renderRoutes('/archive');
+    await view.findByRole('heading', { name: '공개 아카이브' });
+    fireEvent.click(await view.findByRole('link', { name: '밴드 공개 페이지' }));
+    await view.findByRole('heading', { name: band.name });
+    fireEvent.click(await view.findByRole('link', { name: song.title }));
+    await view.findByRole('heading', { name: song.title });
+    fireEvent.click(await view.findByRole('link', { name: media.display_name }));
+    await view.findByRole('heading', { name: media.display_name });
+    assert.equal(view.queryByRole('heading', { name: '로그인' }), null);
+    assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://files.example.test/play.mp4');
+    assert.ok(calls.every(({ pathname, headers }) => pathname.startsWith('/api/v2/public/archive/') && !headers.Authorization));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });

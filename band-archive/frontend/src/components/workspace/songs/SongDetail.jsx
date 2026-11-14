@@ -1,5 +1,6 @@
 import { isActiveBandMembership } from '../../../services/bandMembership.js';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
+import { SongPublicOverride } from './SongPublicOverride.jsx';
 import { bandWorkspacePaths } from '../../../services/bandWorkspaceApi.js';
 import { BandDeleteAction } from '../BandDeleteAction.jsx';
 import { BandUploadInput } from '../BandUploadInput.jsx';
@@ -30,8 +31,15 @@ const SongDetailContent = ({
   const { mediaState, loadMedia, refreshAuthoritativeMedia, updateMedia, refreshStale } = useDetailMedia({
     api, workspaceKey, resourceId: item.id, mediaPath
   });
+  const [changedSong, setChangedSong] = useState(null);
+  const song = { ...item, ...changedSong };
+  const savePublicOverride = (updated) => {
+    setChangedSong(updated);
+    refreshAuthoritativeMedia();
+  };
   const resourceLabel = '곡';
   return <article><div className="detail-heading"><div><h2>{item.title}</h2><p>{item.artist}</p></div>{item.can_edit && <button className="secondary-btn" onClick={onEdit}>수정</button>}<BandDeleteAction band={band} workspaceKey={workspaceKey} canDelete={item.can_delete} label={resourceLabel} path={bandWorkspacePaths.song(band.id, item.id)} onDeleted={onDeleted} /></div>
+    <SongPublicOverride song={song} band={band} api={api} onSaved={savePublicOverride} />
     <dl><dt>상태</dt><dd>{item.status || '-'}</dd><dt>장르</dt><dd>{item.genre || '-'}</dd><dt>메모</dt><dd>{item.memo || '-'}</dd></dl>
     {isActiveBandMembership(band.membership) && <BandUploadInput band={band} songId={item.id} parentVisibility={item.effective_visibility || item.visibility} onMediaComplete={refreshAuthoritativeMedia} />}
     <h3>재생 미디어</h3>{mediaState.loading && mediaState.pages.length === 0 ? <p>미디어를 불러오는 중입니다…</p> : mediaState.error && mediaState.pages.length === 0 ? <p className="workspace-muted">{mediaState.error}</p> : !mediaState.pages.some((page) => page.media.length > 0) && !mediaState.pagination?.has_more && !mediaState.error ? <p className="workspace-muted">표시할 미디어가 없습니다. 업로드는 준비 중입니다.</p> : <><div className="media-list">{mediaState.pages.flatMap(page => page.media.map(media => <PlaybackMedia key={media.id} media={media} band={band} api={api} workspaceKey={workspaceKey} onMediaUpdate={updateMedia} onAuthoritativeRefresh={refreshAuthoritativeMedia} onDeleted={refreshAuthoritativeMedia} onStale={() => {
