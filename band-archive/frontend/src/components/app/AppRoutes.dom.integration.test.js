@@ -313,7 +313,9 @@ test('anonymous public archive follows band, song and playback links without cre
     assert.equal(calls.filter(({ pathname }) => pathname === '/api/v2/public/archive/media').length, 2);
     fireEvent.click(view.getAllByRole('link', { name: '밴드 페이지로' })[0]);
     await view.findByRole('heading', { name: band.name });
-    fireEvent.click(await view.findByRole('link', { name: song.title }));
+    const songLink = await view.findByRole('link', { name: song.title });
+    assert.equal(songLink.classList.contains('bands-return-link'), true);
+    fireEvent.click(songLink);
     await view.findByRole('heading', { name: song.title });
     fireEvent.click(await view.findByRole('link', { name: videoTitle }));
     await view.findByRole('heading', { name: media.display_name });

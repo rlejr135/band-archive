@@ -50,7 +50,9 @@ function SongList({ songs, band }) {
     const owner = song.band || band;
     if (!owner?.slug) return null;
     return <li key={song.id}>
-      <Link to={archiveSong(owner.slug, song.id)}><strong>{song.title}</strong></Link>
+      <Link className="bands-return-link" to={archiveSong(owner.slug, song.id)}>
+        <strong>{song.title}</strong><span aria-hidden="true">↗</span>
+      </Link>
       <span>{[song.artist, owner.name].filter(Boolean).join(' · ')}</span>
     </li>;
   })}</ul>;
