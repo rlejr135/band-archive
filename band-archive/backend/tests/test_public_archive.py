@@ -121,8 +121,20 @@ def test_archive_rehearsal_constraints_and_mutation_tenant_authority(access_app,
     with access_app.app_context():
         db.session.get(Rehearsal, practice_id).visibility = 'PUBLIC'
         db.session.commit()
-    assert client.get(f'{ARCHIVE}/media/{media_id}').status_code == 200
+    detail = client.get(f'{ARCHIVE}/media/{media_id}')
+    assert detail.status_code == 200
+    assert detail.json['media']['rehearsal_title'] is None
     with access_app.app_context():
+        db.session.get(Media, media_id).rehearsal_id = practice_id
+        db.session.commit()
+    feed = client.get(f'{ARCHIVE}/media')
+    assert next(item for item in feed.json['media'] if item['id'] == media_id)['rehearsal_title'] == 'Private practice'
+    with access_app.app_context():
+        db.session.get(Rehearsal, practice_id).visibility = 'MEMBERS'
+        db.session.commit()
+    assert client.get(f'{ARCHIVE}/media/{media_id}').status_code == 404
+    with access_app.app_context():
+        db.session.get(Rehearsal, practice_id).visibility = 'PUBLIC'
         db.session.get(Band, band_id).deleted_at = datetime.now(timezone.utc)
         db.session.commit()
     assert client.get(f'{ARCHIVE}/media/{media_id}').status_code == 404

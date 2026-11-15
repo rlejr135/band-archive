@@ -90,6 +90,13 @@ function BandHeader({ band }) {
   </header>;
 }
 
+export function ArchiveBandContent({ band, songs }) {
+  return <>
+    <BandHeader band={band} />
+    <h2>공개 곡</h2><SongList songs={songs} band={band} />
+  </>;
+}
+
 const requestArchiveMediaPage = (offset, limit, signal) => api.requestJson(
   `${base}/media?limit=${limit}&offset=${offset}`,
   { authenticated: false, signal, cache: 'no-store' },
@@ -113,10 +120,7 @@ export function PublicArchiveBandPage() {
   const { slug } = useParams();
   return <GlobalShell><div className="public-archive">
     <Link className="bands-return-link" to="/archive"><span aria-hidden="true">←</span> 공개 아카이브</Link>
-    <ArchivePages key={slug} path={`/bands/${encodeURIComponent(slug)}`} render={({ band, songs }) => <>
-      <BandHeader band={band} />
-      <h2>공개 곡</h2><SongList songs={songs} band={band} />
-    </>} />
+    <ArchivePages key={slug} path={`/bands/${encodeURIComponent(slug)}`} render={({ band, songs }) => <ArchiveBandContent band={band} songs={songs} />} />
   </div></GlobalShell>;
 }
 

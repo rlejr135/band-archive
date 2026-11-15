@@ -276,7 +276,10 @@ test('anonymous public archive follows band, song and playback links without cre
   const band = { slug: 'example-band', name: '공개 밴드' };
   const song = { id: 91, title: '공개 곡 제목', artist: '공개 가수' };
   const media = { id: 92, file_type: 'video', display_name: '공개 연주 영상', band, song };
-  const audio = { id: 93, file_type: 'audio', display_name: '두 번째 자료', band, song };
+  const audio = { id: 93, file_type: 'audio', display_name: '음원', band,
+    song: { ...song, title: '두 번째 자료' }, rehearsal_title: '정기 합주' };
+  const audioTitle = `${song.artist} - ${audio.song.title}`;
+  const videoTitle = `${song.artist} - ${song.title}`;
   const pagination = { has_more: false };
   globalThis.fetch = async (url, options) => {
     const { pathname, searchParams } = new URL(url);
@@ -302,16 +305,17 @@ test('anonymous public archive follows band, song and playback links without cre
     assert.ok(calls.every(({ pathname }) => pathname !== '/api/v2/public/archive/songs'));
     await view.findByRole('button', { name: '더 보기' });
     await waitFor(() => assert.equal(typeof bottom, 'function'));
-    assert.equal(view.queryByRole('link', { name: audio.display_name }), null);
+    assert.equal(view.queryByRole('link', { name: audioTitle }), null);
     bottom([{ isIntersecting: true }]);
-    await view.findByRole('link', { name: audio.display_name });
-    assert.equal(view.getAllByRole('link', { name: media.display_name }).length, 1);
+    await view.findByRole('link', { name: audioTitle });
+    assert.ok(view.getByText('정기 합주'));
+    assert.equal(view.getAllByRole('link', { name: videoTitle }).length, 1);
     assert.equal(calls.filter(({ pathname }) => pathname === '/api/v2/public/archive/media').length, 2);
-    fireEvent.click(view.getAllByRole('link', { name: '밴드 공개 페이지' })[0]);
+    fireEvent.click(view.getAllByRole('link', { name: '밴드 페이지로' })[0]);
     await view.findByRole('heading', { name: band.name });
     fireEvent.click(await view.findByRole('link', { name: song.title }));
     await view.findByRole('heading', { name: song.title });
-    fireEvent.click(await view.findByRole('link', { name: media.display_name }));
+    fireEvent.click(await view.findByRole('link', { name: videoTitle }));
     await view.findByRole('heading', { name: media.display_name });
     assert.equal(view.queryByRole('heading', { name: '로그인' }), null);
     assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://files.example.test/play.mp4');

@@ -63,19 +63,20 @@ export function ArchiveMediaCards({ media, loadPreview }) {
   if (!media.length) return <p>표시할 공개 영상·음원이 없습니다.</p>;
   return <ul className="archive-media-feed">{media.map((item) => {
     const video = item.file_type === 'video';
-    const label = item.song?.title || item.display_name || '공개 미디어';
+    const label = [item.song?.artist, item.song?.title].filter(Boolean).join(' - ')
+      || item.display_name || '공개 미디어';
     const mediaPath = `/archive/media/${item.id}`;
     return <li className="archive-media-card" key={item.id}>
       <div className="archive-media-card-heading">
         <span className="archive-media-kind">{video ? '영상' : '음원'}</span>
-        {item.band?.slug && <Link className="bands-return-link archive-band-link" to={`/archive/bands/${encodeURIComponent(item.band.slug)}`}>밴드 공개 페이지 <span aria-hidden="true">↗</span></Link>}
+        {item.band?.slug && <Link className="bands-return-link archive-band-link" to={`/archive/bands/${encodeURIComponent(item.band.slug)}`}>밴드 페이지로 <span aria-hidden="true">↗</span></Link>}
       </div>
       <Link className="archive-card-preview-link" aria-label={`${label} ${video ? '영상' : '음원'} 미리보기`} to={mediaPath}>
         <MediaPreview item={item} loadPreview={loadPreview} />
       </Link>
       <div className="archive-media-card-details">
-        <div><Link className="archive-media-title" to={mediaPath}>{item.display_name && item.display_name !== '영상' && item.display_name !== '음원' ? item.display_name : label}</Link>
-          <p>{[item.song?.artist, item.band?.name].filter(Boolean).join(' · ')}</p></div>
+        <div><Link className="archive-media-title" to={mediaPath}>{label}</Link>
+          {item.rehearsal_title && <p>{item.rehearsal_title}</p>}</div>
         <Link className="primary-btn" to={mediaPath}>{video ? '영상 재생' : '음원 듣기'}</Link>
       </div>
     </li>;

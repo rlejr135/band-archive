@@ -1,6 +1,7 @@
-import { MemoryRouter } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { ArchiveBandContent } from './PublicArchive.jsx';
 import MediaPlayer from '../common/MediaPlayer.jsx';
-import { ArchiveMediaFeed } from './ArchiveMediaFeed.jsx';
+import { ArchiveMediaCards, ArchiveMediaFeed } from './ArchiveMediaFeed.jsx';
 import poster from './archive-story-stage.png';
 import '../bands/BandsPage.css';
 import './PublicArchive.css';
@@ -19,6 +20,7 @@ const clips = [
   id: index + 1,
   file_type,
   band,
+  rehearsal_title: index < 4 ? '11월 정기 합주' : '소극장 라이브 리허설',
   song: { id: index + 1, title, artist: band.name },
   poster_url: file_type === 'video' ? new URL(poster, window.location.origin).href : undefined,
 }));
@@ -28,10 +30,47 @@ const loadPage = async (offset, limit) => ({
   pagination: { has_more: offset + limit < clips.length },
 });
 
-const ArchiveFeedStory = () => <MemoryRouter initialEntries={['/archive']}>
+function StoryMediaPage() {
+  const { id } = useParams();
+  const clip = clips.find((item) => String(item.id) === id);
+  if (!clip) return null;
+  const file = clip.file_type === 'audio'
+    ? { type: 'audio', name: clip.song.title, url: playbackDemo.audio_url }
+    : { ...playbackDemo, name: clip.song.title };
+  return <>
+    <Link className="bands-return-link" to="/archive">← 공개 아카이브</Link>
+    <h1>{clip.song.artist} - {clip.song.title}</h1>
+    <MediaPlayer file={file} playbackIdentity={`archive-story:${id}`} sharedModeButtons />
+  </>;
+}
+
+function StoryBandPage() {
+  return <>
+    <Link className="bands-return-link" to="/archive">← 공개 아카이브</Link>
+    <ArchiveBandContent band={{ ...band, description: '공개 연주를 모아 둔 밴드 페이지입니다.' }}
+      songs={clips.map((clip) => clip.song)} />
+  </>;
+}
+
+function StorySongPage() {
+  const { id } = useParams();
+  const clip = clips.find((item) => String(item.song.id) === id);
+  if (!clip) return null;
+  return <>
+    <Link className="bands-return-link" to="/archive/bands/night-wave">← 밴드 페이지로</Link>
+    <h1>{clip.song.title}</h1>
+    <ArchiveMediaCards media={[clip]} />
+  </>;
+}
+
+const ArchiveFeedStory = ({ initialPath = '/archive' }) => <MemoryRouter initialEntries={[initialPath]}>
   <main className="public-archive">
-    <h1>공개 아카이브</h1>
-    <ArchiveMediaFeed loadPage={loadPage} />
+    <Routes>
+      <Route path="/archive" element={<><h1>공개 아카이브</h1><ArchiveMediaFeed loadPage={loadPage} /></>} />
+      <Route path="/archive/media/:id" element={<StoryMediaPage />} />
+      <Route path="/archive/bands/:slug" element={<StoryBandPage />} />
+      <Route path="/archive/bands/:slug/songs/:id" element={<StorySongPage />} />
+    </Routes>
   </main>
 </MemoryRouter>;
 
@@ -41,6 +80,8 @@ export default {
 };
 
 export const ScrollFeed = {};
+export const ListenToAudio = { args: { initialPath: '/archive/media/2' } };
+export const OpenBandPage = { args: { initialPath: '/archive/bands/night-wave' } };
 
 
 // Embedded synthetic media keeps this story independent of public or private files.

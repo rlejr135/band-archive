@@ -6,7 +6,7 @@ from band_access import PUBLIC, BandReadScope, RequestAudience
 from content_queries import _featured_gallery_rows_query, _gallery_query
 from errors import NotFoundError, ValidationError
 from media_access_service import media_playback
-from models import Band, GalleryImage, Media, Song
+from models import Band, GalleryImage, Media, Rehearsal, Song
 from public_archive_service import public_media_query, public_song_query
 from routes.bands import _logo_for_scope
 from v2_remaining_read_serializers import serialize_gallery_image
@@ -69,12 +69,13 @@ def _song_ref(song, band=None):
     return result
 
 
-def _media_ref(item, song, band):
+def _media_ref(item, song, band, rehearsal_title):
     return {
         'id': item.id, 'file_type': item.file_type,
         'display_name': '영상' if item.file_type == 'video' else '음원',
         'created_at': item.created_at.isoformat() if item.created_at else None,
         'song': _song_ref(song), 'band': _band_ref(band),
+        'rehearsal_title': rehearsal_title,
     }
 
 
@@ -89,7 +90,10 @@ def _media_rows():
     eligible_ids = public_media_query().with_entities(Media.id).statement
     return Media.query.filter(Media.id.in_(eligible_ids)).join(
         Song, (Song.id == Media.song_id) & (Song.band_id == Media.band_id),
-    ).join(Band, Band.id == Media.band_id).add_entity(Song).add_entity(Band)
+    ).join(Band, Band.id == Media.band_id).outerjoin(
+        Rehearsal, (Rehearsal.id == Media.rehearsal_id)
+        & (Rehearsal.band_id == Media.band_id) & (Rehearsal.visibility == PUBLIC),
+    ).add_entity(Song).add_entity(Band).add_columns(Rehearsal.title)
 
 
 def _song_rows():
@@ -131,7 +135,8 @@ def song_detail(slug, song_id):
 
 @public_archive_bp.get('/media/<int:media_id>')
 def media_detail(media_id):
-    item, song, band = _one_or_404(_media_rows().filter(Media.id == media_id))
-    result = _media_ref(item, song, band)
+    row = _one_or_404(_media_rows().filter(Media.id == media_id))
+    item, song, band, _ = row
+    result = _media_ref(*row)
     result['playback'] = media_playback(item, PUBLIC)
     return jsonify(band=_band_ref(band), song=_song_ref(song, band), media=result)
