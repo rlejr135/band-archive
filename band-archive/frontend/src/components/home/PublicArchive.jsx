@@ -41,7 +41,7 @@ function ArchiveReadState({ read }) {
   if (read.pending) return <p role="status">공개 자료를 불러오는 중입니다…</p>;
   if (read.error === 'missing') return <p role="status">공개된 자료를 찾을 수 없습니다.</p>;
   if (!read.error) return null;
-  return <div><p role="alert">공개 자료를 불러오지 못했습니다.</p><button type="button" className="secondary-btn" onClick={read.reload}>다시 시도</button></div>;
+  return <div><p role="alert">공개 자료를 불러오지 못했습니다.</p><button type="button" className="primary-btn" onClick={read.reload}>다시 시도</button></div>;
 }
 
 function MediaList({ media }) {
@@ -50,7 +50,7 @@ function MediaList({ media }) {
     <span className="public-archive-type">{item.file_type === 'video' ? '영상' : '음원'}</span>
     <Link to={archiveMedia(item.id)}><strong>{item.display_name || item.song?.title || '공개 미디어'}</strong></Link>
     <span>{[item.song?.title, item.song?.artist, item.band?.name].filter(Boolean).join(' · ')}</span>
-    {item.band?.slug && <Link to={archiveBand(item.band.slug)}>밴드 공개 페이지</Link>}
+    {item.band?.slug && <Link className="bands-return-link" to={archiveBand(item.band.slug)}>밴드 공개 페이지</Link>}
   </li>)}</ul>;
 }
 
@@ -66,15 +66,6 @@ function SongList({ songs, band }) {
   })}</ul>;
 }
 
-export function PublicArchivePreview() {
-  const read = useArchiveRead('/media?limit=6&offset=0');
-  return <section className="public-archive public-archive-preview">
-    <div className="public-archive-heading"><h2>공개 아카이브</h2><Link to="/archive" className="secondary-btn">전체 공개 자료 보기</Link></div>
-    <ArchiveReadState read={read} />
-    {read.data && <MediaList media={read.data.media} />}
-  </section>;
-}
-
 function PageContent({ path, offset, render, onPrevious, onNext }) {
   const read = useArchiveRead(`${path}?limit=${PAGE_SIZE}&offset=${offset}`);
   return <>
@@ -82,8 +73,8 @@ function PageContent({ path, offset, render, onPrevious, onNext }) {
     {read.data && <>
       {render(read.data)}
       {(offset > 0 || read.data.pagination?.has_more) && <nav className="public-archive-pagination" aria-label="공개 자료 페이지">
-        {offset > 0 && <button type="button" className="secondary-btn" onClick={onPrevious}>이전 자료</button>}
-        {read.data.pagination?.has_more && <button type="button" className="secondary-btn" onClick={onNext}>다음 자료</button>}
+        {offset > 0 && <button type="button" className="bands-return-link" onClick={onPrevious}>이전 자료</button>}
+        {read.data.pagination?.has_more && <button type="button" className="primary-btn" onClick={onNext}>다음 자료</button>}
       </nav>}
     </>}
   </>;
@@ -119,7 +110,7 @@ export function PublicArchivePage() {
 export function PublicArchiveBandPage() {
   const { slug } = useParams();
   return <GlobalShell><div className="public-archive">
-    <Link to="/archive">← 공개 아카이브</Link>
+    <Link className="bands-return-link" to="/archive"><span aria-hidden="true">←</span> 공개 아카이브</Link>
     <ArchivePages key={slug} path={`/bands/${encodeURIComponent(slug)}`} render={({ band, songs }) => <>
       <BandHeader band={band} />
       <h2>공개 곡</h2><SongList songs={songs} band={band} />
@@ -130,7 +121,7 @@ export function PublicArchiveBandPage() {
 export function PublicArchiveSongPage() {
   const { slug, id } = useParams();
   return <GlobalShell><div className="public-archive">
-    <Link to={archiveBand(slug)}>← 밴드 공개 페이지</Link>
+    <Link className="bands-return-link" to={archiveBand(slug)}><span aria-hidden="true">←</span> 밴드 공개 페이지</Link>
     <ArchivePages key={`${slug}:${id}`} path={`/bands/${encodeURIComponent(slug)}/songs/${encodeURIComponent(id)}`} render={({ band, song, media }) => <>
       <header><p>{band.name}</p><h1>{song.title}</h1>{song.artist && <p>{song.artist}</p>}</header>
       <h2>공개 영상·음원</h2><MediaList media={media} />
@@ -149,10 +140,10 @@ function ArchivePlayback({ id }) {
     read.reload();
   };
   return <>
-    <Link to={archiveSong(band.slug, song.id)}>← {song.title}</Link>
+    <Link className="bands-return-link" to={archiveSong(band.slug, song.id)}><span aria-hidden="true">←</span> {song.title}</Link>
     <header><p>{band.name}</p><h1>{media.display_name || song.title}</h1>{song.artist && <p>{song.artist}</p>}</header>
     <MediaPlayer file={workspaceMediaFile(media)} playbackIdentity={`public-archive:${id}`} preload="none" onPlaybackError={refreshOnce} onRefresh={read.reload} />
-    <button type="button" className="secondary-btn" onClick={read.reload}>재생 주소 새로고침</button>
+    <button type="button" className="primary-btn" onClick={read.reload}>재생 주소 새로고침</button>
   </>;
 }
 

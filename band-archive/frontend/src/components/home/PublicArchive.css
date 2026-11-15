@@ -1,5 +1,5 @@
 .public-archive { display: grid; gap: 1.25rem; }
-.public-archive-preview { margin: 2rem auto; width: min(100%, 72rem); }
+.public-archive > .bands-return-link, .public-archive > .primary-btn, .public-archive-list .bands-return-link { justify-self: start; }
 .public-archive h1, .public-archive h2, .public-archive p { margin-block: 0 .6rem; }
 .public-archive-heading, .public-archive-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
 .public-archive-heading h2 { margin-block: 0; flex: 1; }

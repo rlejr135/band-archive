@@ -64,7 +64,7 @@ test('upload target opens the original band song detail through the real AppRout
   } finally { globalThis.fetch = previousFetch; }
 });
 
-test('anonymous home shows the login form, synthetic example and only anonymous archive reads', async () => {
+test('anonymous home shows an archive entry card without fetching archive contents', async () => {
   await load(); const previousFetch = globalThis.fetch; const calls = [];
   globalThis.fetch = async (url, options) => { calls.push([new URL(url).pathname + new URL(url).search, options.headers]); return response({ media: [] }); };
   try {
@@ -74,8 +74,11 @@ test('anonymous home shows the login form, synthetic example and only anonymous 
     assert.ok(view.getByLabelText('이메일'));
     assert.equal(view.queryByRole('navigation', { name: '밴드 공간' }), null);
     assert.equal(view.queryByRole('button', { name: /곡 목록|멤버|갤러리|다음 곡 추천/ }), null);
-    await view.findByText('표시할 공개 영상·음원이 없습니다.');
-    assert.deepEqual(calls, [['/api/v2/public/archive/media?limit=6&offset=0', {}]]);
+    const archiveLink = view.getByRole('link', { name: '공개 아카이브 열기' });
+    assert.equal(archiveLink.getAttribute('href'), '/archive');
+    assert.ok(archiveLink.closest('.portal-card'));
+    assert.equal(view.queryByRole('heading', { name: '공개 영상·음원' }), null);
+    assert.equal(calls.some(([url]) => url.startsWith('/api/v2/public/archive/')), false);
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -143,6 +146,9 @@ test('authenticated root opens the portal while account data remains outside its
     assert.equal(calls.some((url) => url.endsWith('/api/v2/me')), false);
     assert.equal(calls.some((url) => url.includes('legacy-ownership-claim')), false);
     assert.equal(view.queryByRole('heading', { name: '계정과 밴드 관리' }), null);
+    const archiveCard = view.getByRole('link', { name: '공개 아카이브 열기' }).closest('.portal-card');
+    assert.equal(archiveCard?.parentElement, view.getByRole('heading', { name: '이용 안내' }).closest('.portal-card')?.parentElement);
+    assert.equal(calls.some((url) => url.includes('/api/v2/public/archive/')), false);
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -277,8 +283,11 @@ test('anonymous public archive follows band, song and playback links without cre
     }
   };
   try {
-    const view = renderRoutes('/archive');
-    await view.findByRole('heading', { name: '공개 아카이브' });
+    const view = renderRoutes('/', account());
+    const openArchive = await view.findByRole('link', { name: '공개 아카이브 열기' });
+    assert.equal(calls.length, 0);
+    fireEvent.click(openArchive);
+    await view.findByRole('heading', { name: '공개 아카이브', level: 1 });
     fireEvent.click(await view.findByRole('link', { name: '밴드 공개 페이지' }));
     await view.findByRole('heading', { name: band.name });
     fireEvent.click(await view.findByRole('link', { name: song.title }));

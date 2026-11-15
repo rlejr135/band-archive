@@ -7,8 +7,9 @@ import { ServicePolicyProvider } from './context/ServicePolicyContext.jsx';
 import { PolicyPage, PolicyLinks } from './components/auth/PolicyPages.jsx';
 import { LoginPage, SignupPage, VerifyEmailPage, ForgotPasswordPage, ResetPasswordPage } from './components/auth/AuthPages.jsx';
 import { BandsPage } from './components/bands/BandsPage.jsx';
-import { PublicArchiveBandPage, PublicArchiveMediaPage, PublicArchivePage, PublicArchivePreview, PublicArchiveSongPage } from './components/home/PublicArchive.jsx';
+import { PublicArchiveBandPage, PublicArchiveMediaPage, PublicArchivePage, PublicArchiveSongPage } from './components/home/PublicArchive.jsx';
 import { PortalPage } from './components/home/PortalPage.jsx';
+import { PublicArchiveCard } from './components/home/PortalCard.jsx';
 import { GuidePage } from './components/home/GuidePage.jsx';
 import { CommunityBoardPage } from './components/community/CommunityBoardPage.jsx';
 import { BandIntroductionRoute } from './components/bands/BandIntroduction.jsx';
@@ -60,11 +61,11 @@ const WelcomeLanding = ({ authRoute = false }) => {
         <div className="welcome-orbit welcome-orbit-one" /><div className="welcome-orbit welcome-orbit-two" />
       </div>
     </section>
-    {!authRoute && <PublicArchivePreview />}
     <section className="welcome-login" id="login" aria-labelledby="welcome-login-title">
       <div><p className="welcome-eyebrow">WELCOME BACK</p><h2 id="welcome-login-title">아카이브로 돌아오기</h2><p>로그인하면 내 밴드 목록에서 작업할 공간을 선택할 수 있어요.</p></div>
       <LoginPage embedded />
     </section>
+    {!authRoute && <section className="portal-spaces welcome-archive-entry" aria-label="공개 아카이브 안내"><PublicArchiveCard /></section>}
     <footer className="welcome-footer"><span>{serviceName}</span><PolicyLinks /><span>밴드의 시간을 함께 기록합니다.</span></footer>
   </main>;
 };
