@@ -50,6 +50,7 @@ PHASE22_REVISION = '20261021_22'
 PHASE23_REVISION = '20261023_23'
 PHASE24_REVISION = '20261024_24'
 PHASE25_REVISION = '20261114_25'
+PHASE26_REVISION = '20261115_26'
 ALEMBIC_VERSION_TABLE = 'alembic_version'
 DATA_API_MANAGED_TABLES_PHASE13 = (
     'alembic_version', 'announcement', 'app_user', 'audit_event', 'auth_bootstrap_state', 'band',
@@ -63,8 +64,10 @@ DATA_API_MANAGED_TABLES_PHASE14 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE13
 DATA_API_MANAGED_TABLES_PHASE15 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE14, 'r2_deletion_task')))
 DATA_API_MANAGED_TABLES_PHASE16 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE15, 'policy_acceptance_receipt')))
 AVAILABILITY_TABLES = ('band_availability_day', 'band_availability_state', 'band_personal_schedule_note')
-DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES, 'band_logo',
-                                        'band_invite_link', 'invite_resume_context', 'content_restriction')))
+DATA_API_MANAGED_TABLES_PHASE25 = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE16, *AVAILABILITY_TABLES,
+                                                'band_logo', 'band_invite_link', 'invite_resume_context',
+                                                'content_restriction')))
+DATA_API_MANAGED_TABLES = tuple(sorted((*DATA_API_MANAGED_TABLES_PHASE25, 'public_archive_like')))
 BASELINE_TABLE_NAMES = (
     'announcement', 'comment', 'gallery_image', 'media', 'media_vote', 'member',
     'multipart_upload_part', 'multipart_upload_session', 'personal_log',
@@ -167,7 +170,8 @@ def _current_historical_metadata():
     """
     metadata = MetaData()
     for table in db.metadata.tables.values():
-        table.to_metadata(metadata)
+        if table.name != 'public_archive_like':
+            table.to_metadata(metadata)
     metadata.tables['song']._columns.remove(metadata.tables['song'].c.public_override)
     return _remove_featured_media_index(metadata)
 
@@ -1985,6 +1989,10 @@ def metadata_for_recorded_revision(revision):
         return phase23_metadata()
     if revision == PHASE24_REVISION:
         return phase24_metadata()
+    if revision == PHASE25_REVISION:
+        metadata = phase24_metadata()
+        metadata.tables['song'].append_column(db.metadata.tables['song'].c.public_override._copy())
+        return metadata
     if revision == migration_head_revision():
         return db.metadata
     raise MigrationBootstrapError(

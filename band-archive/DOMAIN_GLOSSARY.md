@@ -102,6 +102,7 @@ API 표에서 `B`는 `/api/v2/bands/{bandId}`다. FE 경로의 `{bandSlug}`와 A
 반드시 유지할 의미:
 
 - `Song`은 연습·연주할 레퍼토리 항목이다. `artist`는 곡의 아티스트 정보이지 업로더·멤버 이름이 아니다. `sheet_music`는 악보 첨부 정보이며 별도 악보 모델은 없다.
+- **공개 아카이브 좋아요** (`PublicArchiveLike`)는 공개 미디어에 남기는 계정별 반응이다. `AppUser`와 `Media` 조합당 한 번 누르거나 취소할 수 있다. 밴드 내부 추천·아쉬워요인 `MediaVote`는 별개다.
 - **곡 개별 공개**는 `Song.public_override`로 기록한다. 비로그인 공개 아카이브에서는 이 곡의 제목·가수와 공개 조건을 충족한 Media를 제공한다. `effective_visibility`는 기존 밴드 내부 조회 규칙을 따르고, `archive_visibility`는 공개 아카이브에서의 접근 가능 여부를 나타낸다. 합주와 미디어 자체의 멤버 전용 설정은 계속 적용된다.
 - `Media.song_id`는 필수이고 `rehearsal_id`는 선택이다. 일반 파일 처리 helper에서 쓰는 media라는 말이 모두 이 DB 모델을 뜻하지는 않는다.
 - 원본 영상·720p 영상·추출 M4A는 **한 Media에 연결된 재생 소스**일 수 있다. 파일 세 개가 있다고 DB 미디어 세 개를 생성한 것으로 해석하지 않는다. `PersonalLog`도 추출 음원을 가질 수 있지만 곡 Media와 다른 레코드다.

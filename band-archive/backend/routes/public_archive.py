@@ -1,12 +1,18 @@
 """Anonymous public archive with explicit metadata-only projections."""
 
+import re
+
 from flask import Blueprint, after_this_request, current_app, jsonify, request
+from sqlalchemy import func, inspect, select, text
+
+from auth_service import AuthError, current_app_user, require_auth
 
 from band_access import PUBLIC, BandReadScope, RequestAudience
 from content_queries import _featured_gallery_rows_query, _gallery_query
 from errors import NotFoundError, ValidationError
 from media_access_service import media_playback
-from models import Band, GalleryImage, Media, Rehearsal, Song
+from extensions import db
+from models import AppUser, Band, GalleryImage, Media, PublicArchiveLike, Rehearsal, Song
 from public_archive_service import public_media_query, public_song_query
 from routes.bands import _logo_for_scope
 from v2_remaining_read_serializers import serialize_gallery_image
@@ -69,13 +75,14 @@ def _song_ref(song, band=None):
     return result
 
 
-def _media_ref(item, song, band, rehearsal_title):
+def _media_ref(item, song, band, rehearsal_title, like_count):
     return {
         'id': item.id, 'file_type': item.file_type,
         'display_name': '영상' if item.file_type == 'video' else '음원',
         'created_at': item.created_at.isoformat() if item.created_at else None,
         'song': _song_ref(song), 'band': _band_ref(band),
         'rehearsal_title': rehearsal_title,
+        'like_count': like_count,
     }
 
 
@@ -93,7 +100,73 @@ def _media_rows():
     ).join(Band, Band.id == Media.band_id).outerjoin(
         Rehearsal, (Rehearsal.id == Media.rehearsal_id)
         & (Rehearsal.band_id == Media.band_id) & (Rehearsal.visibility == PUBLIC),
-    ).add_entity(Song).add_entity(Band).add_columns(Rehearsal.title)
+    ).add_entity(Song).add_entity(Band).add_columns(Rehearsal.title, _like_count(Media.id))
+
+
+def _like_count(media_id):
+    return select(func.count()).select_from(PublicArchiveLike).where(
+        PublicArchiveLike.media_id == media_id,
+    ).correlate(Media).scalar_subquery()
+
+
+def _active_archive_user(*, lock=False):
+    user_id = inspect(current_app_user(required=True)).identity[0]
+    query = AppUser.query.filter_by(id=user_id).populate_existing()
+    if lock and db.engine.dialect.name == 'postgresql':
+        query = query.with_for_update()
+    user = query.one_or_none()
+    if user is None or user.status != 'active' or user.email_verified is not True:
+        raise AuthError('account_disabled', 'An active verified account is required.', 403)
+    return user.id
+
+
+@public_archive_bp.get('/likes')
+@require_auth
+def archive_likes():
+    values = request.args.getlist('media_ids')
+    raw = values[0] if len(values) == 1 else ''
+    if not re.fullmatch(r'[1-9][0-9]{0,9}(?:,[1-9][0-9]{0,9}){0,99}', raw):
+        raise ValidationError('media_ids must contain 1 to 100 positive integer IDs.')
+    ids = {int(value) for value in raw.split(',')}
+    if max(ids) > 2_147_483_647:
+        raise ValidationError('media_ids contains an out-of-range ID.')
+    user_id = _active_archive_user()
+    eligible_ids = public_media_query().filter(Media.id.in_(ids)).with_entities(Media.id).statement
+    liked_ids = db.session.scalars(select(PublicArchiveLike.media_id).where(
+        PublicArchiveLike.user_id == user_id,
+        PublicArchiveLike.media_id.in_(eligible_ids),
+    ).order_by(PublicArchiveLike.media_id)).all()
+    return jsonify(liked_media_ids=liked_ids)
+
+
+@public_archive_bp.put('/media/<int:media_id>/like')
+@require_auth
+def set_archive_like(media_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or set(payload) != {'liked'} or type(payload['liked']) is not bool:
+        raise ValidationError('liked must be a boolean.')
+    if not 0 < media_id <= 2_147_483_647:
+        raise NotFoundError('Resource not found')
+
+    dialect = db.engine.dialect.name
+    if dialect == 'sqlite':
+        db.session.execute(text('BEGIN IMMEDIATE'))
+    user_id = _active_archive_user(lock=True)
+    target = public_media_query().filter(Media.id == media_id).with_entities(Media.id)
+    if dialect == 'postgresql':
+        target = target.with_for_update(of=Media)
+    _one_or_404(target)
+    # The account and media locks serialize duplicate requests and counts.
+    key = (media_id, user_id)
+    current = db.session.get(PublicArchiveLike, key)
+    if payload['liked'] and current is None:
+        db.session.add(PublicArchiveLike(media_id=media_id, user_id=user_id))
+    elif not payload['liked'] and current is not None:
+        db.session.delete(current)
+    db.session.flush()
+    count = db.session.scalar(select(_like_count(media_id)))
+    db.session.commit()
+    return jsonify(liked=payload['liked'], like_count=count)
 
 
 def _song_rows():
@@ -136,7 +209,7 @@ def song_detail(slug, song_id):
 @public_archive_bp.get('/media/<int:media_id>')
 def media_detail(media_id):
     row = _one_or_404(_media_rows().filter(Media.id == media_id))
-    item, song, band, _ = row
+    item, song, band, _, _ = row
     result = _media_ref(*row)
     result['playback'] = media_playback(item, PUBLIC)
     return jsonify(band=_band_ref(band), song=_song_ref(song, band), media=result)

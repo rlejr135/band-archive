@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 import json
 
 from extensions import db
-from models import AuditEvent, Band, Media, Rehearsal, Song
+from models import AuditEvent, Band, Media, MediaVote, PublicArchiveLike, Rehearsal, Song
 from tests.test_auth import _install_jwks, _jwk, _token
 from tests.test_band_access_phase6 import access_app, signer  # noqa: F401
 
@@ -177,3 +177,57 @@ def test_public_archive_writes_require_current_policy_receipt_and_confirmation(a
         assert response.status_code == 200
     with access_app.app_context():
         assert AuditEvent.query.filter_by(event_type='content.public_visibility_confirmed').count() == 2
+
+
+def test_archive_likes_are_account_scoped_idempotent_and_separate_from_votes(access_app, signer):
+    _install_jwks(access_app, [[_jwk(signer, 'key-1')]])
+    client = access_app.test_client()
+    with access_app.app_context():
+        band = Band.query.filter_by(slug='band-a').one()
+        song = Song.query.filter_by(band_id=band.id, title='A members').one()
+        song.public_override = True
+        public = Media(band_id=band.id, song_id=song.id, visibility='PUBLIC',
+                       filename='open.mp4', file_type='video')
+        private = Media(band_id=band.id, song_id=song.id, visibility='MEMBERS',
+                        filename='closed.mp4', file_type='video')
+        db.session.add_all((public, private))
+        db.session.commit()
+        media_id, private_id = public.id, private.id
+        votes_before = MediaVote.query.count()
+        counts_before = (public.upvote_count, public.downvote_count, public.vote_score)
+
+    action = f'{ARCHIVE}/media/{media_id}/like'
+    state = f'{ARCHIVE}/likes?media_ids={media_id},{private_id}'
+    viewer = _headers(signer)
+    nonmember = _headers(signer, '77777777-7777-7777-7777-777777777777', 'outsider@example.com')
+    assert client.get(state).status_code == 401
+    assert client.put(action, json={'liked': True}).status_code == 401
+    assert client.get(f'{ARCHIVE}/likes?media_ids=0', headers=viewer).status_code == 400
+    assert client.put(action, json={'liked': 1}, headers=viewer).status_code == 400
+    assert client.put(f'{ARCHIVE}/media/{private_id}/like', json={'liked': True},
+                      headers=viewer).status_code == 404
+    for _ in range(2):
+        result = client.put(action, json={'liked': True}, headers=viewer)
+        assert result.status_code == 200
+        assert result.json == {'liked': True, 'like_count': 1}
+    assert client.get(state, headers=viewer).json == {'liked_media_ids': [media_id]}
+    assert client.get(state, headers=nonmember).json == {'liked_media_ids': []}
+    assert client.put(action, json={'liked': True}, headers=nonmember).json == {
+        'liked': True, 'like_count': 2,
+    }
+    row = next(item for item in client.get(f'{ARCHIVE}/media').json['media'] if item['id'] == media_id)
+    assert row['like_count'] == 2
+    assert client.get(f'{ARCHIVE}/media/{media_id}').json['media']['like_count'] == 2
+    assert client.put(action, json={'liked': False}, headers=viewer).json == {
+        'liked': False, 'like_count': 1,
+    }
+    assert client.get(state, headers=viewer).json == {'liked_media_ids': []}
+    with access_app.app_context():
+        media = db.session.get(Media, media_id)
+        assert MediaVote.query.count() == votes_before
+        assert (media.upvote_count, media.downvote_count, media.vote_score) == counts_before
+        assert PublicArchiveLike.query.count() == 1
+        media.visibility = 'MEMBERS'
+        db.session.commit()
+    assert client.get(state, headers=nonmember).json == {'liked_media_ids': []}
+    assert client.put(action, json={'liked': False}, headers=nonmember).status_code == 404

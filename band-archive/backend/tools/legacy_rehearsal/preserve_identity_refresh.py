@@ -67,6 +67,9 @@ MUST_BE_EMPTY_TABLES = frozenset({
     # A rights restriction names current content by ID. Refreshing legacy rows
     # could silently bind even a released case to a different record.
     "content_restriction",
+    # Replacing a media row can cascade-delete a like or rebind its meaning.
+    # Require an empty table before rehearsing or applying the legacy refresh.
+    "public_archive_like",
 })
 MANAGED_TABLES = PROTECTED_TABLES | REFRESHED_TABLES | QUARANTINED_TABLES | MUST_BE_EMPTY_TABLES
 

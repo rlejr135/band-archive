@@ -671,6 +671,16 @@ class Media(db.Model):
         }
 
 
+class PublicArchiveLike(db.Model):
+    """One public archive like per media item and account."""
+    __tablename__ = 'public_archive_like'
+
+    media_id = db.Column(db.Integer, db.ForeignKey('media.id', ondelete='CASCADE'),
+                         primary_key=True, autoincrement=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('app_user.id', ondelete='CASCADE'),
+                        primary_key=True, autoincrement=False, index=True)
+
+
 class MediaVote(db.Model):
     """One privacy-preserving vote per media item and browser/device identity."""
     id = db.Column(db.Integer, primary_key=True)
