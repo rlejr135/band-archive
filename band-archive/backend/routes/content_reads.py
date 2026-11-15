@@ -27,6 +27,7 @@ from content_visibility import (
 )
 from models import (Announcement, AppUser, Band, BandMembership, Comment, GalleryImage, Media, MediaVote,
                     Member, PersonalLog, Rehearsal, Song, SongSuggestion, SongSuggestionVote, rehearsal_songs)
+from public_archive_service import song_archive_flags
 from v2_content_serializers import (
     serialize_comment, serialize_media, serialize_processing, serialize_rehearsal,
     serialize_song,
@@ -422,7 +423,8 @@ def list_songs(band_id):
     ).filter(*_song_graph_sql(scope))
     page, pagination = _page_query(query, (Song.id.asc(),), limit, offset)
     can_feature = _can_feature_for_scope(scope)
-    songs = [dict(serialize_song(scope, song), can_feature=can_feature) for song in page]
+    songs = [dict(serialize_song(scope, song), **song_archive_flags(scope, song),
+                  can_feature=can_feature) for song in page]
     return jsonify({'songs': songs, 'pagination': pagination})
 
 
@@ -430,9 +432,9 @@ def list_songs(band_id):
 @optional_auth
 def get_song(band_id, song_id):
     scope = _scope(band_id)
-    song = serialize_song(scope, _song_or_404(song_id, scope))
-    song['can_feature'] = _can_feature_for_scope(scope)
-    return jsonify({'song': song})
+    song = _song_or_404(song_id, scope)
+    return jsonify({'song': dict(serialize_song(scope, song), **song_archive_flags(scope, song),
+                                 can_feature=_can_feature_for_scope(scope))})
 
 
 @content_reads_bp.get('/songs/<int:song_id>/media')

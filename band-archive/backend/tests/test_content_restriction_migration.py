@@ -76,10 +76,11 @@ def _upgrade_and_verify(app, *, postgres=False):
             membership_id = db.session.execute(BandMembership.__table__.insert().values(
                 band_id=band.id, user_id=writer.id, role='owner', status='active',
             ).returning(BandMembership.id)).scalar_one()
-            song = Song(band_id=band.id, created_by_membership_id=membership_id, title='Preserved', artist='Fixture')
-            db.session.add(song)
-            db.session.flush()
-            item = ContentRestriction(band_id=band.id, resource_type='song', resource_id=song.id,
+            song_table = phase22_metadata().tables['song']
+            song_id = db.session.execute(song_table.insert().values(
+                band_id=band.id, created_by_membership_id=membership_id, title='Preserved', artist='Fixture',
+            ).returning(song_table.c.id)).scalar_one()
+            item = ContentRestriction(band_id=band.id, resource_type='song', resource_id=song_id,
                                       case_ref=str(uuid.uuid4()), reason_code='privacy', state='active',
                                       created_by_user_id=actor.id, created_at=now)
             db.session.add(item)
@@ -91,18 +92,18 @@ def _upgrade_and_verify(app, *, postgres=False):
                 upgrade(revision='head', directory=str(MIGRATIONS_DIRECTORY))
                 arguments = ['--database-url', app.config['SQLALCHEMY_DATABASE_URI'],
                              '--actor-user-id', str(actor.id), '--band-id', str(band.id),
-                             '--resource-type', 'song', '--resource-id', str(song.id),
+                             '--resource-type', 'song', '--resource-id', str(song_id),
                              '--case-ref', item.case_ref, '--action', 'release']
                 preview = CliRunner().invoke(cli, arguments)
                 assert preview.exit_code == 0, preview.output
                 assert '"applied": false' in preview.output
                 assert app.config['SQLALCHEMY_DATABASE_URI'] not in preview.output
                 db.session.expire_all()
-                assert is_restricted(db.session.get(Song, song.id))
+                assert is_restricted(db.session.get(Song, song_id))
                 released = CliRunner().invoke(cli, [*arguments, '--apply'])
                 assert released.exit_code == 0, released.output
                 db.session.expire_all()
-                assert not is_restricted(db.session.get(Song, song.id))
+                assert not is_restricted(db.session.get(Song, song_id))
                 db.session.remove()
                 config = app.extensions['migrate'].migrate.get_config(str(MIGRATIONS_DIRECTORY))
                 command.downgrade(config, revision='20261021_22')
@@ -113,7 +114,7 @@ def _upgrade_and_verify(app, *, postgres=False):
                 db.session.commit()
                 db.session.expire_all()
                 assert db.session.get(ContentRestriction, item.id).created_by_user_id is None
-                assert is_restricted(db.session.get(Song, song.id))
+                assert is_restricted(Song(id=song_id, band_id=band.id))
             # The ORM reads above start an implicit transaction. Release its
             # connection before Alembic requests ACCESS EXCLUSIVE on this table.
             db.session.remove()

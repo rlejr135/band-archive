@@ -234,6 +234,18 @@ def _backfilled_runtime(path):
     return create_app(_runtime_config(path), start_worker=False)
 
 
+def _insert_legacy_song_core():
+    """Insert only v05 columns; Song's current ORM mapping is newer."""
+    legacy_band_id = db.session.execute(text(
+        'SELECT id FROM band WHERE is_legacy_import = 1'
+    )).scalar_one()
+    song_id = db.session.execute(text(
+        'INSERT INTO song (band_id, visibility, title, artist) '
+        "VALUES (:band_id, 'PUBLIC', 'song', 'artist') RETURNING id"
+    ), {'band_id': legacy_band_id}).scalar_one()
+    return song_id, legacy_band_id
+
+
 def _insert_legacy_member_core():
     """Insert only v05 columns; Member's current ORM mapping is newer."""
     legacy_band_id = db.session.execute(text(
@@ -314,14 +326,12 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
                 'SELECT id FROM band WHERE is_legacy_import = 1'
             )).scalar_one()
 
-            song = Song(title='song', artist='artist')
-            db.session.add(song)
-            db.session.commit()
+            song_id, song_band_id = _insert_legacy_song_core()
             member_id = _insert_legacy_member_core()
-            rehearsal_id = _insert_legacy_rehearsal_core(song.id)
+            rehearsal_id = _insert_legacy_rehearsal_core(song_id)
             db.session.commit()
 
-            media = Media(song_id=song.id, rehearsal_id=rehearsal_id, filename='clip.mp4', file_type='video')
+            media = Media(song_id=song_id, rehearsal_id=rehearsal_id, filename='clip.mp4', file_type='video')
             log = PersonalLog(member_id=member_id, title='log', filename='log.mp4', file_type='video')
             gallery = GalleryImage(filename='gallery.png')
             announcement = Announcement(content='notice')
@@ -335,11 +345,11 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
             db.session.commit()
             reply = Comment(parent_id=root.id, author='author', content='reply')
             reply.set_password('password')
-            song_vote = SongVote(song_id=song.id, voter_hash='song-voter', value=1)
+            song_vote = SongVote(song_id=song_id, voter_hash='song-voter', value=1)
             media_vote = MediaVote(media_id=media.id, voter_hash='media-voter', value=1)
             media_session = MultipartUploadSession(
                 r2_upload_id='media-upload', object_key='media/clip.mp4', original_filename='clip.mp4',
-                content_type='video/mp4', declared_bytes=1, song_id=song.id,
+                content_type='video/mp4', declared_bytes=1, song_id=song_id,
             )
             log_session = PersonalLogMultipartUploadSession(
                 r2_upload_id='log-upload', object_key='personal_logs/log.mp4', original_filename='log.mp4',
@@ -350,17 +360,19 @@ def test_validated_backfill_assigns_legacy_scope_for_v1_writer_families(tmp_path
 
             # This path is also used by direct-upload completion and the
             # background worker enqueue, rather than only by route constructors.
-            background_media = create_media(song_id=song.id, filename='worker.mp4', file_type='video')
+            background_media = create_media(song_id=song_id, filename='worker.mp4', file_type='video')
             save_media_and_start(runtime, background_media)
 
-            scoped = (song, media, log, gallery, announcement, suggestion,
+            scoped = (media, log, gallery, announcement, suggestion,
                       root, reply, song_vote, media_vote, media_session, log_session, background_media)
             assert all(item.band_id == legacy_band_id for item in scoped)
             assert db.session.execute(text('SELECT band_id FROM member WHERE id=:id'),
                                       {'id': member_id}).scalar_one() == legacy_band_id
             assert db.session.execute(text('SELECT band_id, visibility FROM rehearsal WHERE id=:id'),
                                       {'id': rehearsal_id}).one() == (legacy_band_id, 'PUBLIC')
-            visible = (song, media, log, gallery, announcement, suggestion, background_media)
+            assert db.session.execute(text('SELECT band_id, visibility FROM song WHERE id=:id'),
+                                      {'id': song_id}).one() == (song_band_id, 'PUBLIC')
+            visible = (media, log, gallery, announcement, suggestion, background_media)
             assert all(item.visibility == 'PUBLIC' for item in visible)
             assert db.session.execute(text('SELECT count(*) FROM rehearsal_songs')).scalar_one() == 1
     finally:
@@ -383,20 +395,18 @@ def test_relationship_validator_rejects_cross_band_targets(tmp_path, label, stat
     runtime = _backfilled_runtime(tmp_path / f"{label.replace('/', '-')}.db")
     try:
         with runtime.app_context():
-            song = Song(title='song', artist='artist')
-            db.session.add(song)
-            db.session.commit()
+            song_id, song_band_id = _insert_legacy_song_core()
             member_id = _insert_legacy_member_core()
-            rehearsal_id = _insert_legacy_rehearsal_core(song.id)
-            media = Media(song_id=song.id, rehearsal_id=rehearsal_id, filename='clip.mp4')
+            rehearsal_id = _insert_legacy_rehearsal_core(song_id)
+            media = Media(song_id=song_id, rehearsal_id=rehearsal_id, filename='clip.mp4')
             log = PersonalLog(member_id=member_id, title='log', filename='log.mp4', file_type='video')
             db.session.add_all((media, log))
             db.session.commit()
-            vote = SongVote(song_id=song.id, voter_hash='song-voter', value=1)
+            vote = SongVote(song_id=song_id, voter_hash='song-voter', value=1)
             media_vote = MediaVote(media_id=media.id, voter_hash='media-voter', value=1)
             session = MultipartUploadSession(
                 r2_upload_id='upload', object_key='media/clip.mp4', original_filename='clip.mp4',
-                content_type='video/mp4', declared_bytes=1, song_id=song.id, rehearsal_id=rehearsal_id,
+                content_type='video/mp4', declared_bytes=1, song_id=song_id, rehearsal_id=rehearsal_id,
             )
             db.session.add_all((vote, media_vote, session))
             db.session.commit()
@@ -410,7 +420,7 @@ def test_relationship_validator_rejects_cross_band_targets(tmp_path, label, stat
             }[label]
             db.session.execute(text(statement), {'other': other.id, 'id': target_id})
             db.session.commit()
-            defects, _ = _validate_relationships(db.session.connection(), song.band_id)
+            defects, _ = _validate_relationships(db.session.connection(), song_band_id)
             assert any(item['relationship'] == expected for item in defects)
     finally:
         _dispose(runtime)
@@ -420,10 +430,8 @@ def test_relationship_validator_rejects_comment_scope_and_cross_band_creator(tmp
     runtime = _backfilled_runtime(tmp_path / 'comment-and-creator.db')
     try:
         with runtime.app_context():
-            song = Song(title='song', artist='artist')
-            db.session.add(song)
-            db.session.commit()
-            media = Media(song_id=song.id, filename='clip.mp4')
+            song_id, song_band_id = _insert_legacy_song_core()
+            media = Media(song_id=song_id, filename='clip.mp4')
             db.session.add(media)
             db.session.commit()
             comment = Comment(media_id=media.id, author='author', content='root')
@@ -447,14 +455,14 @@ def test_relationship_validator_rejects_comment_scope_and_cross_band_creator(tmp
             db.session.execute(text('UPDATE comment SET band_id=:other WHERE id=:id'),
                                {'other': other.id, 'id': comment.id})
             db.session.execute(text('UPDATE song SET created_by_membership_id=:membership WHERE id=:id'),
-                               {'membership': membership_id, 'id': song.id})
+                               {'membership': membership_id, 'id': song_id})
             db.session.commit()
             with pytest.raises(TenantBackfillError, match='crosses tenant scope'):
-                _validate_relationships(db.session.connection(), song.band_id)
+                _validate_relationships(db.session.connection(), song_band_id)
             db.session.execute(text('UPDATE comment SET band_id=:band WHERE id=:id'),
-                               {'band': song.band_id, 'id': comment.id})
+                               {'band': song_band_id, 'id': comment.id})
             db.session.commit()
-            defects, _ = _validate_relationships(db.session.connection(), song.band_id)
+            defects, _ = _validate_relationships(db.session.connection(), song_band_id)
             assert any(item['relationship'] == 'song/creator_membership' for item in defects)
     finally:
         _dispose(runtime)
