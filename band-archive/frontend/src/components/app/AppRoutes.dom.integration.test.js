@@ -267,6 +267,9 @@ test('anonymous public archive follows band, song and playback links without cre
   const previousFetch = globalThis.fetch;
   const calls = [];
   const previousObserver = globalThis.IntersectionObserver;
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  let copied;
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (url) => { copied = url; } } });
   let bottom;
   globalThis.IntersectionObserver = class {
     constructor(callback) { this.callback = callback; }
@@ -275,7 +278,7 @@ test('anonymous public archive follows band, song and playback links without cre
   };
   const band = { slug: 'example-band', name: '공개 밴드' };
   const song = { id: 91, title: '공개 곡 제목', artist: '공개 가수' };
-  const media = { id: 92, file_type: 'video', display_name: '공개 연주 영상', band, song };
+  const media = { id: 92, file_type: 'video', display_name: '공개 연주 영상', band, song, like_count: 3 };
   const audio = { id: 93, file_type: 'audio', display_name: '음원', band,
     song: { ...song, title: '두 번째 자료' }, rehearsal_title: '정기 합주' };
   const audioTitle = `${song.artist} - ${audio.song.title}`;
@@ -310,6 +313,9 @@ test('anonymous public archive follows band, song and playback links without cre
     await view.findByRole('link', { name: audioTitle });
     assert.ok(view.getByText('정기 합주'));
     assert.equal(view.getAllByRole('link', { name: videoTitle }).length, 1);
+    assert.equal(view.getByRole('link', { name: /좋아요 3/ }).getAttribute('href'), '/login?returnTo=%2Farchive%2Fmedia%2F92');
+    fireEvent.click(view.getAllByRole('button', { name: '공유' })[0]);
+    await waitFor(() => assert.equal(copied, 'http://localhost/archive/media/92'));
     assert.equal(calls.filter(({ pathname }) => pathname === '/api/v2/public/archive/media').length, 2);
     fireEvent.click(view.getAllByRole('link', { name: '밴드 페이지로' })[0]);
     await view.findByRole('heading', { name: band.name });
@@ -326,7 +332,47 @@ test('anonymous public archive follows band, song and playback links without cre
     assert.ok(calls.every(({ pathname, headers }) => pathname.startsWith('/api/v2/public/archive/') && !headers.Authorization));
   } finally {
     globalThis.fetch = previousFetch;
+    if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard);
+    else delete navigator.clipboard;
     if (previousObserver === undefined) delete globalThis.IntersectionObserver;
     else globalThis.IntersectionObserver = previousObserver;
   }
+});
+
+test('signed-in archive visitor can like and unlike without a band membership', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const { pathname, searchParams } = new URL(url);
+    calls.push({ pathname, authorization: options.headers?.Authorization, method: options.method });
+    if (pathname === '/api/v2/bands') return response({ bands: [], pending_memberships: [] });
+    if (pathname === '/api/v2/public/archive/media') return response({
+      media: [{ id: 92, file_type: 'audio', like_count: 3, song: { title: '좋아요 대상' } }],
+      pagination: { has_more: false },
+    });
+    if (pathname === '/api/v2/public/archive/likes') {
+      assert.equal(searchParams.get('media_ids'), '92');
+      return response({ liked_media_ids: [] });
+    }
+    if (pathname === '/api/v2/public/archive/media/92/like') {
+      const { liked } = JSON.parse(options.body);
+      return response({ liked, like_count: liked ? 4 : 3 });
+    }
+    return response({}, 404);
+  };
+  try {
+    const view = renderRoutes('/archive', account('archive-listener'));
+    const like = await view.findByRole('button', { name: '좋아요 3' });
+    await waitFor(() => assert.equal(like.disabled, false));
+    assert.equal(like.getAttribute('aria-pressed'), 'false');
+    fireEvent.click(like);
+    const unlike = await view.findByRole('button', { name: '좋아요 취소 4' });
+    assert.equal(unlike.getAttribute('aria-pressed'), 'true');
+    fireEvent.click(unlike);
+    await view.findByRole('button', { name: '좋아요 3' });
+    const archiveCalls = calls.filter(({ pathname }) => pathname.startsWith('/api/v2/public/archive/'));
+    assert.deepEqual(archiveCalls.map(({ authorization }) => authorization), [undefined, 'Bearer test-token', 'Bearer test-token', 'Bearer test-token']);
+    assert.equal(archiveCalls.filter(({ method }) => method === 'PUT').length, 2);
+  } finally { globalThis.fetch = previousFetch; }
 });

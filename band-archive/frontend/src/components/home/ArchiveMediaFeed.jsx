@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 
@@ -59,7 +59,7 @@ function MediaPreview({ item, loadPreview }) {
   </div>;
 }
 
-export function ArchiveMediaCards({ media, loadPreview }) {
+export function ArchiveMediaCards({ media, loadPreview, renderActions }) {
   if (!media.length) return <p>표시할 공개 영상·음원이 없습니다.</p>;
   return <ul className="archive-media-feed">{media.map((item) => {
     const video = item.file_type === 'video';
@@ -79,11 +79,12 @@ export function ArchiveMediaCards({ media, loadPreview }) {
           {item.rehearsal_title && <p>{item.rehearsal_title}</p>}</div>
         <Link className="primary-btn" to={mediaPath}>{video ? '영상 재생' : '음원 듣기'}</Link>
       </div>
+      {renderActions?.(item)}
     </li>;
   })}</ul>;
 }
 
-export function ArchiveMediaFeed({ loadPage, loadPreview }) {
+export function ArchiveMediaFeed({ loadPage, loadPreview, Cards = ArchiveMediaCards }) {
   const [state, setState] = useState(initialFeed);
   const marker = useRef(null);
   const request = useRef(null);
@@ -136,7 +137,7 @@ export function ArchiveMediaFeed({ loadPage, loadPreview }) {
   }, [loadNext, state.error, state.hasMore, state.pending, state.started]);
 
   return <section aria-label="공개 영상·음원">
-    {state.started && <ArchiveMediaCards media={state.media} loadPreview={loadPreview} />}
+    {state.started && createElement(Cards, { media: state.media, loadPreview })}
     <div className="archive-feed-status">
       {state.pending && <p role="status">공개 영상·음원을 불러오는 중입니다…</p>}
       {state.error && <p role="alert">공개 영상·음원을 불러오지 못했습니다.</p>}

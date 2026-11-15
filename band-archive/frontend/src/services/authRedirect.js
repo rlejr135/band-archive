@@ -15,7 +15,7 @@ export const safeReturnPath = (value, origin = globalThis.location?.origin || 'h
   try {
     const url = new URL(value, origin);
     const pathname = url.pathname;
-    if (url.origin !== origin || pathname.includes('//') || !(pathname === '/' || pathname === '/account' || pathname === '/bands' || pathname.startsWith('/bands/'))) {
+    if (url.origin !== origin || pathname.includes('//') || !(pathname === '/' || pathname === '/account' || pathname === '/bands' || pathname.startsWith('/bands/') || /^\/archive\/media\/[1-9][0-9]*$/.test(pathname))) {
       return fallback;
     }
     return pathname;

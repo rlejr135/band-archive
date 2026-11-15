@@ -6,6 +6,7 @@ import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import GlobalShell from '../layout/GlobalShell.jsx';
 import MediaPlayer from '../common/MediaPlayer.jsx';
 import { ArchiveMediaCards, ArchiveMediaFeed } from './ArchiveMediaFeed.jsx';
+import { ArchiveMediaEngagement } from './ArchiveMediaEngagement.jsx';
 import './PublicArchive.css';
 
 const api = createAuthenticatedApiClient({ fetchImpl: (...args) => fetch(...args) });
@@ -112,9 +113,15 @@ async function requestArchiveVideoPreview(id, signal) {
   return result.media.playback?.video_url ?? result.media.playback?.url;
 }
 
+function EngagedArchiveMediaCards({ media, loadPreview }) {
+  return <ArchiveMediaEngagement media={media}>
+    {(renderActions) => <ArchiveMediaCards media={media} loadPreview={loadPreview} renderActions={renderActions} />}
+  </ArchiveMediaEngagement>;
+}
+
 export function PublicArchivePage() {
   return <GlobalShell><div className="public-archive"><h1>공개 아카이브</h1>
-    <ArchiveMediaFeed loadPage={requestArchiveMediaPage} loadPreview={requestArchiveVideoPreview} />
+    <ArchiveMediaFeed loadPage={requestArchiveMediaPage} loadPreview={requestArchiveVideoPreview} Cards={EngagedArchiveMediaCards} />
   </div></GlobalShell>;
 }
 
@@ -132,7 +139,7 @@ export function PublicArchiveSongPage() {
     <Link className="bands-return-link" to={archiveBand(slug)}><span aria-hidden="true">←</span> 밴드 공개 페이지</Link>
     <ArchivePages key={`${slug}:${id}`} path={`/bands/${encodeURIComponent(slug)}/songs/${encodeURIComponent(id)}`} render={({ band, song, media }) => <>
       <header><p>{band.name}</p><h1>{song.title}</h1>{song.artist && <p>{song.artist}</p>}</header>
-      <h2>공개 영상·음원</h2><ArchiveMediaCards media={media} loadPreview={requestArchiveVideoPreview} />
+      <h2>공개 영상·음원</h2><EngagedArchiveMediaCards media={media} loadPreview={requestArchiveVideoPreview} />
     </>} />
   </div></GlobalShell>;
 }
@@ -151,6 +158,7 @@ function ArchivePlayback({ id }) {
     <Link className="bands-return-link" to={archiveSong(band.slug, song.id)}><span aria-hidden="true">←</span> {song.title}</Link>
     <header><p>{band.name}</p><h1>{media.display_name || song.title}</h1>{song.artist && <p>{song.artist}</p>}</header>
     <MediaPlayer file={workspaceMediaFile(media)} playbackIdentity={`public-archive:${id}`} preload="none" sharedModeButtons onPlaybackError={refreshOnce} onRefresh={read.reload} />
+    <ArchiveMediaEngagement media={[media]}>{(renderActions) => renderActions(media)}</ArchiveMediaEngagement>
     <button type="button" className="primary-btn" onClick={read.reload}>재생 주소 새로고침</button>
   </>;
 }
