@@ -215,10 +215,15 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
             ? mergeDashboardPage(previous.month === targetMonth ? previous.dashboard : null, dashboard, { append: true })
             : dashboard,
       }));
-    } catch {
+    } catch (error) {
       if (controller.signal.aborted || token !== epoch.current) return;
-      if (mode === 'append') setState((previous) => ({ ...previous, pageLoading: false, pageError: SECTION_ERROR }));
-      else setState({ month: targetMonth, loading: false, error: DASHBOARD_ERROR, pageLoading: false, pageError: '', dashboard: null });
+      if ([401, 403, 404].includes(error?.status)) {
+        setState({ month: targetMonth, loading: false, error: DASHBOARD_ERROR, pageLoading: false, pageError: '', dashboard: null });
+      } else if (mode === 'append') {
+        setState((previous) => ({ ...previous, pageLoading: false, pageError: SECTION_ERROR }));
+      } else {
+        setState((previous) => ({ ...previous, month: targetMonth, loading: false, error: DASHBOARD_ERROR }));
+      }
     } finally {
       controllers.current.delete(controller);
     }
@@ -241,8 +246,10 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
     };
   }, [month, requestPage, workspaceKey]);
 
+  const dashboard = state.dashboard;
+  const imageMonth = dashboard?.month || month;
   const handleImageError = (kind, image) => {
-    const identity = imageKey(workspaceKey, month, kind, image?.id ?? 'unknown');
+    const identity = imageKey(workspaceKey, imageMonth, kind, image?.id ?? 'unknown');
     setFailedUrls((previous) => ({ ...previous, [identity]: image?.url || '' }));
     if (refreshedImages.current.has(identity)) return;
     refreshedImages.current.add(identity);
@@ -250,12 +257,12 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
     const controller = new AbortController();
     imageRefreshController.current?.abort();
     imageRefreshController.current = controller;
-    api.requestJson(bandWorkspacePaths.dashboard(band.id, { month, limit: DASHBOARD_PAGE_SIZE, offset: 0 }), requestOptions(controller.signal))
+    api.requestJson(bandWorkspacePaths.dashboard(band.id, { month: imageMonth, limit: DASHBOARD_PAGE_SIZE, offset: 0 }), requestOptions(controller.signal))
       .then((response) => {
         const incoming = response?.dashboard;
         if (!controller.signal.aborted && token === imageRefreshEpoch.current
-          && Number(incoming?.band_id) === Number(band.id) && incoming?.month === month) {
-          setState((previous) => previous.month === month
+          && Number(incoming?.band_id) === Number(band.id) && incoming?.month === imageMonth) {
+          setState((previous) => previous.dashboard?.month === imageMonth
             ? { ...previous, dashboard: mergeDashboardImages(previous.dashboard, incoming) }
             : previous);
         }
@@ -266,9 +273,14 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
       });
   };
 
-  const dashboard = state.month === month ? state.dashboard : null;
-  const monthItems = Array.isArray(dashboard?.month_rehearsals?.items) ? dashboard.month_rehearsals.items : [];
-  const pagination = dashboard?.month_rehearsals?.pagination || {};
+  const monthPending = state.loading || state.month !== month;
+  const monthPage = !monthPending && !state.error && dashboard?.month === month ? dashboard.month_rehearsals : null;
+  const monthItems = Array.isArray(monthPage?.items) ? monthPage.items : [];
+  const pagination = monthPage?.pagination || {};
+  const loadMonth = () => {
+    setState((previous) => ({ ...previous, month, loading: true, error: '', pageLoading: false, pageError: '' }));
+    requestPage({ targetMonth: month, offset: 0 });
+  };
   const stats = dashboard?.stats || {};
   const statusCounts = stats.status_counts || {};
   const selectedItems = rehearsalsForDate(monthItems, selectedDate);
@@ -278,7 +290,8 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
   const changeMonth = ({ activeStartDate }) => {
     const nextMonth = isoMonthFromDate(activeStartDate);
     if (!nextMonth || nextMonth === month) return;
-    setState({ month: nextMonth, loading: true, error: '', pageLoading: false, pageError: '', dashboard: null });
+    epoch.current += 1;
+    setState((previous) => ({ ...previous, month: nextMonth, loading: true, error: '', pageLoading: false, pageError: '' }));
     setMonth(nextMonth);
     setSelectedDate((previous) => previous.slice(0, 7) === nextMonth ? previous : `${nextMonth}-01`);
   };
@@ -296,11 +309,11 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
   const loadedCount = monthItems.length;
   const totalMonthItems = Number.isFinite(Number(pagination.total)) ? Number(pagination.total) : loadedCount;
 
-  if (state.loading || (!dashboard && state.month !== month)) {
+  if (!dashboard && monthPending) {
     return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><p aria-live="polite">대시보드를 불러오는 중입니다…</p></section>;
   }
   if (state.error && !dashboard) {
-    return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><div className="activity-error" role="alert"><p>{state.error}</p><button type="button" className="secondary-btn activity-action" onClick={() => { setState({ month, loading: true, error: '', pageLoading: false, pageError: '', dashboard: null }); requestPage({ targetMonth: month, offset: 0 }); }}>다시 시도</button></div></section>;
+    return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title"><h1 id="band-dashboard-title">{band.name}</h1><div className="activity-error" role="alert"><p>{state.error}</p><button type="button" className="secondary-btn activity-action" onClick={loadMonth}>다시 시도</button></div></section>;
   }
 
   return <section className="workspace-page band-activity-dashboard" aria-labelledby="band-dashboard-title">
@@ -310,7 +323,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
 
     <section className="activity-card activity-featured" aria-labelledby="activity-featured-title">
       <div className="activity-card-heading"><h2 id="activity-featured-title">대표 사진</h2><Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>갤러리</Link></div>
-      {dashboard?.featured_gallery ? <DashboardImage image={dashboard.featured_gallery} kind="featured" workspaceKey={workspaceKey} month={month} failedUrls={failedUrls} onError={handleImageError} /> : <div className="activity-image-placeholder activity-image-placeholder-featured" role="img" aria-label="등록된 대표 사진이 없습니다">대표 사진이 없습니다</div>}
+      {dashboard?.featured_gallery ? <DashboardImage image={dashboard.featured_gallery} kind="featured" workspaceKey={workspaceKey} month={imageMonth} failedUrls={failedUrls} onError={handleImageError} /> : <div className="activity-image-placeholder activity-image-placeholder-featured" role="img" aria-label="등록된 대표 사진이 없습니다">대표 사진이 없습니다</div>}
     </section>
 
     <div className="activity-stats" aria-label="밴드 통계">
@@ -336,7 +349,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
       </section>
 
       <section className="activity-card activity-calendar-card" aria-labelledby="activity-calendar-title">
-        <div className="activity-card-heading"><h2 id="activity-calendar-title">월별 합주</h2><span className="activity-muted">{loadedCount} / {totalMonthItems}건 표시</span></div>
+        <div className="activity-card-heading"><h2 id="activity-calendar-title">월별 합주</h2>{monthPage && <span className="activity-muted">{loadedCount} / {totalMonthItems}건 표시</span>}</div>
         <div className="activity-calendar-layout">
           <Calendar
             activeStartDate={activeStartDate}
@@ -351,7 +364,9 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
           <div className="activity-selected-day" aria-live="polite">
             <h3>{displayDate(selectedDate)}</h3>
             {pagination.has_more && <p className="activity-incomplete-notice">이 달의 일정 일부만 표시 중입니다. 선택한 날짜에 더 많은 합주가 있는지 확인하려면 일정을 더 불러와 주세요.</p>}
-            {selectedItems.length ? <div className="activity-rehearsal-list">{selectedItems.map((rehearsal) => (
+            {monthPending ? <p className="activity-muted" role="status">이 달 합주를 불러오는 중입니다…</p>
+              : state.error ? <div className="activity-inline-error" role="alert"><span>{SECTION_ERROR}</span><button type="button" className="secondary-btn activity-action" onClick={loadMonth}>다시 시도</button></div>
+              : selectedItems.length ? <div className="activity-rehearsal-list">{selectedItems.map((rehearsal) => (
               <RehearsalSummary key={rehearsal.id} band={band} rehearsal={rehearsal}>
                 {canUpload && rehearsalHref(band, rehearsal) && <DashboardRehearsalUpload key={selectedDate} band={band} rehearsal={rehearsal} workspaceKey={workspaceKey} />}
               </RehearsalSummary>
@@ -364,7 +379,7 @@ const BandActivityDashboard = ({ band, api, workspaceKey }) => {
 
       <section className="activity-card activity-gallery" aria-labelledby="activity-gallery-title">
         <div className="activity-card-heading"><h2 id="activity-gallery-title">최근 갤러리</h2><Link className="secondary-btn activity-action" to={`/bands/${encodeURIComponent(band.slug)}/gallery`}>사진 더 보기</Link></div>
-        {recentGallery.length ? <div className="activity-gallery-grid">{recentGallery.map((image) => <DashboardImage key={image.id} image={image} kind="recent" workspaceKey={workspaceKey} month={month} failedUrls={failedUrls} onError={handleImageError} />)}</div> : <p className="activity-muted">표시할 사진이 없습니다.</p>}
+        {recentGallery.length ? <div className="activity-gallery-grid">{recentGallery.map((image) => <DashboardImage key={image.id} image={image} kind="recent" workspaceKey={workspaceKey} month={imageMonth} failedUrls={failedUrls} onError={handleImageError} />)}</div> : <p className="activity-muted">표시할 사진이 없습니다.</p>}
       </section>
     </div>
   </section>;

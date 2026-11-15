@@ -620,3 +620,68 @@ test('truncated announcement expands through the scoped read endpoint only when 
     view.unmount();
   } finally { globalThis.fetch = previousFetch; }
 });
+
+test('month navigation keeps the dashboard and focused calendar mounted through loading, stale replies, and retry', async () => {
+  await load();
+  const previousFetch = globalThis.fetch;
+  const initial = monthForTest();
+  const shiftedMonth = (offset) => {
+    const [year, month] = initial.split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1 + offset, 1)).toISOString().slice(0, 7);
+  };
+  const first = deferred();
+  const second = deferred();
+  const reads = [];
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url), 'http://localhost');
+    if (path.pathname.endsWith('/by-slug/calendar-band')) return response({ band: { id: 401, slug: 'calendar-band', name: '달력 밴드', membership: null } });
+    if (path.pathname.endsWith('/bands/401/dashboard')) {
+      const month = path.searchParams.get('month');
+      reads.push(month);
+      if (month === shiftedMonth(1)) return first.promise;
+      if (month === shiftedMonth(2) && reads.filter((item) => item === month).length === 1) return second.promise;
+      return response({ dashboard: dashboardData(month, {
+        announcement: { id: 901, content: '요약 공지', content_truncated: true },
+        month_rehearsals: { items: [{ id: 601, title: '선택한 달 합주', date: month + '-01' }], pagination: { total: 1, has_more: false } },
+      }) });
+    }
+    if (path.pathname.endsWith('/bands/401/announcement')) return response({ announcement: { content: '펼친 공지' } });
+    return response({});
+  };
+  try {
+    const user = userEvent.setup({ document: dom.window.document });
+    const view = render(createElement(ReadOnlyApp, { entry: '/bands/calendar-band' }));
+    await user.click(await view.findByRole('button', { name: '전체 공지 보기' }));
+    const announcement = await view.findByText('펼친 공지');
+    const photo = view.getByAltText('대표 갤러리 사진');
+    const next = view.container.querySelector('.react-calendar__navigation__next-button');
+    assert.ok(next);
+    await user.click(next);
+    await view.findByText('이 달 합주를 불러오는 중입니다…');
+    assert.equal(view.getByText('펼친 공지'), announcement);
+    assert.equal(view.getByAltText('대표 갤러리 사진'), photo);
+    assert.equal(dom.window.document.activeElement, next);
+    assert.equal(view.queryByText('대시보드를 불러오는 중입니다…'), null);
+    await waitFor(() => assert.deepEqual(reads, [initial, shiftedMonth(1)]));
+
+    await user.click(next);
+    await waitFor(() => assert.deepEqual(reads, [initial, shiftedMonth(1), shiftedMonth(2)]));
+    await act(async () => second.resolve(response({}, 500)));
+    assert.ok(view.getByText('이 항목을 불러오지 못했습니다. 다시 시도해 주세요.'));
+    await act(async () => first.resolve(response({ dashboard: dashboardData(shiftedMonth(1), {
+      announcement: { content: '이전 달 공지' },
+    }) })));
+    assert.equal(view.queryByText('이전 달 공지'), null);
+    assert.equal(view.getByText('펼친 공지'), announcement);
+
+    await user.click(view.getByRole('button', { name: '다시 시도' }));
+    await view.findByRole('link', { name: '선택한 달 합주' });
+    assert.deepEqual(reads, [initial, shiftedMonth(1), shiftedMonth(2), shiftedMonth(2)]);
+    assert.equal(view.getByText('펼친 공지'), announcement);
+    assert.equal(view.container.querySelector('.react-calendar__navigation__next-button'), next);
+  } finally {
+    first.resolve(response({}));
+    second.resolve(response({}));
+    globalThis.fetch = previousFetch;
+  }
+});
