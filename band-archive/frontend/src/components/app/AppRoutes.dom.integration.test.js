@@ -266,15 +266,25 @@ test('anonymous public archive follows band, song and playback links without cre
   await load();
   const previousFetch = globalThis.fetch;
   const calls = [];
+  const previousObserver = globalThis.IntersectionObserver;
+  let bottom;
+  globalThis.IntersectionObserver = class {
+    constructor(callback) { this.callback = callback; }
+    observe(node) { if (node.closest('.archive-feed-status')) bottom = this.callback; }
+    disconnect() {}
+  };
   const band = { slug: 'example-band', name: '공개 밴드' };
   const song = { id: 91, title: '공개 곡 제목', artist: '공개 가수' };
   const media = { id: 92, file_type: 'video', display_name: '공개 연주 영상', band, song };
+  const audio = { id: 93, file_type: 'audio', display_name: '두 번째 자료', band, song };
   const pagination = { has_more: false };
   globalThis.fetch = async (url, options) => {
-    const { pathname } = new URL(url);
+    const { pathname, searchParams } = new URL(url);
     calls.push({ pathname, headers: options.headers });
     switch (pathname) {
-      case '/api/v2/public/archive/media': return response({ media: [media], pagination });
+      case '/api/v2/public/archive/media': return searchParams.get('offset') === '0'
+        ? response({ media: [media], pagination: { has_more: true } })
+        : response({ media: [media, audio], pagination });
       case '/api/v2/public/archive/songs': return response({ songs: [{ ...song, band }], pagination });
       case '/api/v2/public/archive/bands/example-band': return response({ band, songs: [song], pagination });
       case '/api/v2/public/archive/bands/example-band/songs/91': return response({ band, song, media: [media], pagination });
@@ -288,7 +298,16 @@ test('anonymous public archive follows band, song and playback links without cre
     assert.equal(calls.length, 0);
     fireEvent.click(openArchive);
     await view.findByRole('heading', { name: '공개 아카이브', level: 1 });
-    fireEvent.click(await view.findByRole('link', { name: '밴드 공개 페이지' }));
+    assert.equal(view.queryByRole('heading', { name: '공개 곡' }), null);
+    assert.ok(calls.every(({ pathname }) => pathname !== '/api/v2/public/archive/songs'));
+    await view.findByRole('button', { name: '더 보기' });
+    await waitFor(() => assert.equal(typeof bottom, 'function'));
+    assert.equal(view.queryByRole('link', { name: audio.display_name }), null);
+    bottom([{ isIntersecting: true }]);
+    await view.findByRole('link', { name: audio.display_name });
+    assert.equal(view.getAllByRole('link', { name: media.display_name }).length, 1);
+    assert.equal(calls.filter(({ pathname }) => pathname === '/api/v2/public/archive/media').length, 2);
+    fireEvent.click(view.getAllByRole('link', { name: '밴드 공개 페이지' })[0]);
     await view.findByRole('heading', { name: band.name });
     fireEvent.click(await view.findByRole('link', { name: song.title }));
     await view.findByRole('heading', { name: song.title });
@@ -296,8 +315,12 @@ test('anonymous public archive follows band, song and playback links without cre
     await view.findByRole('heading', { name: media.display_name });
     assert.equal(view.queryByRole('heading', { name: '로그인' }), null);
     assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://files.example.test/play.mp4');
+    assert.equal(view.getByRole('button', { name: '영상' }).classList.contains('primary-btn'), true);
+    assert.equal(view.getByRole('button', { name: '음원만 듣기' }).classList.contains('bands-return-link'), true);
     assert.ok(calls.every(({ pathname, headers }) => pathname.startsWith('/api/v2/public/archive/') && !headers.Authorization));
   } finally {
     globalThis.fetch = previousFetch;
+    if (previousObserver === undefined) delete globalThis.IntersectionObserver;
+    else globalThis.IntersectionObserver = previousObserver;
   }
 });

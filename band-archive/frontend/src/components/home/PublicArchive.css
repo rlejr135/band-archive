@@ -5,7 +5,24 @@
 .public-archive-heading h2 { margin-block: 0; flex: 1; }
 .public-archive-list { padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: .75rem; }
 .public-archive-list li { border: 1px solid var(--border-color, #454752); border-radius: .75rem; padding: 1rem; display: grid; gap: .45rem; overflow-wrap: anywhere; }
-.public-archive-type { font-size: .875rem; }
+.archive-media-feed { display: grid; gap: 1.25rem; max-width: 780px; margin: 0 auto; padding: 0; list-style: none; }
+.archive-media-card { display: grid; min-width: 0; gap: .8rem; padding: clamp(.75rem, 3vw, 1.25rem); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); }
+.archive-media-card-heading, .archive-media-card-details { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .65rem; }
+.archive-media-card-details > div { min-width: 0; overflow-wrap: anywhere; }
+.archive-media-card-details p { margin: .2rem 0 0; color: var(--color-text-muted); font-size: .87rem; }
+.archive-media-kind { color: var(--color-text-muted); font-size: .82rem; font-weight: 650; }
+.archive-band-link { margin-left: auto; min-height: 36px; padding: 5px 9px; font-size: .75rem; }
+.archive-card-preview-link { display: block; border-radius: var(--radius-default); text-decoration: none; }
+.archive-card-preview { position: relative; display: grid; place-items: center; overflow: hidden; aspect-ratio: 16 / 7; border-radius: inherit; background: radial-gradient(ellipse at 70% 20%, color-mix(in srgb, var(--color-accent) 25%, transparent), transparent 65%), var(--color-background); }
+.archive-card-preview--audio { background: repeating-linear-gradient(110deg, transparent 0 18px, color-mix(in srgb, var(--color-accent) 5%, transparent) 19px 20px), radial-gradient(ellipse at 50% 55%, color-mix(in srgb, var(--color-accent) 24%, transparent), transparent 66%), var(--color-background); }
+.archive-card-preview img, .archive-card-frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.archive-card-frame { visibility: hidden; }
+.archive-card-frame.is-ready { visibility: visible; }
+.archive-card-preview-art { color: var(--color-accent); font-size: clamp(2rem, 8vw, 3.5rem); line-height: 1; }
+.archive-media-title { color: var(--color-text); font-size: 1.12rem; font-weight: 700; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.archive-feed-status { display: grid; justify-items: center; gap: .5rem; margin: 1.25rem 0; }
+.archive-playback-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+@media (max-width: 480px) { .archive-card-preview { aspect-ratio: 16 / 9; } }
 .public-archive-logo { width: 3rem; height: 3rem; object-fit: contain; }
 .public-archive-image { display: block; width: 100%; max-height: 24rem; object-fit: contain; border-radius: .75rem; }
 .workspace-media-visibility button[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: -2px; }

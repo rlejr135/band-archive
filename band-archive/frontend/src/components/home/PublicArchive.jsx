@@ -5,13 +5,13 @@ import { workspaceMediaFile } from '../../services/playbackMedia.js';
 import { safeExternalHttpUrl } from '../../services/safeExternalUrl.js';
 import GlobalShell from '../layout/GlobalShell.jsx';
 import MediaPlayer from '../common/MediaPlayer.jsx';
+import { ArchiveMediaCards, ArchiveMediaFeed } from './ArchiveMediaFeed.jsx';
 import './PublicArchive.css';
 
 const api = createAuthenticatedApiClient({ fetchImpl: (...args) => fetch(...args) });
 const base = '/api/v2/public/archive';
 const archiveBand = (slug) => `/archive/bands/${encodeURIComponent(slug)}`;
 const archiveSong = (slug, id) => `${archiveBand(slug)}/songs/${id}`;
-const archiveMedia = (id) => `/archive/media/${id}`;
 const PAGE_SIZE = 20;
 const empty = { data: null, pending: true, error: false };
 
@@ -42,16 +42,6 @@ function ArchiveReadState({ read }) {
   if (read.error === 'missing') return <p role="status">공개된 자료를 찾을 수 없습니다.</p>;
   if (!read.error) return null;
   return <div><p role="alert">공개 자료를 불러오지 못했습니다.</p><button type="button" className="primary-btn" onClick={read.reload}>다시 시도</button></div>;
-}
-
-function MediaList({ media }) {
-  if (!media?.length) return <p>표시할 공개 영상·음원이 없습니다.</p>;
-  return <ul className="public-archive-list">{media.map((item) => <li key={item.id}>
-    <span className="public-archive-type">{item.file_type === 'video' ? '영상' : '음원'}</span>
-    <Link to={archiveMedia(item.id)}><strong>{item.display_name || item.song?.title || '공개 미디어'}</strong></Link>
-    <span>{[item.song?.title, item.song?.artist, item.band?.name].filter(Boolean).join(' · ')}</span>
-    {item.band?.slug && <Link className="bands-return-link" to={archiveBand(item.band.slug)}>밴드 공개 페이지</Link>}
-  </li>)}</ul>;
 }
 
 function SongList({ songs, band }) {
@@ -100,10 +90,22 @@ function BandHeader({ band }) {
   </header>;
 }
 
+const requestArchiveMediaPage = (offset, limit, signal) => api.requestJson(
+  `${base}/media?limit=${limit}&offset=${offset}`,
+  { authenticated: false, signal, cache: 'no-store' },
+);
+
+async function requestArchiveVideoPreview(id, signal) {
+  const result = await api.requestJson(`${base}/media/${encodeURIComponent(id)}`, {
+    authenticated: false, signal, cache: 'no-store',
+  });
+  if (result?.media?.id !== id || result.media.file_type !== 'video') return null;
+  return result.media.playback?.video_url ?? result.media.playback?.url;
+}
+
 export function PublicArchivePage() {
   return <GlobalShell><div className="public-archive"><h1>공개 아카이브</h1>
-    <section><h2>공개 영상·음원</h2><ArchivePages path="/media" render={({ media }) => <MediaList media={media} />} /></section>
-    <section><h2>공개 곡</h2><ArchivePages path="/songs" render={({ songs }) => <SongList songs={songs} />} /></section>
+    <ArchiveMediaFeed loadPage={requestArchiveMediaPage} loadPreview={requestArchiveVideoPreview} />
   </div></GlobalShell>;
 }
 
@@ -124,7 +126,7 @@ export function PublicArchiveSongPage() {
     <Link className="bands-return-link" to={archiveBand(slug)}><span aria-hidden="true">←</span> 밴드 공개 페이지</Link>
     <ArchivePages key={`${slug}:${id}`} path={`/bands/${encodeURIComponent(slug)}/songs/${encodeURIComponent(id)}`} render={({ band, song, media }) => <>
       <header><p>{band.name}</p><h1>{song.title}</h1>{song.artist && <p>{song.artist}</p>}</header>
-      <h2>공개 영상·음원</h2><MediaList media={media} />
+      <h2>공개 영상·음원</h2><ArchiveMediaCards media={media} loadPreview={requestArchiveVideoPreview} />
     </>} />
   </div></GlobalShell>;
 }
@@ -142,7 +144,7 @@ function ArchivePlayback({ id }) {
   return <>
     <Link className="bands-return-link" to={archiveSong(band.slug, song.id)}><span aria-hidden="true">←</span> {song.title}</Link>
     <header><p>{band.name}</p><h1>{media.display_name || song.title}</h1>{song.artist && <p>{song.artist}</p>}</header>
-    <MediaPlayer file={workspaceMediaFile(media)} playbackIdentity={`public-archive:${id}`} preload="none" onPlaybackError={refreshOnce} onRefresh={read.reload} />
+    <MediaPlayer file={workspaceMediaFile(media)} playbackIdentity={`public-archive:${id}`} preload="none" sharedModeButtons onPlaybackError={refreshOnce} onRefresh={read.reload} />
     <button type="button" className="primary-btn" onClick={read.reload}>재생 주소 새로고침</button>
   </>;
 }
