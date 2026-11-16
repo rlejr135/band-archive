@@ -108,6 +108,12 @@ test('only recognized YouTube links activate an isolated inline player on demand
     const play = await view.findByRole('button', { name: '카드에서 YouTube 재생' });
     assert.equal(view.getAllByRole('button', { name: '카드에서 YouTube 재생' }).length, 1);
     assert.equal(view.getAllByRole('link', { name: '참고 링크 열기' }).length, 2);
+    const thumbnail = play.querySelector('img');
+    assert.equal(thumbnail?.getAttribute('src'), 'https://i.ytimg.com/vi/YE7VzlLtp-4/hqdefault.jpg');
+    assert.equal(thumbnail.getAttribute('referrerpolicy'), 'no-referrer');
+    assert.equal(view.container.querySelectorAll('.suggestion-video-thumbnail').length, 1);
+    fireEvent.error(thumbnail);
+    assert.equal(play.querySelector('img'), null);
     assert.equal(play.getAttribute('aria-expanded'), 'false');
     assert.equal(view.container.querySelector('iframe') === null, true);
     await user.click(play);
