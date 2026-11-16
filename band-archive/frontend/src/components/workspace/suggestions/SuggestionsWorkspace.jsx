@@ -24,7 +24,7 @@ export const SuggestionsWorkspace = () => {
   const member = isActiveBandMembership(band.membership);
   const suggestionCards = suggestions.entries.map((suggestion) => <SuggestionCard key={suggestion.id} suggestion={suggestion} member={member} onChanged={suggestions.refresh} />);
   const [creating, setCreating] = useState(false);
-  return <section className="workspace-page workspace-suggestions-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>{member ? '추천곡을 등록하고 투표해 보세요.' : '공개된 추천곡을 확인할 수 있습니다.'}</p></div>{member && <button type="button" className="primary-btn workspace-suggestions-add" onClick={() => setCreating(true)}>추천곡 추가</button>}</div>
+  return <section className="workspace-page workspace-suggestions-page" aria-labelledby="workspace-suggestions-title"><div className="workspace-page-heading"><div><h1 id="workspace-suggestions-title">추천곡</h1><p>{member ? '추천곡을 등록하고 좋아요를 눌러 보세요.' : '공개된 추천곡을 확인할 수 있습니다.'}</p></div>{member && <button type="button" className="primary-btn workspace-suggestions-add" onClick={() => setCreating(true)}>추천곡 추가</button>}</div>
     {!member && <WriteGuidance />}{creating && <SuggestionForm key={workspaceKey} onDone={() => { setCreating(false); suggestions.refresh(); }} onCancel={() => setCreating(false)} />}
     {suggestions.loading && suggestions.entries.length === 0 ? <p aria-live="polite">추천곡을 불러오는 중입니다…</p> : suggestions.error && suggestions.entries.length === 0 ? <ErrorState message={genericError} retry={suggestions.refresh} /> : suggestions.entries.length === 0 ? <div className="workspace-empty"><p>표시할 추천곡이 없습니다.</p>{member && <button type="button" className="secondary-btn" onClick={() => setCreating(true)}>첫 추천곡 추가</button>}</div> : <div className="workspace-cards workspace-cards--suggestions">{suggestionCards}</div>}
     {suggestions.pagination?.has_more && <button className="secondary-btn" disabled={suggestions.loading} onClick={suggestions.loadMore}>{suggestions.loading ? '추천곡을 불러오는 중…' : '추천곡 더 불러오기'}</button>}
@@ -44,7 +44,8 @@ const SuggestionCard = ({ suggestion, member, onChanged }) => {
   const { band, api } = useWorkspace(); const [editing, setEditing] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const voteFlight = useRef(false); const writeFlight = useRef(false);
   const safeLink = safeExternalHttpUrl(suggestion.link);
   const videoId = youtubeVideoId(safeLink);
-  const vote = async (clicked) => { if (!member || voteFlight.current) return; voteFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionVote(band.id, suggestion.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(votePayload(suggestion.viewer_vote === clicked ? 0 : clicked)) }); onChanged(); } catch { setError('투표를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'); } finally { voteFlight.current = false; setBusy(false); } };
+  const liked = suggestion.viewer_vote === 1;
+  const toggleLike = async () => { if (!member || voteFlight.current) return; voteFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionVote(band.id, suggestion.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(votePayload(liked ? 0 : 1)) }); await onChanged(); } catch { setError('좋아요를 반영하지 못했습니다. 잠시 후 다시 시도해 주세요.'); } finally { voteFlight.current = false; setBusy(false); } };
   const proceed = async () => { if (!suggestion.can_proceed || writeFlight.current || !window.confirm('이 추천곡을 곡 목록으로 진행할까요? 이 작업은 추천글을 목록에서 제거합니다.')) return; writeFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionProceed(band.id, suggestion.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ visibility: suggestion.visibility }) }); onChanged(); } catch { setError('추천곡 진행을 완료하지 못했습니다.'); } finally { writeFlight.current = false; setBusy(false); } };
   if (editing) return <SuggestionForm item={suggestion} onDone={() => { setEditing(false); onChanged(); }} onCancel={() => setEditing(false)} />;
   return <article className="workspace-card suggestion-card">
@@ -66,14 +67,13 @@ const SuggestionCard = ({ suggestion, member, onChanged }) => {
     {suggestion.memo && <p className="suggestion-card-memo">{suggestion.memo}</p>}
     <div className="suggestion-card-meta"><span aria-live="polite">점수 {suggestion.vote_score ?? 0}</span></div>
     {videoId && <SuggestionVideo key={videoId} videoId={videoId} title={suggestion.title} />}
-    {safeLink && <a className="secondary-btn workspace-button-link suggestion-card-link" href={safeLink} target="_blank" rel="noopener noreferrer">{videoId ? 'YouTube에서 열기' : '참고 링크 열기'}</a>}
+    {safeLink && <a className={'secondary-btn workspace-button-link suggestion-card-link' + (videoId ? ' suggestion-youtube-link' : '')} href={safeLink} target="_blank" rel="noopener noreferrer">{videoId ? 'YouTube에서 열기' : '참고 링크 열기'}</a>}
     {member ? <div className="suggestion-actions">
-      <div className="suggestion-vote-actions" role="group" aria-label="추천곡 투표">
-        <button type="button" className="secondary-btn suggestion-vote-button suggestion-vote-button--positive" aria-pressed={suggestion.viewer_vote === 1} disabled={busy} onClick={() => vote(1)}>추천</button>
-        <button type="button" className="secondary-btn suggestion-vote-button suggestion-vote-button--negative" aria-pressed={suggestion.viewer_vote === -1} disabled={busy} onClick={() => vote(-1)}>아쉬워요</button>
+      <div role="group" aria-label="추천곡 투표">
+        <button type="button" className="secondary-btn suggestion-vote-button" aria-pressed={liked} disabled={busy} onClick={toggleLike}>좋아요</button>
       </div>
       {suggestion.can_proceed && <button type="button" className="primary-btn suggestion-proceed" disabled={busy} onClick={proceed}>곡으로 진행</button>}
-    </div> : <p className="workspace-muted">로그인 후 밴드에 가입하면 투표와 추천이 가능합니다.</p>}
+    </div> : <p className="workspace-muted">로그인 후 밴드에 가입하면 추천곡을 등록하거나 좋아요를 누를 수 있습니다.</p>}
     {error && <p className="workspace-error" role="alert">{error}</p>}
   </article>;
 };

@@ -16,7 +16,7 @@ test('suggestions feature is independent of the workspace implementation and kee
   assert.match(suggestions, /suggestion\.can_edit/);
   assert.match(suggestions, /suggestion\.can_delete/);
   assert.match(suggestions, /suggestion\.can_proceed/);
-  assert.match(suggestions, /votePayload\(suggestion\.viewer_vote === clicked \? 0 : clicked\)/);
+  assert.match(suggestions, /votePayload\(liked \? 0 : 1\)/);
   assert.match(suggestions, /suggestionProceed\(band\.id, suggestion\.id\)/);
   assert.match(workspace, /import \{ SuggestionsWorkspace \} from '\.\/suggestions\/SuggestionsWorkspace\.jsx'/);
   assert.match(workspace, /export \{ SuggestionsWorkspace \}/);

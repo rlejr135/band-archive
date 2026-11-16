@@ -43,7 +43,7 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
     await user.type(view.getByLabelText('제목'), '새 곡'); await user.type(view.getByLabelText('아티스트'), '연주자'); await user.type(view.getByLabelText('참고 링크'), 'https://example.test/song'); await user.type(view.getByLabelText('메모'), '연습용');
     await user.click(view.getByRole('button', { name: '저장' })); await view.findByRole('heading', { name: '새 곡' });
     const voteGroup = view.getByRole('group', { name: '추천곡 투표' }); const manageGroup = view.getByRole('group', { name: '추천곡 관리' });
-    assert.equal(voteGroup.querySelectorAll('button.secondary-btn').length, 2);
+    assert.equal(voteGroup.querySelectorAll('button.secondary-btn').length, 1);
     const edit = view.getByRole('button', { name: '수정' });
     const remove = view.getByRole('button', { name: '삭제' });
     assert.equal(manageGroup.closest('.suggestion-card-heading') !== null, true);
@@ -58,30 +58,36 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
 });
 
-test('suggestion voting refetches authoritative viewer state, blocks double clicks, and only server-authorized users proceed', async () => {
-  await load(); const originalFetch = globalThis.fetch; const originalConfirm = window.confirm; const firstVote = deferred(); const writes = []; let reads = 0; let manager = true; let canProceed = true;
+test('suggestion likes toggle authoritative viewer state, block double clicks, and preserve proceed permissions', async () => {
+  await load(); const originalFetch = globalThis.fetch; const originalConfirm = window.confirm; const firstVote = deferred(); const firstRefresh = deferred(); const writes = []; let viewerVote = -1; let reads = 0; let manager = true; let canProceed = true;
   window.confirm = () => true;
   globalThis.fetch = async (url, options = {}) => {
     const method = options.method || 'GET';
     if (url.includes('/by-slug/team')) return response({ band: { id: 42, slug: 'team', name: '팀', default_visibility: 'MEMBERS', membership: { id: 4, role: manager ? 'owner' : 'member', status: 'active' } } });
-    if (url.includes('/suggestions?')) { reads += 1; return response({ suggestions: [{ id: 10, title: '투표 곡', artist: '밴드', link: 'https://example.test/vote', visibility: 'MEMBERS', status: 'pending', vote_score: reads > 1 ? 1 : 0, viewer_vote: reads > 1 ? 1 : 0, can_edit: false, can_delete: false, can_manage: manager, can_proceed: canProceed }], pagination: { has_more: false } }); }
-    if (url.endsWith('/suggestions/10/vote') && method === 'PUT') { writes.push({ method, body: JSON.parse(options.body) }); return writes.length === 1 ? firstVote.promise : response({ viewer_vote: 1 }); }
+    if (url.includes('/suggestions?')) { reads += 1; if (reads === 2) await firstRefresh.promise; return response({ suggestions: [{ id: 10, title: '투표 곡', artist: '밴드', link: 'https://example.test/vote', visibility: 'MEMBERS', status: 'pending', vote_score: viewerVote, viewer_vote: viewerVote, can_edit: false, can_delete: false, can_manage: manager, can_proceed: canProceed }], pagination: { has_more: false } }); }
+    if (url.endsWith('/suggestions/10/vote') && method === 'PUT') { writes.push({ method, body: JSON.parse(options.body) }); if (writes.length === 1) return firstVote.promise; viewerVote = writes.at(-1).body.value; return response({ viewer_vote: viewerVote }); }
     if (url.endsWith('/suggestions/10/proceed') && method === 'POST') { writes.push({ method, body: JSON.parse(options.body) }); return response({ proceeded: true, song: { id: 90 } }, 201); }
     throw new Error(`unexpected ${method} ${url}`);
   };
   try {
     const view = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member() })); await view.findByText('투표 곡');
     const voteGroup = view.getByRole('group', { name: '추천곡 투표' });
-    const up = view.getByRole('button', { name: '추천' }); const down = view.getByRole('button', { name: '아쉬워요' });
-    assert.equal(voteGroup.contains(up), true); assert.equal(voteGroup.contains(down), true);
+    const like = view.getByRole('button', { name: '좋아요' });
+    assert.equal(voteGroup.contains(like), true);
+    assert.equal(voteGroup.querySelectorAll('button').length, 1);
     assert.equal(view.queryByRole('group', { name: '추천곡 관리' }) === null, true);
-    assert.equal(up.classList.contains('secondary-btn'), true); assert.equal(down.classList.contains('secondary-btn'), true);
-    assert.equal(up.getAttribute('aria-pressed'), 'false'); assert.equal(down.getAttribute('aria-pressed'), 'false');
+    assert.equal(like.classList.contains('secondary-btn'), true);
+    assert.equal(like.getAttribute('aria-pressed'), 'false');
     assert.equal(view.getByRole('button', { name: '곡으로 진행' }).classList.contains('primary-btn'), true);
-    fireEvent.click(up); fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 1)); assert.deepEqual(writes[0], { method: 'PUT', body: { value: 1 } });
-    await act(async () => { firstVote.resolve(response({}, 500)); }); await view.findByRole('alert'); assert.equal(up.disabled, false);
-    fireEvent.click(up); await waitFor(() => assert.equal(writes.length, 2)); await waitFor(() => assert.equal(view.getByRole('button', { name: '추천' }).getAttribute('aria-pressed'), 'true'));
-    await user.click(view.getByRole('button', { name: '곡으로 진행' })); await waitFor(() => assert.deepEqual(writes[2], { method: 'POST', body: { visibility: 'MEMBERS' } })); assert.ok(reads >= 3);
+    fireEvent.click(like); fireEvent.click(like); await waitFor(() => assert.equal(writes.length, 1)); assert.deepEqual(writes[0], { method: 'PUT', body: { value: 1 } });
+    await act(async () => { firstVote.resolve(response({}, 500)); }); await view.findByRole('alert'); assert.equal(like.disabled, false);
+    fireEvent.click(like); await waitFor(() => assert.equal(reads, 2)); assert.equal(like.disabled, true);
+    fireEvent.click(like); assert.equal(writes.length, 2);
+    await act(async () => { firstRefresh.resolve(); });
+    await waitFor(() => assert.equal(like.getAttribute('aria-pressed'), 'true'));
+    await user.click(like); await waitFor(() => assert.equal(like.getAttribute('aria-pressed'), 'false'));
+    assert.deepEqual(writes[2], { method: 'PUT', body: { value: 0 } });
+    await user.click(view.getByRole('button', { name: '곡으로 진행' })); await waitFor(() => assert.deepEqual(writes[3], { method: 'POST', body: { visibility: 'MEMBERS' } })); assert.ok(reads >= 4);
     view.unmount(); canProceed = false;
     const adminWithoutDelete = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('admin') })); await adminWithoutDelete.findByText('투표 곡'); assert.equal(adminWithoutDelete.queryByRole('button', { name: '곡으로 진행' }), null); adminWithoutDelete.unmount();
     manager = false;
@@ -121,7 +127,9 @@ test('only recognized YouTube links activate an isolated inline player on demand
     assert.equal(iframe.getAttribute('src'), 'https://www.youtube-nocookie.com/embed/YE7VzlLtp-4?autoplay=1&playsinline=1');
     assert.equal(iframe.getAttribute('referrerpolicy'), 'strict-origin-when-cross-origin');
     assert.equal(play.getAttribute('aria-expanded'), 'true');
-    assert.equal(view.getByRole('link', { name: 'YouTube에서 열기' }).getAttribute('target'), '_blank');
+    const youtubeLink = view.getByRole('link', { name: 'YouTube에서 열기' });
+    assert.equal(youtubeLink.getAttribute('target'), '_blank');
+    assert.equal(youtubeLink.matches('.secondary-btn.suggestion-youtube-link'), true);
     await user.click(view.getByRole('button', { name: '플레이어 닫기' }));
     assert.equal(view.container.querySelector('iframe') === null, true);
   } finally {
