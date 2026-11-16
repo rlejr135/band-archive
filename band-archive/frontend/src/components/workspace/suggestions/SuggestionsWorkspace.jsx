@@ -4,6 +4,8 @@ import { useServicePolicy } from '../../../context/ServicePolicyContext.jsx';
 import { reviewPublicVisibility } from '../../../services/uploadPolicy.js';
 import { bandWorkspacePaths, suggestionPayload, votePayload } from '../../../services/bandWorkspaceApi.js';
 import { safeExternalHttpUrl } from '../../../services/safeExternalUrl.js';
+import { youtubeVideoId } from '../../../services/youtubeVideoId.js';
+import { SuggestionVideo } from './SuggestionVideo.jsx';
 import { BandDeleteAction } from '../BandDeleteAction.jsx';
 import { ErrorState } from '../WorkspaceFeedback.jsx';
 import { useWorkspace } from '../WorkspaceContext.jsx';
@@ -41,7 +43,7 @@ const SuggestionForm = ({ item, onDone, onCancel }) => {
 const SuggestionCard = ({ suggestion, member, onChanged }) => {
   const { band, api } = useWorkspace(); const [editing, setEditing] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const voteFlight = useRef(false); const writeFlight = useRef(false);
   const safeLink = safeExternalHttpUrl(suggestion.link);
-  const canManage = suggestion.can_edit || suggestion.can_delete || suggestion.can_proceed;
+  const videoId = youtubeVideoId(safeLink);
   const vote = async (clicked) => { if (!member || voteFlight.current) return; voteFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionVote(band.id, suggestion.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(votePayload(suggestion.viewer_vote === clicked ? 0 : clicked)) }); onChanged(); } catch { setError('투표를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'); } finally { voteFlight.current = false; setBusy(false); } };
   const proceed = async () => { if (!suggestion.can_proceed || writeFlight.current || !window.confirm('이 추천곡을 곡 목록으로 진행할까요? 이 작업은 추천글을 목록에서 제거합니다.')) return; writeFlight.current = true; setBusy(true); setError(''); try { await api.requestJson(bandWorkspacePaths.suggestionProceed(band.id, suggestion.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ visibility: suggestion.visibility }) }); onChanged(); } catch { setError('추천곡 진행을 완료하지 못했습니다.'); } finally { writeFlight.current = false; setBusy(false); } };
   if (editing) return <SuggestionForm item={suggestion} onDone={() => { setEditing(false); onChanged(); }} onCancel={() => setEditing(false)} />;
@@ -50,22 +52,27 @@ const SuggestionCard = ({ suggestion, member, onChanged }) => {
       <div className="suggestion-card-title-block">
         <h2 className="suggestion-card-title">{suggestion.title || '제목 없음'}</h2>
         <p className="suggestion-card-artist">{suggestion.artist || '아티스트 정보 없음'}</p>
+        {suggestion.status && <span className="suggestion-status">{suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</span>}
       </div>
-      <span className="suggestion-status">{suggestion.status === 'pending' ? '검토 대기' : suggestion.status}</span>
+      {member && (suggestion.can_edit || suggestion.can_delete) && <div className="suggestion-manage-actions" role="group" aria-label="추천곡 관리">
+        {suggestion.can_edit && <button type="button" className="secondary-btn suggestion-icon-btn" aria-label="수정" title="수정" disabled={busy} onClick={() => setEditing(true)}>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="m16 3 5 5M4 15 15.5 3.5a2.12 2.12 0 0 1 3 0l2 2a2.12 2.12 0 0 1 0 3L9 20l-6 1 1-6Z" /></svg>
+        </button>}
+        <BandDeleteAction band={band} apiClient={api} workspaceKey={`suggestion:${suggestion.id}`} canDelete={suggestion.can_delete} label="추천글" path={bandWorkspacePaths.suggestion(band.id, suggestion.id)} onDeleted={onChanged} className="danger-btn suggestion-icon-btn"
+          icon={<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18M9 6V3h6v3m4 0-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6m5 4v7m4-7v7" /></svg>}
+        />
+      </div>}
     </header>
     {suggestion.memo && <p className="suggestion-card-memo">{suggestion.memo}</p>}
     <div className="suggestion-card-meta"><span aria-live="polite">점수 {suggestion.vote_score ?? 0}</span></div>
-    {safeLink && <a className="suggestion-card-link" href={safeLink} target="_blank" rel="noopener noreferrer">참고 링크 열기</a>}
+    {videoId && <SuggestionVideo key={videoId} videoId={videoId} title={suggestion.title} />}
+    {safeLink && <a className="secondary-btn workspace-button-link suggestion-card-link" href={safeLink} target="_blank" rel="noopener noreferrer">{videoId ? 'YouTube에서 열기' : '참고 링크 열기'}</a>}
     {member ? <div className="suggestion-actions">
       <div className="suggestion-vote-actions" role="group" aria-label="추천곡 투표">
         <button type="button" className="secondary-btn suggestion-vote-button suggestion-vote-button--positive" aria-pressed={suggestion.viewer_vote === 1} disabled={busy} onClick={() => vote(1)}>추천</button>
         <button type="button" className="secondary-btn suggestion-vote-button suggestion-vote-button--negative" aria-pressed={suggestion.viewer_vote === -1} disabled={busy} onClick={() => vote(-1)}>아쉬워요</button>
       </div>
-      {canManage && <div className="suggestion-manage-actions" role="group" aria-label="추천곡 관리">
-        {suggestion.can_edit && <button type="button" className="secondary-btn" disabled={busy} onClick={() => setEditing(true)}>수정</button>}
-        <BandDeleteAction band={band} workspaceKey={`suggestion:${suggestion.id}`} canDelete={suggestion.can_delete} label="추천글" path={bandWorkspacePaths.suggestion(band.id, suggestion.id)} onDeleted={onChanged} />
-        {suggestion.can_proceed && <button type="button" className="primary-btn" disabled={busy} onClick={proceed}>곡으로 진행</button>}
-      </div>}
+      {suggestion.can_proceed && <button type="button" className="primary-btn suggestion-proceed" disabled={busy} onClick={proceed}>곡으로 진행</button>}
     </div> : <p className="workspace-muted">로그인 후 밴드에 가입하면 투표와 추천이 가능합니다.</p>}
     {error && <p className="workspace-error" role="alert">{error}</p>}
   </article>;

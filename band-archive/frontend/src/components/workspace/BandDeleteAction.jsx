@@ -6,9 +6,9 @@ import { DeletionTaskError, deletionErrorMessage, pollDeletionTask } from '../..
 
 const taskLabel = (value) => ({ queued: '대기 중', pending: '대기 중', running: '처리 중', processing: '처리 중', retry_wait: '재시도 대기 중' }[String(value || '').toLowerCase()] || '확인 중');
 
-export const BandDeleteAction = ({ band, workspaceKey, canDelete, label, path, asynchronous = false, resourceType, onDeleted, className = 'danger-btn' }) => {
+export const BandDeleteAction = ({ band, workspaceKey, canDelete, label, path, asynchronous = false, resourceType, onDeleted, className = 'danger-btn', icon, apiClient }) => {
   const { user, getAccessToken, refreshSession } = useAuth();
-  const api = useMemo(() => createAuthenticatedApiClient({ getAccessToken, refreshSession }), [getAccessToken, refreshSession]);
+  const api = useMemo(() => apiClient ?? createAuthenticatedApiClient({ getAccessToken, refreshSession }), [apiClient, getAccessToken, refreshSession]);
   const scope = `${user?.id || 'anonymous'}:${band?.id}:${workspaceKey || ''}:${path}:${asynchronous}:${canDelete === true}`;
   const [state, setState] = useState({ busy: false, message: '', denied: false });
   const controllerRef = useRef(null); const flightRef = useRef(false); const scopeRef = useRef(scope); scopeRef.current = scope;
@@ -39,5 +39,6 @@ export const BandDeleteAction = ({ band, workspaceKey, canDelete, label, path, a
       else if (timedOut && scopeRef.current === requestedScope) setState({ busy: false, message: deletionErrorMessage(new DeletionTaskError('timeout')), denied: false });
     } finally { window.clearTimeout(timeout); if (scopeRef.current === requestedScope && controllerRef.current === controller) flightRef.current = false; }
   };
-  return <span className="band-delete-action"><button type="button" className={className} disabled={state.busy || state.denied} onClick={remove}>{state.busy ? '삭제 처리 중…' : state.denied ? '권한 확인 필요' : '삭제'}</button>{state.message && <span role={state.busy ? 'status' : 'alert'} aria-live="polite">{state.message}</span>}</span>;
+  const buttonLabel = state.busy ? '삭제 처리 중…' : state.denied ? '권한 확인 필요' : '삭제';
+  return <span className="band-delete-action"><button type="button" className={className} disabled={state.busy || state.denied} onClick={remove} aria-label={icon ? buttonLabel : undefined} title={icon ? buttonLabel : undefined}>{icon || buttonLabel}</button>{state.message && <span role={state.busy ? 'status' : 'alert'} aria-live="polite">{state.message}</span>}</span>;
 };

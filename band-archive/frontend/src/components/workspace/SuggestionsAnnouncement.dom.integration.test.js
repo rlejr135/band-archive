@@ -43,8 +43,13 @@ test('member creates, edits, and deletes a suggestion through the routed workspa
     await user.type(view.getByLabelText('제목'), '새 곡'); await user.type(view.getByLabelText('아티스트'), '연주자'); await user.type(view.getByLabelText('참고 링크'), 'https://example.test/song'); await user.type(view.getByLabelText('메모'), '연습용');
     await user.click(view.getByRole('button', { name: '저장' })); await view.findByRole('heading', { name: '새 곡' });
     const voteGroup = view.getByRole('group', { name: '추천곡 투표' }); const manageGroup = view.getByRole('group', { name: '추천곡 관리' });
-    assert.equal(voteGroup.querySelectorAll('button.secondary-btn').length, 2); assert.equal(manageGroup.querySelector('button.secondary-btn').textContent, '수정');
-    assert.equal(manageGroup.querySelector('button.danger-btn').textContent, '삭제');
+    assert.equal(voteGroup.querySelectorAll('button.secondary-btn').length, 2);
+    const edit = view.getByRole('button', { name: '수정' });
+    const remove = view.getByRole('button', { name: '삭제' });
+    assert.equal(manageGroup.closest('.suggestion-card-heading') !== null, true);
+    assert.equal(edit.matches('button.secondary-btn[aria-label="수정"]') && edit.querySelector('svg[aria-hidden="true"]') !== null && edit.textContent.trim() === '', true);
+    assert.equal(remove.matches('button.danger-btn[aria-label="삭제"]') && remove.querySelector('svg[aria-hidden="true"]') !== null && remove.textContent.trim() === '', true);
+    assert.equal(manageGroup.contains(edit) && manageGroup.contains(remove), true);
     assert.deepEqual(writes[0], { method: 'POST', body: { title: '새 곡', artist: '연주자', link: 'https://example.test/song', memo: '연습용', visibility: 'MEMBERS' } });
     await user.click(view.getByRole('button', { name: '수정' }));
     const title = view.getByLabelText('제목'); await user.clear(title); await user.type(title, '수정 곡'); await user.click(view.getByRole('button', { name: '저장' })); await view.findByText('수정 곡');
@@ -66,9 +71,10 @@ test('suggestion voting refetches authoritative viewer state, blocks double clic
   };
   try {
     const view = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member() })); await view.findByText('투표 곡');
-    const voteGroup = view.getByRole('group', { name: '추천곡 투표' }); const manageGroup = view.getByRole('group', { name: '추천곡 관리' });
+    const voteGroup = view.getByRole('group', { name: '추천곡 투표' });
     const up = view.getByRole('button', { name: '추천' }); const down = view.getByRole('button', { name: '아쉬워요' });
-    assert.equal(voteGroup.contains(up), true); assert.equal(voteGroup.contains(down), true); assert.equal(manageGroup.contains(up), false);
+    assert.equal(voteGroup.contains(up), true); assert.equal(voteGroup.contains(down), true);
+    assert.equal(view.queryByRole('group', { name: '추천곡 관리' }) === null, true);
     assert.equal(up.classList.contains('secondary-btn'), true); assert.equal(down.classList.contains('secondary-btn'), true);
     assert.equal(up.getAttribute('aria-pressed'), 'false'); assert.equal(down.getAttribute('aria-pressed'), 'false');
     assert.equal(view.getByRole('button', { name: '곡으로 진행' }).classList.contains('primary-btn'), true);
@@ -81,6 +87,40 @@ test('suggestion voting refetches authoritative viewer state, blocks double clic
     manager = false;
     const nonManager = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: member('other') })); await nonManager.findByText('투표 곡'); assert.equal(nonManager.queryByRole('button', { name: '곡으로 진행' }), null); assert.ok(nonManager.queryByRole('group', { name: '추천곡 투표' })); assert.equal(nonManager.queryByRole('group', { name: '추천곡 관리' }), null); assert.equal(nonManager.queryByRole('button', { name: '수정' }), null); assert.equal(nonManager.queryByRole('button', { name: '삭제' }), null); nonManager.unmount();
   } finally { globalThis.fetch = originalFetch; window.confirm = originalConfirm; }
+});
+
+test('only recognized YouTube links activate an isolated inline player on demand', async () => {
+  await load();
+  const originalFetch = globalThis.fetch;
+  const entries = [
+    { id: 1, title: 'YouTube 추천', link: 'https://youtu.be/YE7VzlLtp-4?autoplay=0&origin=untrusted.test' },
+    { id: 2, title: '다른 사이트', link: 'https://youtube.com.untrusted.test/watch?v=YE7VzlLtp-4' },
+    { id: 3, title: '유튜브 재생목록', link: 'https://www.youtube.com/playlist?list=YE7VzlLtp-4' },
+    { id: 4, title: '유효하지 않은 링크', link: 'javascript:alert(1)' },
+  ];
+  globalThis.fetch = async (url) => {
+    if (url.includes('/by-slug/team')) return response({ band: { id: 44, slug: 'team', name: '팀' } });
+    if (url.includes('/suggestions?')) return response({ suggestions: entries });
+    throw new Error(`unexpected ${url}`);
+  };
+  try {
+    const view = render(createElement(RouteApp, { entry: '/bands/team/suggestions', authValue: { user: null } }));
+    const play = await view.findByRole('button', { name: '카드에서 YouTube 재생' });
+    assert.equal(view.getAllByRole('button', { name: '카드에서 YouTube 재생' }).length, 1);
+    assert.equal(view.getAllByRole('link', { name: '참고 링크 열기' }).length, 2);
+    assert.equal(play.getAttribute('aria-expanded'), 'false');
+    assert.equal(view.container.querySelector('iframe') === null, true);
+    await user.click(play);
+    const iframe = view.getByTitle('YouTube 추천 YouTube 동영상');
+    assert.equal(iframe.getAttribute('src'), 'https://www.youtube-nocookie.com/embed/YE7VzlLtp-4?autoplay=1&playsinline=1');
+    assert.equal(iframe.getAttribute('referrerpolicy'), 'strict-origin-when-cross-origin');
+    assert.equal(play.getAttribute('aria-expanded'), 'true');
+    assert.equal(view.getByRole('link', { name: 'YouTube에서 열기' }).getAttribute('target'), '_blank');
+    await user.click(view.getByRole('button', { name: '플레이어 닫기' }));
+    assert.equal(view.container.querySelector('iframe') === null, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('dashboard announcement is read-only and never exposes announcement mutations', async () => {
