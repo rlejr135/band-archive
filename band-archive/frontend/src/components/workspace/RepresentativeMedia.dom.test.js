@@ -78,7 +78,7 @@ test('representative media uses the normal featured playback serializer and safe
     await userEvent.click(view.getByRole('button', { name: '미리보기 닫기' }));
     assert.equal(view.container.querySelector('video'), null);
     assert.equal(view.getAllByText('2026년 9월 27일').length, 2);
-    await userEvent.click(view.getByRole('button', { name: '재생', exact: true }));
+    await userEvent.click(view.getByRole('button', { name: '영상 재생', exact: true }));
     assert.equal(view.getByRole('combobox', { name: '재생 속도' }).options.length, 4);
     assert.equal(view.getByRole('button', { name: '5초 뒤로 이동' }) !== null, true);
     await waitFor(() => assert.equal(view.container.querySelector('video')?.getAttribute('src'), 'https://media.invalid/feature.mp4'));
@@ -131,7 +131,7 @@ test('v2 video playback with a safe audio_url enables radio mode without transco
   try {
     const view = render(app('/bands/media-band/representative-media'));
     await view.findByText('라디오의 밤');
-    await userEvent.click(view.getByRole('button', { name: '재생', exact: true }));
+    await userEvent.click(view.getByRole('button', { name: '영상 재생', exact: true }));
     const radioMode = view.getByRole('button', { name: '음원만 듣기' });
     assert.equal(radioMode.disabled, false);
     await userEvent.click(radioMode);

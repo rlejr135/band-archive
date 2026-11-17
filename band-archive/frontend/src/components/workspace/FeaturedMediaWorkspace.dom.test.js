@@ -57,7 +57,8 @@ for (const boundary of ['band', 'account', 'membership']) {
     };
     try {
       const view = render(h(App, {})); await view.findByRole('heading', { name: 'Old feature' });
-      fireEvent.click(view.getByRole('button', { name: '재생', exact: true }));
+      assert.equal(view.container.querySelector('video, audio'), null);
+      fireEvent.click(view.getByRole('button', { name: '영상 재생', exact: true }));
       await waitFor(() => assert.ok(view.container.querySelector('video')));
       fireEvent.click(view.getByRole('button', { name: '대표 미디어 더 불러오기' }));
       fireEvent.click(view.getByRole('button', { name: '곡 더 불러오기' }));
@@ -89,7 +90,7 @@ test('featured latest request wins across pagination and URL refresh, preserving
   } };
   const app = h(Providers, null, h(context.WorkspaceContext.Provider, { value: { band, api, workspaceKey: 'alpha:a' } }, h(MemoryRouter, null, h(featured.RepresentativeMediaWorkspace))));
   const view = render(app); await view.findByRole('heading', { name: 'First' });
-  fireEvent.click(view.getByRole('button', { name: '재생', exact: true }));
+  fireEvent.click(view.getByRole('button', { name: '영상 재생', exact: true }));
   fireEvent.click(view.getByRole('button', { name: '대표 미디어 더 불러오기' })); await waitFor(() => assert.equal(calls.length, 2));
   // The player error remains active while the load-more button is disabled.
   fireEvent.error(view.container.querySelector('video'));

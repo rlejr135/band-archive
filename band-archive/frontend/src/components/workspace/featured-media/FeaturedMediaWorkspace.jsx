@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { bandWorkspacePaths } from '../../../services/bandWorkspaceApi.js';
+import { safeExternalHttpUrl } from '../../../services/safeExternalUrl.js';
 import { workspaceMediaFile } from '../../../services/playbackMedia.js';
 import MediaPlayer from '../../common/MediaPlayer.jsx';
 import { ErrorState } from '../WorkspaceFeedback.jsx';
@@ -9,6 +10,7 @@ import { genericError, PAGE_SIZE, requestOptions } from '../workspaceReadSupport
 import { takeOneStaleRefresh } from '../workspaceRouteState.js';
 import { FeaturedMediaEditor } from './FeaturedMediaEditor.jsx';
 import { formatRepresentativeDate, mergeUniqueEntries } from './featuredMediaPresentation.js';
+import './FeaturedMediaWorkspace.css';
 
 export const RepresentativeMediaWorkspace = () => {
   const { band, api, workspaceKey } = useWorkspace();
@@ -115,12 +117,53 @@ export const RepresentativeMediaWorkspace = () => {
 const RepresentativeMediaCard = ({ item, busy, loading, onUnset, onPlaybackError }) => {
   const { band, workspaceKey } = useWorkspace();
   const [playing, setPlaying] = useState(false);
+  const [failedPoster, setFailedPoster] = useState('');
+  const file = workspaceMediaFile(item);
+  const video = item.file_type === 'video';
+  const kind = video ? '영상' : '음원';
+  const poster = video ? safeExternalHttpUrl(item.poster_url) : null;
+  const title = item.song_summary?.title || '곡 제목 없음';
+
   return <article className="workspace-card representative-media-card">
-    <header><h2>{item.song_summary?.title || '곡 제목 없음'}</h2><p>{item.song_summary?.artist || '아티스트 정보 없음'}</p></header>
-    <p className="representative-media-meta"><span>{item.file_type === 'video' ? '영상' : '음원'}</span><span>{formatRepresentativeDate(item.created_at)}</span></p>
-    <p className="representative-media-name">{item.display_name || `${item.file_type === 'video' ? '영상' : '음원'} #${item.id}`}</p>
-    <button type="button" className="primary-btn" aria-expanded={playing} onClick={() => setPlaying((current) => !current)}>{playing ? '재생 닫기' : '재생'}</button>
-    {playing && <><MediaPlayer file={workspaceMediaFile(item)} playbackIdentity={`${workspaceKey}:band:${band.id}:featured:${item.id}`} preload="none" onPlaybackError={() => onPlaybackError(item)} /><button type="button" className="secondary-btn" disabled={loading} onClick={() => onPlaybackError(item)}>{loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button></>}
-    {item.can_feature && <button type="button" className="secondary-btn" disabled={busy} onClick={() => onUnset(item)}>{busy ? '처리 중…' : '대표 미디어 해제'}</button>}
+    <header className="representative-media-heading">
+      <div>
+        <h2>{title}</h2>
+        <p>{item.song_summary?.artist || '아티스트 정보 없음'}</p>
+      </div>
+      {item.can_feature && <button
+        type="button"
+        className="secondary-btn representative-media-unset"
+        aria-label="대표 미디어 해제"
+        title="대표 미디어 해제"
+        disabled={busy}
+        onClick={() => onUnset(item)}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" /><path d="M8 12h8" />
+        </svg>
+      </button>}
+    </header>
+    <div className="representative-media-meta">
+      <span>{kind}</span><span>{formatRepresentativeDate(item.created_at)}</span>
+    </div>
+    <p className="representative-media-name">{file.name}</p>
+    {playing ? <div className="representative-media-playback">
+      <MediaPlayer file={file} playbackIdentity={`${workspaceKey}:band:${band.id}:featured:${item.id}`} preload="none" showTitle={false} onPlaybackError={() => onPlaybackError(item)} />
+      <div className="representative-media-playback-actions">
+        <button type="button" className="secondary-btn" aria-expanded={true} onClick={() => setPlaying(false)}>재생 닫기</button>
+        <button type="button" className="secondary-btn" disabled={loading} onClick={() => onPlaybackError(item)}>{loading ? '재생 주소 확인 중…' : '재생 주소 새로고침'}</button>
+      </div>
+    </div> : <button
+      type="button"
+      className="primary-btn representative-media-preview"
+      aria-expanded={false}
+      onClick={() => setPlaying(true)}
+    >
+      {poster && poster !== failedPoster && <img src={poster} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedPoster(poster)} />}
+      <span className="representative-media-preview-label">
+        <span aria-hidden="true">{video ? '▶' : '♪'}</span>
+        {video ? '영상 재생' : '음원 듣기'}
+      </span>
+    </button>}
   </article>;
 };
