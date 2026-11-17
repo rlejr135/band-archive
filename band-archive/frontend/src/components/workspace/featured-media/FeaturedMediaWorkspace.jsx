@@ -95,7 +95,12 @@ export const RepresentativeMediaWorkspace = () => {
   };
 
   return <section className="workspace-page representative-media-page" aria-labelledby="representative-media-title">
-    <div className="workspace-page-heading"><div><h1 id="representative-media-title">대표 미디어</h1><p>곡별로 선택된 대표 영상 또는 음원을 확인하고 재생할 수 있습니다.</p></div>{canFeatureSongs.length > 0 && <Link className="secondary-btn" to={`/bands/${encodeURIComponent(band.slug)}/manage/representative-media`}>대표 미디어 관리</Link>}</div>
+    <div className="workspace-page-heading"><div><h1 id="representative-media-title">대표 미디어</h1><p>곡별로 선택된 대표 영상 또는 음원을 확인하고 재생할 수 있습니다.</p></div>{canFeatureSongs.length > 0 && <Link
+      className="secondary-btn representative-media-settings"
+      to={`/bands/${encodeURIComponent(band.slug)}/manage/representative-media`}
+      aria-label="대표 미디어 관리"
+      title="대표 미디어 관리"
+    ><span aria-hidden="true">⚙︎</span></Link>}</div>
     {mutationError && <p role="alert" className="workspace-error">{mutationError}</p>}
     {featured.loading && featured.media.length === 0 ? <p aria-live="polite">대표 미디어를 불러오는 중입니다…</p> : featured.error && featured.media.length === 0 ? <ErrorState message={featured.error} retry={() => loadFeatured()} /> : featured.media.length === 0 ? <div className="workspace-empty"><p>등록된 대표 미디어가 없습니다.</p></div> : <div className="representative-media-grid">{featured.media.map((item) => <RepresentativeMediaCard key={item.id} item={item} busy={busy} loading={featured.loading} onUnset={unsetFeatured} onPlaybackError={refreshFeaturedPlayback} />)}</div>}
     {featured.pagination?.has_more && <button className="secondary-btn" disabled={featured.loading} onClick={() => loadFeatured({ offset: featured.pagination?.next_offset ?? featured.media.length, append: true })}>{featured.loading ? '불러오는 중…' : '대표 미디어 더 불러오기'}</button>}
